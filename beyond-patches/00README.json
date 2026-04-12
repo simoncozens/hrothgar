@@ -1,0 +1,33 @@
+{
+   "sources" : [
+      {
+         "usage" : "toplevel",
+         "filename" : "main.tex"
+      },
+      {
+         "usage" : "ignore",
+         "filename" : "IMGS/Fig2_Model.pdf"
+      },
+      {
+         "usage" : "ignore",
+         "filename" : "SUPP_IMGS/Samples_Sheet/gen_soft_FZXingKaiS_Bold_sample_5.png"
+      },
+      {
+         "usage" : "ignore",
+         "filename" : "ieeenat_fullname.bst"
+      },
+      {
+         "usage" : "ignore",
+         "filename" : "main.bib"
+      },
+      {
+         "usage" : "ignore",
+         "filename" : "rebuttal.tex"
+      }
+   ],
+   "spec_version" : 1,
+   "texlive_version" : "2025",
+   "process" : {
+      "compiler" : "pdflatex"
+   }
+}

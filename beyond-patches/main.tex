@@ -1,0 +1,101 @@
+% CVPR 2026 Paper Template; see https://github.com/cvpr-org/author-kit
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+%%%%%%%%% PAPER TYPE  - PLEASE UPDATE FOR FINAL VERSION
+\usepackage{cvpr}              % To produce the CAMERA-READY version
+% \usepackage[review]{cvpr}      % To produce the REVIEW version
+% \usepackage[pagenumbers]{cvpr} % To force page numbers, e.g. for an arXiv version
+\usepackage{booktabs}
+\usepackage{makecell}
+\usepackage{colortbl}
+\usepackage{xcolor}
+\usepackage[most]{tcolorbox}
+
+
+\definecolor{ex1figure_red}{RGB}{200,29,49}
+\definecolor{ex1figure_blue}{RGB}{46,84,161}
+
+\definecolor{ex2figure_red}{RGB}{203,41,60}
+
+
+\definecolor{ex2figure_blue}{RGB}{47,85,151}
+
+\newcommand{\lyx}[1]{\textcolor{blue}{#1}}
+\newcommand{\chn}[1]{\textcolor{purple}{#1}}
+% Import additional packages in the preamble file, before hyperref
+\input{preamble}
+
+% It is strongly recommended to use hyperref, especially for the review version.
+% hyperref with option pagebackref eases the reviewers' job.
+% Please disable hyperref *only* if you encounter grave issues, 
+% e.g. with the file validation for the camera-ready version.
+%
+% If you comment hyperref and then uncomment it, you should delete *.aux before re-running LaTeX.
+% (Or just hit 'q' on the first LaTeX run, let it finish, and you should be clear).
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+
+\newenvironment{FontExtractPrompt}[1][]{
+\begin{tcolorbox}[
+    title={Textual Style Description Collection Prompt},
+    fonttitle=\bfseries\footnotesize,
+    fontupper=\scriptsize,
+    colback=gray!10,
+    colframe=black!50,
+    coltitle=black,
+    sharp corners,
+    boxsep=3pt,
+    left=4pt,
+    right=4pt,
+    top=4pt,
+    bottom=4pt,
+    enhanced,
+    #1
+]
+}{\end{tcolorbox}}
+
+
+
+
+%%%%%%%%% PAPER ID  - PLEASE UPDATE
+\def\paperID{} % *** Enter the Paper ID here
+\def\confName{CVPR}
+\def\confYear{2026}
+
+%%%%%%%%% TITLE - PLEASE UPDATE
+\title{Beyond Patches: Global-aware Autoregressive Model for \\Multimodal Few-Shot Font Generation}
+
+%%%%%%%%% AUTHORS - PLEASE UPDATE
+\author{Haonan Cai$^{1}$\footnotemark[1],~~Yuxuan Luo$^{1}$\footnotemark[1],~~Zhouhui Lian$^{1}$\footnotemark[2]\\
+     $^1$Wangxuan Institute of Computer Technology, Peking University
+}
+
+\begin{document}
+\maketitle
+
+\footnotetext[1]{*: Equal contribution.}
+\footnotetext[2]{\textdagger: Corresponding author: lianzhouhui@pku.edu.cn}
+\footnotetext[3]{This work was supported by National Natural Science Foundation of China (Grant No.: 62372015), Center For Chinese Font Design and Research, and Leading Projects in Key Research Fields of Language Funded by the National Language Commission.}
+
+\input{sec/0_abstract}    
+\input{sec/1_intro}
+\input{sec/2_related_works}
+\input{sec/3_method}
+\input{sec/4_experiments}
+\input{sec/5_conclusion}
+\input{sec/X_suppl}
+{
+    \small
+    \bibliographystyle{ieeenat_fullname}
+    \bibliography{main}
+}
+
+
+% \input{sec/2_formatting}
+% \input{sec/3_finalcopy}
+% WARNING: do not forget to delete the supplementary pages from your submission 
+% \input{sec/X_suppl}
+
+\end{document}

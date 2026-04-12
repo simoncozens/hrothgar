@@ -1,0 +1,128 @@
+"""Loss utilities for G-Tok training.
+
+This module combines reconstruction and quantization losses used to train the
+G-Tok tokenizer:
+
+1. L1 reconstruction loss between reconstructed and target glyph images
+2. Optional perceptual loss (e.g. VGG feature-space MSE)
+3. Vector-quantizer losses returned by the model (VQ, commitment, entropy)
+
+The public helper returns both the scalar total loss and an explicit dictionary
+of individual terms for TensorBoard logging.
+"""
+
+from dataclasses import dataclass
+from typing import Callable, Dict, Optional, Tuple
+
+import torch
+import torch.nn.functional as F
+
+
+@dataclass(frozen=True)
+class GtokLossWeights:
+    """Weights applied to each loss term in ``compute_gtok_loss``."""
+
+    l1: float = 1.0
+    perceptual: float = 0.1
+    vq: float = 1.0
+    commit: float = 1.0
+    entropy: float = 1.0
+
+
+def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
+    """Convert a Python scalar or tensor-like value to a scalar float tensor."""
+    if isinstance(value, torch.Tensor):
+        return value
+    return torch.tensor(float(value), device=device)
+
+
+def compute_gtok_loss(
+    reconstructed_images: torch.Tensor,
+    target_images: torch.Tensor,
+    vq_loss_info: Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        object,
+    ],
+    *,
+    perceptual_loss_fn: Optional[
+        Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+    ] = None,
+    weights: GtokLossWeights = GtokLossWeights(),
+) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    """Compute the full G-Tok training loss and return logging terms.
+
+    Args:
+            reconstructed_images: Model reconstruction output, shape ``(B, C, H, W)``.
+            target_images: Ground-truth target images, shape ``(B, C, H, W)``.
+            vq_loss_info: Tuple returned by ``GtokModel`` quantization pipeline:
+                    ``(vq_loss, commit_loss, entropy_loss, codebook_usage)``.
+            perceptual_loss_fn: Optional callable (for example ``hrothgar.gtok.vgg_loss.VGG``)
+                    that takes ``(reconstructed_images, target_images)`` and returns a scalar tensor.
+            weights: Coefficients for each term in the final weighted sum.
+
+    Returns:
+            Tuple ``(total_loss, terms)`` where:
+            - ``total_loss`` is the weighted scalar loss tensor for backpropagation.
+            - ``terms`` contains scalar tensors for individual components and weighted
+              values, suitable for TensorBoard logging.
+    """
+    l1_loss = F.l1_loss(reconstructed_images, target_images)
+
+    if perceptual_loss_fn is None:
+        perceptual_loss = torch.zeros((), device=reconstructed_images.device)
+    else:
+        perceptual_loss = perceptual_loss_fn(reconstructed_images, target_images)
+
+    vq_loss_raw, commit_loss_raw, entropy_loss_raw, codebook_usage_raw = vq_loss_info
+
+    vq_loss = (
+        vq_loss_raw
+        if vq_loss_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
+    )
+    commit_loss = (
+        commit_loss_raw
+        if commit_loss_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
+    )
+    entropy_loss = (
+        entropy_loss_raw
+        if entropy_loss_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
+    )
+    codebook_usage = _as_scalar_tensor(
+        codebook_usage_raw, device=reconstructed_images.device
+    )
+
+    weighted_l1 = weights.l1 * l1_loss
+    weighted_perceptual = weights.perceptual * perceptual_loss
+    weighted_vq = weights.vq * vq_loss
+    weighted_commit = weights.commit * commit_loss
+    weighted_entropy = weights.entropy * entropy_loss
+
+    total_loss = (
+        weighted_l1
+        + weighted_perceptual
+        + weighted_vq
+        + weighted_commit
+        + weighted_entropy
+    )
+
+    terms: Dict[str, torch.Tensor] = {
+        "total": total_loss,
+        "l1": l1_loss,
+        "perceptual": perceptual_loss,
+        "vq": vq_loss,
+        "commit": commit_loss,
+        "entropy": entropy_loss,
+        "codebook_usage": codebook_usage,
+        "weighted_l1": weighted_l1,
+        "weighted_perceptual": weighted_perceptual,
+        "weighted_vq": weighted_vq,
+        "weighted_commit": weighted_commit,
+        "weighted_entropy": weighted_entropy,
+    }
+
+    return total_loss, terms
