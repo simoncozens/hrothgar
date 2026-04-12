@@ -117,12 +117,12 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 
 **Goal:** Train a glyph tokenizer that reliably reconstructs glyphs from 64 discrete tokens.
 
-- [ ] **Implement G-Tok**
+- [x] **Implement G-Tok**
   - Start from LlamaGen's CNN encoder/decoder
   - Add 6-layer ViT encoder after CNN with 2D sinusoidal position embeddings
   - Add 6-layer causal ViT decoder before CNN decoder
   - Vector quantization with 2048-entry, dim-8 codebook
-  - Implement entropy regularization2 for codebook utilization
+  - Implement entropy regularization for codebook utilization
 
 - [ ] **Training**
   - L1 reconstruction + VGG perceptual + VQ loss

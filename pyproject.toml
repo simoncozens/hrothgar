@@ -15,11 +15,12 @@ dependencies = [
     "torchvision",
     "uharfbuzz",
     "scikit-learn",
+    "pkbar",
     #"tqdm",
     #"more-itertools",
     #"diskcache",
     #"scikit-image",
-    #"tensorboard",
+    "tensorboard",
     #"skia-pathops",
 ]
 # Also pydiffvg but that's not on pypi!
