@@ -2,80 +2,26 @@
 #   LlamaGen: https://github.com/FoundationVision/LlamaGen/tree/main/tokenizer/tokenizer_image/vq_model.py
 #   taming-transformers: https://github.com/CompVis/taming-transformers
 #   maskgit: https://github.com/google-research/maskgit
-from dataclasses import dataclass, field
-from typing import List
+
+from typing import Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from hrothgar.type_helpers import TypedModuleList as ModuleList
 
 
-# @dataclass
-# class ModelArgs:
-#     codebook_size: int = 16384
-#     codebook_embed_dim: int = 8
-#     codebook_l2_norm: bool = True
-#     codebook_show_usage: bool = True
-#     commit_loss_beta: float = 0.25
-#     entropy_loss_ratio: float = 0.0
-
-#     encoder_ch_mult: List[int] = field(default_factory=lambda: [1, 1, 2, 2, 4])
-#     decoder_ch_mult: List[int] = field(default_factory=lambda: [1, 1, 2, 2, 4])
-#     z_channels: int = 256
-#     dropout_p: float = 0.0
-
-
-# class VQModel(nn.Module):
-#     def __init__(self, config: ModelArgs):
-#         super().__init__()
-#         self.config = config
-#         self.encoder = Encoder(
-#             ch_mult=config.encoder_ch_mult,
-#             z_channels=config.z_channels,
-#             dropout=config.dropout_p,
-#         )
-#         self.decoder = Decoder(
-#             ch_mult=config.decoder_ch_mult,
-#             z_channels=config.z_channels,
-#             dropout=config.dropout_p,
-#         )
-
-#         self.quantize = VectorQuantizer(
-#             config.codebook_size,
-#             config.codebook_embed_dim,
-#             config.commit_loss_beta,
-#             config.entropy_loss_ratio,
-#             config.codebook_l2_norm,
-#             config.codebook_show_usage,
-#         )
-#         self.quant_conv = nn.Conv2d(config.z_channels, config.codebook_embed_dim, 1)
-#         self.post_quant_conv = nn.Conv2d(
-#             config.codebook_embed_dim, config.z_channels, 1
-#         )
-
-#     def encode(self, x: torch.Tensor):
-#         h = self.encoder(x)
-#         h = self.quant_conv(h)
-#         quant, emb_loss, info = self.quantize(h)
-#         return quant, emb_loss, info
-
-#     def decode(self, quant):
-#         quant = self.post_quant_conv(quant)
-#         dec = self.decoder(quant)
-#         return dec
-
-#     def decode_code(self, code_b, shape=None, channel_first=True):
-#         quant_b = self.quantize.get_codebook_entry(code_b, shape, channel_first)
-#         dec = self.decode(quant_b)
-#         return dec
-
-#     def forward(self, input):
-#         quant, diff, _ = self.encode(input)
-#         dec = self.decode(quant)
-#         return dec, diff
+class ConvBlock(nn.Module):
+    res: ModuleList[ResnetBlock]
+    attn: ModuleList[AttnBlock] = ModuleList()
+    downsample: Downsample
+    upsample: Upsample
 
 
 class Encoder(nn.Module):
+    conv_blocks: ModuleList[ConvBlock]
+    mid: ModuleList[Union[ResnetBlock, AttnBlock]]
+
     def __init__(
         self,
         in_channels=3,
@@ -94,13 +40,13 @@ class Encoder(nn.Module):
 
         # downsampling
         in_ch_mult = (1,) + tuple(ch_mult)
-        self.conv_blocks = nn.ModuleList()
+        self.conv_blocks = ModuleList()
         block_in = None
         for i_level in range(self.num_resolutions):
-            conv_block = nn.Module()
+            conv_block = ConvBlock()
             # res & attn
-            res_block = nn.ModuleList()
-            attn_block = nn.ModuleList()
+            res_block: ModuleList[ResnetBlock] = ModuleList()
+            attn_block: ModuleList[AttnBlock] = ModuleList()
             block_in = ch * in_ch_mult[i_level]
             block_out = ch * ch_mult[i_level]
             for _ in range(self.num_res_blocks):
@@ -121,7 +67,7 @@ class Encoder(nn.Module):
 
         assert block_in is not None, "block_in should be set after the loop"
         # middle
-        self.mid = nn.ModuleList()
+        self.mid = ModuleList()
         self.mid.append(
             ResnetBlock(block_in, block_in, dropout=dropout, norm_type=norm_type)
         )
@@ -159,6 +105,9 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
+    conv_blocks: ModuleList[ConvBlock]
+    mid: ModuleList[Union[ResnetBlock, AttnBlock]]
+
     def __init__(
         self,
         z_channels=256,
@@ -181,7 +130,7 @@ class Decoder(nn.Module):
         )
 
         # middle
-        self.mid = nn.ModuleList()
+        self.mid = ModuleList()
         self.mid.append(
             ResnetBlock(block_in, block_in, dropout=dropout, norm_type=norm_type)
         )
@@ -191,12 +140,12 @@ class Decoder(nn.Module):
         )
 
         # upsampling
-        self.conv_blocks = nn.ModuleList()
+        self.conv_blocks = ModuleList()
         for i_level in reversed(range(self.num_resolutions)):
-            conv_block = nn.Module()
+            conv_block = ConvBlock()
             # res & attn
-            res_block = nn.ModuleList()
-            attn_block = nn.ModuleList()
+            res_block = ModuleList()
+            attn_block = ModuleList()
             block_out = ch * ch_mult[i_level]
             for _ in range(self.num_res_blocks + 1):
                 res_block.append(
@@ -249,6 +198,8 @@ class Decoder(nn.Module):
 
 
 class VectorQuantizer(nn.Module):
+    codebook_used: torch.Tensor
+
     def __init__(
         self,
         codebook_size,
@@ -445,13 +396,13 @@ def nonlinearity(x):
 
 
 def Normalize(in_channels, norm_type="group"):
-    assert norm_type in ["group", "batch"]
     if norm_type == "group":
         return nn.GroupNorm(
             num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
         )
     elif norm_type == "batch":
         return nn.SyncBatchNorm(in_channels)
+    assert False, f"unsupported norm type {norm_type}"
 
 
 class Upsample(nn.Module):
@@ -486,7 +437,7 @@ class Downsample(nn.Module):
             x = F.pad(x, pad, mode="constant", value=0)
             x = self.conv(x)
         else:
-            x = F.avg_pool2d(x, kernel_size=2, stride=2)
+            x = F.avg_pool2d(x, kernel_size=2, stride=2)  # pylint: disable=E1102
         return x
 
 
@@ -504,23 +455,3 @@ def compute_entropy_loss(affinity, loss_type="softmax", temperature=0.01):
     sample_entropy = -torch.mean(torch.sum(target_probs * log_probs, dim=-1))
     loss = sample_entropy - avg_entropy
     return loss
-
-
-#################################################################################
-#                              VQ Model Configs                                 #
-#################################################################################
-def VQ_8(**kwargs):
-    return VQModel(
-        ModelArgs(encoder_ch_mult=[1, 2, 2, 4], decoder_ch_mult=[1, 2, 2, 4], **kwargs)
-    )
-
-
-def VQ_16(**kwargs):
-    return VQModel(
-        ModelArgs(
-            encoder_ch_mult=[1, 1, 2, 2, 4], decoder_ch_mult=[1, 1, 2, 2, 4], **kwargs
-        )
-    )
-
-
-VQ_models = {"VQ-16": VQ_16, "VQ-8": VQ_8}
