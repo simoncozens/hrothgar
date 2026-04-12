@@ -23,8 +23,9 @@ def test_data_loader():
     # Check we can read a few batches
     for _ in range(3):
         batch = next(iter(test_loader))
-        assert len(batch) == 32
-        for item in batch:
-            assert "char" in item
-            assert "rendering" in item
-            assert "description" in item
+        assert "char" in batch
+        assert "rendering" in batch
+        assert "description" in batch
+
+        assert batch["rendering"].shape == (32, 3, 64, 64)
+        assert batch["char"].shape == (32,)

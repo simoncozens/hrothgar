@@ -3,6 +3,7 @@ from typing import Optional, Set
 from sklearn.model_selection import train_test_split
 from hrothgar.googlefonts import GoogleFonts
 from glyphsets import GlyphSet
+import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader
 
 LATIN_CORE = GlyphSet("GF_Latin_Core").get_characters()
@@ -68,14 +69,17 @@ class DatasetMaker:
 
 
 def collate_fn(batch):
-    return [
-        {
-            "char": item["char"],
-            "rendering": item["font"].render(item["char"]),
-            "description": item["font"].description_with_tags(),
-        }
-        for item in batch
-    ]
+    chars = torch.tensor([item["char"] for item in batch])
+    renderings = torch.stack(
+        [torch.tensor(item["font"].render(item["char"])) for item in batch]
+    )
+    descriptions = [item["font"].description_with_tags() for item in batch]
+
+    return {
+        "char": chars,
+        "rendering": renderings,
+        "description": descriptions,
+    }
 
 
 class Dataset(TorchDataset):

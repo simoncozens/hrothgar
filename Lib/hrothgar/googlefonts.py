@@ -237,5 +237,6 @@ def render(
         baseline_y = int(size * 0.66)
         new_img2.paste(new_img, (0, int(baseline_y - scaled_ascent)))
     new_img2 = np.asarray(new_img2, dtype=np.float32)
-    new_img2 = new_img2.reshape((new_img2.shape[0], new_img2.shape[1], 1))
+    # (H, W) -> (3, H, W)
+    new_img2 = np.stack([new_img2] * 3, axis=0)
     return new_img2 / 255.0
