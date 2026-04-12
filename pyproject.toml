@@ -1,0 +1,35 @@
+[project]
+name = "hrothgar"
+version = "0.1.0"
+description = ""
+authors = [{ name = "Simon Cozens", email = "simon@simon-cozens.org" }]
+readme = ""
+requires-python = ">=3.8"
+dependencies = [
+    "gftools",
+    "numpy",
+    "glyphsets",
+    "torch>=1.11.0",
+    "Pillow",
+    "fonttools",
+    "torchvision",
+    "uharfbuzz",
+    "scikit-learn",
+    #"tqdm",
+    #"more-itertools",
+    #"diskcache",
+    #"scikit-image",
+    #"tensorboard",
+    #"skia-pathops",
+]
+# Also pydiffvg but that's not on pypi!
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["Lib"]
