@@ -29,3 +29,12 @@ def test_data_loader():
 
         assert batch["rendering"].shape == (32, 3, 64, 64)
         assert batch["char"].shape == (32,)
+
+
+def test_no_crash_on_space():
+    maker = DatasetMaker(REPOSITORY_PATH, batch_size=32)
+    maker.test_fonts = [maker.test_fonts[0]]  # Use just one font to speed up the test
+    test_loader = maker.test_loader()
+    for batch in test_loader:
+        assert "rendering" in batch
+    # If we make it through all batches, then we know we didn't crash on anything with no outlines

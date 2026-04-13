@@ -5,6 +5,7 @@ from hrothgar.googlefonts import GoogleFonts
 from glyphsets import GlyphSet
 import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader
+import uharfbuzz as hb
 
 LATIN_CORE = GlyphSet("GF_Latin_Core").get_characters()
 
@@ -88,7 +89,6 @@ class Dataset(TorchDataset):
         self.test_latincore_chars = test_latincore_chars
         self.is_test = test
         # Calculate the length and order once here
-        self._len = 0
         self.order = []
         for font in self.fonts:
             if self.is_test:
@@ -98,11 +98,15 @@ class Dataset(TorchDataset):
                 # Count all chars that are not in the test Latin Core chars
                 chars = set(font.codepoints) - set(self.test_latincore_chars)
             for char in chars:
-                self.order.append((font, char))
-            self._len += len(chars)
+                # Make sure we have glyph extents, i.e. no empty glyphs, because those would cause problems for the model
+                hb_font = hb.Font(font.hb_face)
+                gid = hb_font.get_nominal_glyph(char)
+                extents = hb_font.get_glyph_extents(gid)
+                if all(x for x in extents):
+                    self.order.append((font, char))
 
     def __len__(self):
-        return self._len
+        return len(self.order)
 
     def __getitem__(self, idx):
         font, char = self.order[idx]

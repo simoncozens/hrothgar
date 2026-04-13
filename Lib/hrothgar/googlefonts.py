@@ -28,8 +28,8 @@ class GoogleFonts:
             try:
                 font = GoogleFont(font_path, self)
                 GoogleFonts.families_by_name[font.family] = font
-            except Exception as e:
-                print(f"Error loading font {font_path}: {e}")
+            except Exception as _e:
+                # print(f"Error loading font {font_path}: {e}")
                 continue
             # Skip noto
             if font_path.parts[-2].startswith("noto"):
@@ -96,7 +96,7 @@ class GoogleFont:
                 return f"a {centile_to_text(value)} {tag_name} sans-serif font"
             elif tag.startswith("/Serif/"):
                 tag_name = tag[len("/Serif/") :]
-                return f"a {centile_to_text(value)} {tag_name}     serif font"
+                return f"a {centile_to_text(value)} {tag_name} serif font"
             return f" {centile_to_text(value)} {tag}"
 
         tag_descriptions = ", ".join(
