@@ -102,13 +102,13 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Associate each font with its textual description and style tags
   - Designate a "content reference" font per script (e.g. a clean sans-serif)
 
-- [ ] **Training infrastructure**
+- [X] **Training infrastructure**
   - Set up PyTorch training pipeline with distributed training support
   - Implement data loading: font image pairs, text descriptions, style tags
   - Set up evaluation metrics (RMSE, SSIM, LPIPS, FID)
   - Logging and checkpointing (wandb/tensorboard)
 
-- [ ] **Baseline reproduction**
+- [X] **Baseline reproduction**
   - Download LlamaGen tokenizer code as CNN backbone reference
   - Obtain FsFont/LF-Font cross-attention aggregator reference
   - Set up a small-scale test (e.g. 50 fonts × 200 glyphs) for fast iteration
@@ -124,21 +124,22 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Vector quantization with 2048-entry, dim-8 codebook
   - Implement entropy regularization for codebook utilization
 
-- [ ] **Training**
+- [X] **Training**
   - L1 reconstruction + VGG perceptual + VQ loss
   - 200k iterations, batch 16, lr 1e-4
   - AdamW optimizer
 
-- [ ] **Validation**
+- [X] **Validation**
   - Reconstruction quality on held-out fonts (SSIM, LPIPS)
   - Codebook utilization statistics (dead code ratio)
   - Linear probing: can frozen features predict font style and character identity?
   - Robust reconstruction under local noise
 
-- [ ] **Key decision: resolution**
-  - Train at 64×64 first (matching paper)
-  - Evaluate whether 64×64 reconstructions are sufficient for downstream vectorization
-  - If not, experiment with 128×128 (likely need more tokens: 256)
+- [x] **Key decision: resolution**
+  - Initial 64×64 runs train stably and validate the architecture direction
+  - 64×64 reconstructions are not sufficient for downstream vectorization quality
+  - Move G-Tok to 128×128 with an 8x downsampling tokenizer grid, yielding 16×16 = 256 tokens
+  - Re-run tokenizer training and validation at 128×128 before adding probing/noise studies
 
 ### Phase 2: AR Generator — Visual Only (Weeks 4-8)
 

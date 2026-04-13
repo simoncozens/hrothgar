@@ -70,7 +70,7 @@ class GoogleFont:
         return self.gf.tags.get(self.family, {}) if self.gf else {}
 
     def render(self, char: int, size: int = 64) -> np.ndarray:
-        """Renders the given character as an image of given size, defaulting to 64x64. The character should be given as a Unicode code point (i.e. ord("a") for "a")."""
+        """Renders the given character as a square image of the requested size. The character should be given as a Unicode code point (i.e. ord("a") for "a")."""
         return render(self.path, chr(char), size, self.hb_face, do_trim=False)
 
     def description(self) -> str:

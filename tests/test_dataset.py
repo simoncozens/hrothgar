@@ -27,7 +27,7 @@ def test_data_loader():
         assert "rendering" in batch
         assert "description" in batch
 
-        assert batch["rendering"].shape == (32, 3, 64, 64)
+        assert batch["rendering"].shape == (32, 3, 128, 128)
         assert batch["char"].shape == (32,)
 
 
