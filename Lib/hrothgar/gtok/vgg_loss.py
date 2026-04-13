@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
+from torchvision.models.vgg import VGG19_Weights
 
 
 class VGG(nn.Module):
@@ -17,7 +18,7 @@ class VGG(nn.Module):
     def __init__(self, conv_index: str = "22"):
 
         super(VGG, self).__init__()
-        vgg_features = torchvision.models.vgg19(pretrained=True).features
+        vgg_features = torchvision.models.vgg19(weights=VGG19_Weights.DEFAULT).features
         modules = [m for m in vgg_features]
 
         if conv_index == "22":
