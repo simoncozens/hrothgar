@@ -337,7 +337,9 @@ class TestGtokModel:
 
     def test_model_supports_smaller_image_size(self):
         """Test that the model can be reconfigured back to 64x64 if needed."""
-        config = GtokConfig(image_size=64, vit_num_layers=2, vit_hidden_dim=128, vit_num_heads=4)
+        config = GtokConfig(
+            image_size=64, vit_num_layers=2, vit_hidden_dim=128, vit_num_heads=4
+        )
         model = GtokModel(config)
         images = torch.randn(1, 3, 64, 64)
 
