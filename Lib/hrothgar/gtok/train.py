@@ -5,14 +5,18 @@ import random
 import subprocess
 from typing import Dict
 
+import tqdm
 import pkbar
 import torch
+from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torch.utils.tensorboard import SummaryWriter
+import torchvision
 
 from hrothgar.dataset import DatasetMaker
 from hrothgar.gtok import compute_gtok_loss
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.gtok.vgg_loss import VGG
+from hrothgar.gtok.llamagen_lpips import LPIPS
 
 
 def torch_setup() -> torch.device:
@@ -67,9 +71,11 @@ def train(train_args):
     model = GtokModel(GtokConfig()).to(device)
     maker = DatasetMaker(train_args.dataset_path, batch_size=16)
     train_loader = maker.train_loader()
-    # test = maker.test_loader()
+    test_loader = maker.test_loader()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
     perceptual_loss_fn = VGG().to(device)
+    ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
+    lpips = LPIPS().to(device)
 
     git_tag = check_git_clean_and_get_commit_hash()
     run_id = f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{git_tag}"
@@ -113,10 +119,51 @@ def train(train_args):
                 global_step += 1
                 kbar.update(i, values=_progress_values(loss_info))
                 for key, value in loss_info.items():
-                    writer.add_scalar(key, float(value.detach().cpu()), global_step)
-            writer.flush()
+                    writer.add_scalar(
+                        "Losses/" + key, float(value.detach().cpu()), global_step
+                    )
+                writer.flush()
+                # Do some validation every 100 steps
+                if global_step % 100 != 0:
+                    continue
+                model.eval()
+                with torch.no_grad():
+                    # Compute SSIM and LPIPS on the validation set and log them to TensorBoard
+                    val_metrics = {"ssim": [], "lpips": []}
+                    # Just do 100 batches
+                    for val_batch in tqdm.tqdm(
+                        itertools.islice(test_loader, 100),
+                        desc="Validation",
+                        total=100,
+                    ):
+                        val_gt_images = val_batch["rendering"].to(device)
+                        val_recon_images, _ = model(val_gt_images)
+                        val_metrics["ssim"].append(
+                            ssim(val_recon_images, val_gt_images)
+                        )
+                        val_metrics["lpips"].append(
+                            lpips(val_recon_images, val_gt_images)
+                        )
+                    avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
+                    avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
+                    writer.add_scalar("Validation/SSIM", avg_ssim.item(), global_step)
+                    writer.add_scalar("Validation/LPIPS", avg_lpips.item(), global_step)
+
+                    # Also display some pretty pictures
+                    val_batch = next(iter(test_loader))
+                    val_gt_images = val_batch["rendering"].to(device)
+                    val_recon_images, _ = model(val_gt_images)
+                    # Log a grid of reconstructed vs. target images
+                    recon_grid = torch.cat(
+                        [val_gt_images[:16], val_recon_images[:16]], dim=0
+                    )
+                    writer.add_image(
+                        "Reconstruction/GT_vs_Recon",
+                        torchvision.utils.make_grid(recon_grid, nrow=16),
+                        global_step,
+                    )
+                model.train()
             epoch += 1
-            # Do validation here later
     finally:
         writer.close()
 
