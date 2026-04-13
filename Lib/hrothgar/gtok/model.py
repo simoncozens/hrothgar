@@ -513,6 +513,15 @@ class GtokModel(nn.Module):
             dropout=config.cnn_dropout,
         )
 
+    def save(self, path: str) -> None:
+        """Save the model state to a file."""
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: str, device: Optional[torch.device] = None) -> None:
+        """Load the model state from a file."""
+        state_dict = torch.load(path, map_location=device)
+        self.load_state_dict(state_dict)
+
     def encode(
         self, images: torch.Tensor
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
