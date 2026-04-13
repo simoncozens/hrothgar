@@ -70,7 +70,9 @@ def train(train_args):
     device = torch_setup()
     config = GtokConfig(image_size=train_args.image_size)
     model = GtokModel(config).to(device)
-    maker = DatasetMaker(train_args.dataset_path, batch_size=16, image_size=config.image_size)
+    maker = DatasetMaker(
+        train_args.dataset_path, batch_size=16, image_size=config.image_size
+    )
     train_loader = maker.train_loader()
     test_loader = maker.test_loader()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -87,6 +89,7 @@ def train(train_args):
 
     epoch = 0
     global_step = 0
+    best_ssim = 0
     target_steps = 200_000  # Specified in paper
     if train_args.canary != 0:
         # Run for ten epochs, i.e. 10 * len(train) steps
@@ -149,6 +152,9 @@ def train(train_args):
                     avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
                     writer.add_scalar("Validation/SSIM", avg_ssim.item(), global_step)
                     writer.add_scalar("Validation/LPIPS", avg_lpips.item(), global_step)
+                    if avg_ssim > best_ssim:
+                        best_ssim = avg_ssim
+                        model.save(train_args.model_path)
 
                     # Also display some pretty pictures
                     val_batch = next(iter(test_loader))
@@ -195,6 +201,12 @@ if __name__ == "__main__":
         type=int,
         default=128,
         help="Square glyph raster size for GTok training.",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        help="Path to save the trained model",
+        default="gtok_model.pth",
     )
     args = parser.parse_args()
     if not args.dataset_path:
