@@ -79,6 +79,7 @@ def train(train_args):
     perceptual_loss_fn = VGG().to(device)
     ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
     lpips = LPIPS().to(device)
+    model.load(train_args.model_path)
 
     git_tag = check_git_clean_and_get_commit_hash()
     run_id = f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{git_tag}"
