@@ -230,6 +230,9 @@ def render(
         # 1.5x the upem. So we have one upem worth of ascent above the baseline
         # and 0.5 upem worth of descent below the baseline.
         scale = size / (1.5 * upem)
+        if int(new_img.width * scale) == 0 or int(new_img.height * scale) == 0:
+            # Return zeros
+            return np.zeros((3, size, size), dtype=np.float32)
         new_img = new_img.resize(
             (int(new_img.width * scale), int(new_img.height * scale))
         )
