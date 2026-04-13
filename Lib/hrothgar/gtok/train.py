@@ -1,26 +1,38 @@
 import datetime
+import itertools
 import os
 import random
 import subprocess
+from typing import Dict
 
 import pkbar
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from hrothgar.dataset import DatasetMaker
-from hrothgar.gtok.losses import compute_gtok_loss
+from hrothgar.gtok import compute_gtok_loss
 from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.gtok.vgg_loss import VGG
 
 
-def torch_setup():
+def torch_setup() -> torch.device:
     """Set random seeds and configure torch for reproducibility and performance."""
     random.seed(1234)
+    torch.manual_seed(1234)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(1234)
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     torch.set_float32_matmul_precision("high")
+    return device
+
+
+def _progress_values(loss_info: Dict[str, torch.Tensor]):
+    """Convert scalar loss tensors to pkbar's expected ``[(name, value), ...]`` format."""
+    return [(key, float(value.detach().cpu())) for key, value in loss_info.items()]
 
 
 def check_git_clean_and_get_commit_hash() -> str:
@@ -51,11 +63,13 @@ def check_git_clean_and_get_commit_hash() -> str:
 
 def train(train_args):
     # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
-    model = GtokModel(GtokConfig())
+    device = torch_setup()
+    model = GtokModel(GtokConfig()).to(device)
     maker = DatasetMaker(train_args.dataset_path, batch_size=16)
     train_loader = maker.train_loader()
     # test = maker.test_loader()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    perceptual_loss_fn = VGG().to(device)
 
     git_tag = check_git_clean_and_get_commit_hash()
     run_id = f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{git_tag}"
@@ -69,26 +83,42 @@ def train(train_args):
     target_steps = 200_000  # Specified in paper
     if train_args.canary != 0:
         # Run for ten epochs, i.e. 10 * len(train) steps
-        loader_iter = iter(train_loader)
-        train_loader = [next(loader_iter)] * train_args.canary
+        train_loader = list(itertools.islice(train_loader, train_args.canary))
         target_steps = 10 * len(train_loader)
     num_epochs = (target_steps // len(train_loader)) + 1
-    while global_step < target_steps:
-        model.train()
-        kbar = pkbar.Kbar(target=len(train_loader), epoch=epoch, num_epochs=num_epochs)
-        for i, batch in enumerate(train_loader):
-            optimizer.zero_grad()
-            gt_images = batch["rendering"]
-            recon_images, vq_loss_info = model(gt_images)
-            loss, loss_info = compute_gtok_loss(recon_images, gt_images, vq_loss_info)
-            loss.backward()
-            optimizer.step()
-            global_step += 1
-            kbar.update(i, values=loss_info.items())
-            for key, value in loss_info.items():
-                writer.add_scalar(key, value.item(), global_step)
-        epoch += 1
-        # Do validation here later
+    if len(train_loader) == 0:
+        raise ValueError("Training loader is empty; cannot start training.")
+    try:
+        while global_step < target_steps:
+            model.train()
+            kbar = pkbar.Kbar(
+                target=len(train_loader), epoch=epoch, num_epochs=num_epochs, width=8
+            )
+            for i, batch in enumerate(train_loader):
+                if global_step >= target_steps:
+                    break
+
+                optimizer.zero_grad(set_to_none=True)
+                gt_images = batch["rendering"].to(device)
+                recon_images, vq_loss_info = model(gt_images)
+                loss, loss_info = compute_gtok_loss(
+                    recon_images,
+                    gt_images,
+                    vq_loss_info,
+                    perceptual_loss_fn=perceptual_loss_fn,
+                )
+                loss.backward()
+                optimizer.step()
+
+                global_step += 1
+                kbar.update(i, values=_progress_values(loss_info))
+                for key, value in loss_info.items():
+                    writer.add_scalar(key, float(value.detach().cpu()), global_step)
+            writer.flush()
+            epoch += 1
+            # Do validation here later
+    finally:
+        writer.close()
 
 
 if __name__ == "__main__":
