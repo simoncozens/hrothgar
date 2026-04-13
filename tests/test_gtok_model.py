@@ -217,25 +217,28 @@ class TestGtokConfig:
         """Test that config applies sensible defaults."""
         config = GtokConfig()
 
+        assert config.image_size == 128
         assert config.cnn_base_channels == 128
         assert config.quantizer_codebook_size == 2048
         assert config.quantizer_code_dim == 8
         assert config.vit_num_layers == 6
-        assert config.cnn_channel_multipliers == [1, 1, 2, 2, 4]
+        assert config.cnn_channel_multipliers == [1, 2, 2, 4]
 
     def test_config_custom_values(self):
         """Test that config accepts custom values."""
         config = GtokConfig(
+            image_size=64,
             cnn_base_channels=64,
             quantizer_codebook_size=1024,
             vit_num_layers=4,
         )
 
+        assert config.image_size == 64
         assert config.cnn_base_channels == 64
         assert config.quantizer_codebook_size == 1024
         assert config.vit_num_layers == 4
         # Other values should still have defaults
-        assert config.cnn_channel_multipliers == [1, 1, 2, 2, 4]
+        assert config.cnn_channel_multipliers == [1, 2, 2, 4]
 
 
 class TestGtokModel:
@@ -251,6 +254,9 @@ class TestGtokModel:
         assert isinstance(model.vit_decoder, CausalViTDecoder)
         assert isinstance(model.cnn_decoder, torch.nn.Module)
         assert isinstance(model.quantizer, torch.nn.Module)
+        assert model.token_grid_height == 16
+        assert model.token_grid_width == 16
+        assert model.sequence_length == 256
 
     def test_forward_pass(self):
         """Test forward pass through complete model."""
@@ -266,7 +272,7 @@ class TestGtokModel:
 
         # Create dummy input (batch of 2 glyph images)
         batch_size = 2
-        images = torch.randn(batch_size, 3, 64, 64)
+        images = torch.randn(batch_size, 3, 128, 128)
 
         with torch.no_grad():
             reconstructed, loss_info = model(images)
@@ -288,7 +294,7 @@ class TestGtokModel:
         model = GtokModel(config)
         model.eval()
 
-        images = torch.randn(1, 3, 64, 64)
+        images = torch.randn(1, 3, 128, 128)
 
         with torch.no_grad():
             quantized, _ = model.encode(images)
@@ -306,7 +312,7 @@ class TestGtokModel:
         model = GtokModel(config)
         model.train()
 
-        images = torch.randn(2, 3, 64, 64)
+        images = torch.randn(2, 3, 128, 128)
         reconstructed, loss_info = model(images)
 
         vq_loss, commit_loss, entropy_loss, codebook_usage = loss_info
@@ -328,6 +334,18 @@ class TestGtokModel:
 
         assert trainable_params > 0, "Model should have trainable parameters"
         print(f"Total trainable parameters: {trainable_params:,}")
+
+    def test_model_supports_smaller_image_size(self):
+        """Test that the model can be reconfigured back to 64x64 if needed."""
+        config = GtokConfig(image_size=64, vit_num_layers=2, vit_hidden_dim=128, vit_num_heads=4)
+        model = GtokModel(config)
+        images = torch.randn(1, 3, 64, 64)
+
+        with torch.no_grad():
+            reconstructed, _ = model(images)
+
+        assert reconstructed.shape == images.shape
+        assert model.sequence_length == 64
 
 
 class TestViTEncoderParameterNames:
@@ -369,7 +387,7 @@ if __name__ == "__main__":
     model = GtokModel(config)
     model.eval()
 
-    images = torch.randn(1, 3, 64, 64)
+    images = torch.randn(1, 3, 128, 128)
     with torch.no_grad():
         output, losses = model(images)
 

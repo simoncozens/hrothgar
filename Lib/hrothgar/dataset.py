@@ -17,6 +17,7 @@ class DatasetMaker:
         batch_size: int,
         having: Optional[Set[int]] = None,
         canary_size: Optional[int] = None,
+        image_size: int = 128,
     ):
         """
         Class for creating training and test datasets for font generation. It uses the GoogleFonts class to load font data from the specified repository URL, and splits the fonts into training and test sets. It also defines a set of test characters (the Latin Core codepoints) that will be used for evaluation.
@@ -30,6 +31,7 @@ class DatasetMaker:
         """
         self.googlefonts = GoogleFonts(repo_url, having=having)
         self.batch_size = batch_size
+        self.image_size = image_size
 
         # Test chars is a random 10% of the GF Latin Core codepoints
         # (because these are the codepoints which all fonts ought to have)
@@ -56,23 +58,26 @@ class DatasetMaker:
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            collate_fn=collate_fn,
+            collate_fn=lambda batch: collate_fn(batch, image_size=self.image_size),
         )
 
     def test_loader(self):
         return DataLoader(
             self.test_set(),
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=True,
             drop_last=True,
-            collate_fn=collate_fn,
+            collate_fn=lambda batch: collate_fn(batch, image_size=self.image_size),
         )
 
 
-def collate_fn(batch):
+def collate_fn(batch, image_size):
     chars = torch.tensor([item["char"] for item in batch])
     renderings = torch.stack(
-        [torch.tensor(item["font"].render(item["char"])) for item in batch]
+        [
+            torch.tensor(item["font"].render(item["char"], size=image_size))
+            for item in batch
+        ]
     )
     descriptions = [item["font"].description_with_tags() for item in batch]
 

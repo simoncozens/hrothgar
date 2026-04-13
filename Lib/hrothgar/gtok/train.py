@@ -68,8 +68,9 @@ def check_git_clean_and_get_commit_hash() -> str:
 def train(train_args):
     # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
     device = torch_setup()
-    model = GtokModel(GtokConfig()).to(device)
-    maker = DatasetMaker(train_args.dataset_path, batch_size=16)
+    config = GtokConfig(image_size=train_args.image_size)
+    model = GtokModel(config).to(device)
+    maker = DatasetMaker(train_args.dataset_path, batch_size=16, image_size=config.image_size)
     train_loader = maker.train_loader()
     test_loader = maker.test_loader()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -123,8 +124,8 @@ def train(train_args):
                         "Losses/" + key, float(value.detach().cpu()), global_step
                     )
                 writer.flush()
-                # Do some validation every 100 steps
-                if global_step % 100 != 0:
+                # Do some validation every 1000 steps
+                if global_step % 1000 != 0:
                     continue
                 model.eval()
                 with torch.no_grad():
@@ -188,6 +189,12 @@ if __name__ == "__main__":
         "--tag",
         type=str,
         help="Tag for the training run",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=128,
+        help="Square glyph raster size for GTok training.",
     )
     args = parser.parse_args()
     if not args.dataset_path:

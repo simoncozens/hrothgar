@@ -31,10 +31,12 @@ from hrothgar.gtok.llamagen_cnn import (
 class GtokConfig:
     """Configuration for the G-Tok tokenizer."""
 
+    image_size: int = 128
+
     # CNN encoder/decoder parameters (from LlamaGen)
     cnn_base_channels: int = 128
     cnn_channel_multipliers: Optional[List[int]] = (
-        None  # If None, defaults to [1, 1, 2, 2, 4]
+        None  # If None, defaults to [1, 2, 2, 4] for an 8x downsampling pyramid.
     )
     cnn_num_residual_blocks: int = 2
     cnn_latent_channels: int = 256
@@ -59,7 +61,9 @@ class GtokConfig:
     def __post_init__(self):
         """Set defaults for list parameters."""
         if self.cnn_channel_multipliers is None:
-            self.cnn_channel_multipliers = [1, 1, 2, 2, 4]
+            self.cnn_channel_multipliers = [1, 2, 2, 4]
+        if self.image_size <= 0:
+            raise ValueError(f"image_size must be positive, got {self.image_size}")
         if self.vit_hidden_dim % self.vit_num_heads != 0:
             raise ValueError(
                 "vit_hidden_dim must be divisible by vit_num_heads "
@@ -431,6 +435,14 @@ class GtokModel(nn.Module):
         ), "this can't happen, we set it in __post_init__, but mypy doesn't know that"
         self.num_downsampling_phases = len(config.cnn_channel_multipliers) - 1
         self.downsampling_factor = 2**self.num_downsampling_phases
+        if config.image_size % self.downsampling_factor != 0:
+            raise ValueError(
+                "image_size must be divisible by the CNN downsampling factor "
+                f"(got image_size={config.image_size}, downsampling_factor={self.downsampling_factor})"
+            )
+        self.token_grid_height = config.image_size // self.downsampling_factor
+        self.token_grid_width = config.image_size // self.downsampling_factor
+        self.sequence_length = self.token_grid_height * self.token_grid_width
 
         # CNN Encoder: Downsamples images to feature maps
         self.cnn_encoder = CNNEncoder(
@@ -442,15 +454,7 @@ class GtokModel(nn.Module):
             dropout=config.cnn_dropout,
         )
 
-        # Project CNN output to ViT encoder input dimension
-        self.cnn_to_vit_encoder = nn.Linear(
-            config.cnn_latent_channels, config.vit_hidden_dim
-        )
-
-        # ViT Encoder: 6-layer self-attention transformer
-        # For 64x64 input with downsampling factor 8, we get an 8x8 grid = 64 tokens
-        sequence_length = (64 // self.downsampling_factor) ** 2
-        grid_height = grid_width = 64 // self.downsampling_factor
+        # ViT Encoder: self-attention over the CNN token grid.
 
         self.vit_encoder = ViTEncoder(
             input_dim=config.cnn_latent_channels,
@@ -458,9 +462,9 @@ class GtokModel(nn.Module):
             num_layers=config.vit_num_layers,
             num_heads=config.vit_num_heads,
             mlp_dim=config.vit_mlp_dim,
-            sequence_length=sequence_length,
-            grid_height=grid_height,
-            grid_width=grid_width,
+            sequence_length=self.sequence_length,
+            grid_height=self.token_grid_height,
+            grid_width=self.token_grid_width,
             dropout=config.vit_dropout,
             attention_dropout=config.vit_attention_dropout,
         )
@@ -492,9 +496,9 @@ class GtokModel(nn.Module):
             num_heads=config.vit_num_heads,
             mlp_dim=config.vit_mlp_dim,
             output_dim=config.cnn_latent_channels,
-            sequence_length=sequence_length,
-            grid_height=grid_height,
-            grid_width=grid_width,
+            sequence_length=self.sequence_length,
+            grid_height=self.token_grid_height,
+            grid_width=self.token_grid_width,
             dropout=config.vit_dropout,
             attention_dropout=config.vit_attention_dropout,
         )
@@ -515,15 +519,15 @@ class GtokModel(nn.Module):
         """Encode glyph images to quantized codes and compute VQ losses.
 
         Args:
-            images: Input glyph images of shape (batch_size, 3, 64, 64)
+            images: Input glyph images of shape (batch_size, 3, image_size, image_size)
 
         Returns:
             Tuple of:
                 - quantized: Quantized representations, shape (batch_size, sequence_length, code_dim)
                 - loss_info: Tuple of (vq_loss, commit_loss, entropy_loss, codebook_usage)
         """
-        # CNN encode
-        cnn_out = self.cnn_encoder(images)  # (batch, cnn_latent_channels, 8, 8)
+        # CNN encode to a spatial token grid.
+        cnn_out = self.cnn_encoder(images)
 
         # Reshape CNN output to sequence format
         batch_size, channels, height, width = cnn_out.shape
@@ -543,19 +547,22 @@ class GtokModel(nn.Module):
             vit_out
         )  # (batch, sequence_length, code_dim)
 
-        # Reshape for quantizer (expects channel-first format)
+        # Reshape for quantizer while preserving 2D token layout.
         batch_size, _seq_length, _code_dim = quant_in.shape
-        quant_in_4d = quant_in.permute(0, 2, 1).unsqueeze(
-            -1
-        )  # (batch, code_dim, seq_length, 1)
+        quant_in_4d = quant_in.reshape(
+            batch_size,
+            self.token_grid_height,
+            self.token_grid_width,
+            self.config.quantizer_code_dim,
+        ).permute(0, 3, 1, 2)
 
         # Quantize
         quantized_4d, loss_info, _indices_info = self.quantizer(quant_in_4d)
 
-        # Reshape back to sequence format
-        quantized = quantized_4d.squeeze(-1).permute(
-            0, 2, 1
-        )  # (batch, sequence_length, code_dim)
+        # Reshape back to sequence format.
+        quantized = quantized_4d.permute(0, 2, 3, 1).reshape(
+            batch_size, self.sequence_length, self.config.quantizer_code_dim
+        )
 
         return quantized, loss_info
 
@@ -566,7 +573,7 @@ class GtokModel(nn.Module):
             quantized: Quantized representations of shape (batch_size, sequence_length, code_dim)
 
         Returns:
-            Reconstructed glyph images of shape (batch_size, 3, 64, 64)
+            Reconstructed glyph images of shape (batch_size, 3, image_size, image_size)
         """
         # Project to ViT decoder input
         decoder_in = self.quantizer_to_vit_decoder(
@@ -579,14 +586,16 @@ class GtokModel(nn.Module):
         )  # (batch, sequence_length, cnn_latent_channels)
 
         # Reshape to 4D for CNN decoder
-        batch_size, seq_length, channels = vit_out.shape
-        grid_size = int(seq_length**0.5)
-        cnn_in = vit_out.reshape(batch_size, grid_size, grid_size, channels).permute(
-            0, 3, 1, 2
-        )
+        batch_size, _seq_length, channels = vit_out.shape
+        cnn_in = vit_out.reshape(
+            batch_size,
+            self.token_grid_height,
+            self.token_grid_width,
+            channels,
+        ).permute(0, 3, 1, 2)
 
         # CNN decode
-        images = self.cnn_decoder(cnn_in)  # (batch, 3, 64, 64)
+        images = self.cnn_decoder(cnn_in)
 
         return images
 
@@ -594,11 +603,11 @@ class GtokModel(nn.Module):
         """Forward pass: encode, quantize, and decode.
 
         Args:
-            images: Input glyph images of shape (batch_size, 3, 64, 64)
+            images: Input glyph images of shape (batch_size, 3, image_size, image_size)
 
         Returns:
             Tuple of:
-                - reconstructed: Reconstructed images of shape (batch_size, 3, 64, 64)
+                - reconstructed: Reconstructed images of shape (batch_size, 3, image_size, image_size)
                 - loss_info: VQ loss information tuple
         """
         quantized, loss_info = self.encode(images)

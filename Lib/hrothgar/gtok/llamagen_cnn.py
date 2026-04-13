@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # Modified from:
 #   LlamaGen: https://github.com/FoundationVision/LlamaGen/tree/main/tokenizer/tokenizer_image/vq_model.py
 #   taming-transformers: https://github.com/CompVis/taming-transformers
@@ -8,20 +10,16 @@ from typing import Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from hrothgar.type_helpers import TypedModuleList as ModuleList
 
 
 class ConvBlock(nn.Module):
-    res: ModuleList[ResnetBlock]
-    attn: ModuleList[AttnBlock] = ModuleList()
-    downsample: Downsample
-    upsample: Upsample
+    def __init__(self) -> None:
+        super().__init__()
+        self.res = nn.ModuleList()
+        self.attn = nn.ModuleList()
 
 
 class Encoder(nn.Module):
-    conv_blocks: ModuleList[ConvBlock]
-    mid: ModuleList[Union[ResnetBlock, AttnBlock]]
-
     def __init__(
         self,
         in_channels=3,
@@ -40,13 +38,13 @@ class Encoder(nn.Module):
 
         # downsampling
         in_ch_mult = (1,) + tuple(ch_mult)
-        self.conv_blocks = ModuleList()
+        self.conv_blocks = nn.ModuleList()
         block_in = None
         for i_level in range(self.num_resolutions):
             conv_block = ConvBlock()
             # res & attn
-            res_block: ModuleList[ResnetBlock] = ModuleList()
-            attn_block: ModuleList[AttnBlock] = ModuleList()
+            res_block = nn.ModuleList()
+            attn_block = nn.ModuleList()
             block_in = ch * in_ch_mult[i_level]
             block_out = ch * ch_mult[i_level]
             for _ in range(self.num_res_blocks):
@@ -67,7 +65,7 @@ class Encoder(nn.Module):
 
         assert block_in is not None, "block_in should be set after the loop"
         # middle
-        self.mid = ModuleList()
+        self.mid = nn.ModuleList()
         self.mid.append(
             ResnetBlock(block_in, block_in, dropout=dropout, norm_type=norm_type)
         )
@@ -105,9 +103,6 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    conv_blocks: ModuleList[ConvBlock]
-    mid: ModuleList[Union[ResnetBlock, AttnBlock]]
-
     def __init__(
         self,
         z_channels=256,
@@ -130,7 +125,7 @@ class Decoder(nn.Module):
         )
 
         # middle
-        self.mid = ModuleList()
+        self.mid = nn.ModuleList()
         self.mid.append(
             ResnetBlock(block_in, block_in, dropout=dropout, norm_type=norm_type)
         )
@@ -140,12 +135,12 @@ class Decoder(nn.Module):
         )
 
         # upsampling
-        self.conv_blocks = ModuleList()
+        self.conv_blocks = nn.ModuleList()
         for i_level in reversed(range(self.num_resolutions)):
             conv_block = ConvBlock()
             # res & attn
-            res_block = ModuleList()
-            attn_block = ModuleList()
+            res_block = nn.ModuleList()
+            attn_block = nn.ModuleList()
             block_out = ch * ch_mult[i_level]
             for _ in range(self.num_res_blocks + 1):
                 res_block.append(
