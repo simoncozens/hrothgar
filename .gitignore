@@ -1,3 +1,4 @@
+*.pth
 scripts/
 cache/
 logs/
