@@ -5,8 +5,6 @@ from __future__ import annotations
 #   taming-transformers: https://github.com/CompVis/taming-transformers
 #   maskgit: https://github.com/google-research/maskgit
 
-from typing import Union
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
