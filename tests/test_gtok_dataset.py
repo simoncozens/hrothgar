@@ -1,6 +1,6 @@
 import os
 
-from hrothgar.dataset import DatasetMaker
+from hrothgar.gtok.dataset import GTokDatasetMaker
 
 if "GOOGLE_FONTS_REPO" not in os.environ:
     raise ValueError("GOOGLE_FONTS_REPO environment variable not set, cannot run tests")
@@ -8,7 +8,7 @@ REPOSITORY_PATH = os.getenv("GOOGLE_FONTS_REPO")
 
 
 def test_dataset_maker():
-    maker = DatasetMaker(REPOSITORY_PATH, batch_size=32)
+    maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=32)
     train = maker.train_set()
     test = maker.test_set()
 
@@ -18,7 +18,7 @@ def test_dataset_maker():
 
 
 def test_data_loader():
-    maker = DatasetMaker(REPOSITORY_PATH, batch_size=32)
+    maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=32)
     test_loader = maker.test_loader()
     # Check we can read a few batches
     for _ in range(3):
@@ -32,7 +32,7 @@ def test_data_loader():
 
 
 def test_no_crash_on_space():
-    maker = DatasetMaker(REPOSITORY_PATH, batch_size=32)
+    maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=32)
     maker.test_fonts = [maker.test_fonts[0]]  # Use just one font to speed up the test
     test_loader = maker.test_loader()
     for batch in test_loader:

@@ -151,6 +151,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Content-style aggregator: 3-layer cross-attention (content queries, style keys/values)
   - Transformer decoder: 24 layers, ~1024 hidden dim, 16 heads (314M)
   - Soft decoding: Softmax(logits) · Codebook → G-Tok decoder
+  - [x] AR phase-1 dataset maker and collation implemented (`target_rendering`, `content_rendering`, configurable `style_renderings` count)
 
 - [ ] **Training (Stage 1: visual pretraining)**
   - Input: 1 content glyph + 8 style references → predict target glyph tokens
