@@ -159,6 +159,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - AdamW (β1=0.9, β2=0.95), batch 32, lr 1e-4
   - 600k iterations (small dataset) or 1M (large dataset)
   - Freeze G-Tok during this stage
+  - [x] Visual-only AR training loop scaffold implemented in [Lib/hrothgar/ar/train.py](Lib/hrothgar/ar/train.py) with configurable `N_s`
 
 - [ ] **Validation**
   - Unseen-font generation quality (UFSC and UFUC splits)
