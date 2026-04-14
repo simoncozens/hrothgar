@@ -1,16 +1,20 @@
 from typing import Optional, Set
 
-from sklearn.model_selection import train_test_split
-from hrothgar.googlefonts import GoogleFonts
-from glyphsets import GlyphSet
 import torch
-from torch.utils.data import Dataset as TorchDataset, DataLoader
 import uharfbuzz as hb
+from glyphsets import GlyphSet
+from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset as TorchDataset
+
+from hrothgar.googlefonts import GoogleFonts
 
 LATIN_CORE = GlyphSet("GF_Latin_Core").get_characters()
 
 
 class DatasetMaker:
+    """A class for creating training and test datasets for font generation. It uses the GoogleFonts class to load font data from the specified repository URL, and splits the fonts into training and test sets. It also defines a set of test characters (the Latin Core codepoints) that will be used for evaluation."""
+
     def __init__(
         self,
         repo_url: str,
@@ -104,7 +108,7 @@ class Dataset(TorchDataset):
                 chars = set(font.codepoints) - set(self.test_latincore_chars)
             for char in chars:
                 # Make sure we have glyph extents, i.e. no empty glyphs, because those would cause problems for the model
-                hb_font = hb.Font(font.hb_face)
+                hb_font = hb.Font(font.hb_face)  # type: ignore
                 gid = hb_font.get_nominal_glyph(char)
                 extents = hb_font.get_glyph_extents(gid)
                 if all(x for x in extents):

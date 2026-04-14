@@ -20,11 +20,12 @@ import torch
 import torch.nn as nn
 from torchvision.models.vision_transformer import Encoder, EncoderBlock
 
-from hrothgar.gtok.llamagen_cnn import (
+from hrothgar.llamagen_cnn import (
     Encoder as CNNEncoder,
     Decoder as CNNDecoder,
     VectorQuantizer,
 )
+from hrothgar.utils import SaveLoadModel
 
 
 @dataclass
@@ -405,7 +406,7 @@ class CausalViTDecoder(nn.Module):
         return x
 
 
-class GtokModel(nn.Module):
+class GtokModel(SaveLoadModel):
     """G-Tok: Hybrid CNN-ViT glyph tokenizer.
 
     A complete tokenizer for glyphs that:
@@ -512,15 +513,6 @@ class GtokModel(nn.Module):
             out_channels=3,
             dropout=config.cnn_dropout,
         )
-
-    def save(self, path: str) -> None:
-        """Save the model state to a file."""
-        torch.save(self.state_dict(), path)
-
-    def load(self, path: str, device: Optional[torch.device] = None) -> None:
-        """Load the model state from a file."""
-        state_dict = torch.load(path, map_location=device)
-        self.load_state_dict(state_dict)
 
     def encode(
         self, images: torch.Tensor

@@ -73,7 +73,7 @@ class GoogleFont:
         """Renders the given character as a square image of the requested size. The character should be given as a Unicode code point (i.e. ord("a") for "a")."""
         try:
             return render(self.path, chr(char), size, self.hb_face, do_trim=False)
-        except Exception as e:
+        except Exception as _e:
             return np.zeros((3, size, size), dtype=np.float32)
 
     def description(self) -> str:
