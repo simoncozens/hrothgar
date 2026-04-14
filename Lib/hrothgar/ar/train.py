@@ -1,5 +1,6 @@
 import itertools
 import os
+from contextlib import nullcontext
 
 import torch
 import torchvision
@@ -33,15 +34,15 @@ class ARVisualTrainingLoop(TrainingLoop):
 
         maker = ARPhase1DatasetMaker(
             train_args.dataset_path,
-            batch_size=32,
+            batch_size=train_args.batch_size,
             image_size=config.image_size,
             style_glyph_count=train_args.style_glyph_count,
         )
 
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=1e-4,
-            betas=(0.9, 0.95),
+            lr=train_args.learning_rate,
+            betas=(train_args.beta1, train_args.beta2),
         )
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
@@ -54,18 +55,51 @@ class ARVisualTrainingLoop(TrainingLoop):
         self.target_steps = train_args.target_steps
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
+        self.grad_accum_steps = train_args.grad_accum_steps
+        self.canary_batches = train_args.canary
 
-        if train_args.canary != 0:
-            self.train_loader = list(
-                itertools.islice(self.train_loader, train_args.canary)
+        if self.grad_accum_steps <= 0:
+            raise ValueError(
+                f"grad_accum_steps must be positive, got {self.grad_accum_steps}"
             )
-            if len(self.train_loader) == 0:
-                raise ValueError("Canary mode produced an empty train loader")
+
+        self.use_amp = train_args.precision in {"bf16", "fp16"}
+        if train_args.precision == "bf16":
+            self.amp_dtype = torch.bfloat16
+        elif train_args.precision == "fp16":
+            self.amp_dtype = torch.float16
+        else:
+            self.amp_dtype = None
+
+        if self.use_amp and self.device.type != "cuda":
+            raise ValueError(
+                f"precision={train_args.precision} requires CUDA, got device {self.device}"
+            )
+
+        # GradScaler is needed for fp16, but not for bf16.
+        self.scaler = torch.cuda.amp.GradScaler(
+            enabled=self.use_amp and self.amp_dtype == torch.float16
+        )
+
+        if self.canary_batches != 0:
+            if self.canary_batches > len(self.train_loader):
+                raise ValueError(
+                    "canary exceeds train loader length "
+                    f"({self.canary_batches} > {len(self.train_loader)})"
+                )
             # Run for ten epochs over the canary slice.
-            self.target_steps = 10 * len(self.train_loader)
+            self.target_steps = 10 * self.canary_batches
+
+        if self.target_steps is None:
+            raise ValueError("target_steps must not be None for ARVisualTrainingLoop")
 
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
         self.validation_direction = "higher"  # Maximize SSIM.
+
+    def _autocast_context(self):
+        if not self.use_amp:
+            return nullcontext()
+        return torch.autocast(device_type="cuda", dtype=self.amp_dtype)
 
     def train_step(self, batch):
         target_images = batch["target_rendering"].to(self.device)
@@ -84,6 +118,78 @@ class ARVisualTrainingLoop(TrainingLoop):
         )
         return loss, loss_info
 
+    def train(self):
+        if len(self.train_loader) == 0:
+            raise ValueError("Training loader is empty; cannot start training.")
+        import pkbar
+
+        try:
+            while not self.must_stop():
+                kbar = pkbar.Kbar(
+                    target=len(self.train_loader),
+                    epoch=self.epoch,
+                    num_epochs=self.num_epochs,
+                )
+                self.model.train()
+                self.optimizer.zero_grad(set_to_none=True)
+
+                train_iterable = self.train_loader
+                if self.canary_batches != 0:
+                    train_iterable = itertools.islice(
+                        self.train_loader, self.canary_batches
+                    )
+
+                steps_in_epoch = (
+                    self.canary_batches
+                    if self.canary_batches != 0
+                    else len(self.train_loader)
+                )
+
+                for i, batch in enumerate(train_iterable):
+                    if self.must_stop():
+                        break
+
+                    with self._autocast_context():
+                        loss, loss_info = self.train_step(batch)
+                        scaled_loss = loss / self.grad_accum_steps
+
+                    if self.scaler.is_enabled():
+                        self.scaler.scale(scaled_loss).backward()
+                    else:
+                        scaled_loss.backward()
+
+                    should_step = (i + 1) % self.grad_accum_steps == 0 or (
+                        i + 1 == steps_in_epoch
+                    )
+
+                    if should_step:
+                        if self.scaler.is_enabled():
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                        else:
+                            self.optimizer.step()
+                        self.optimizer.zero_grad(set_to_none=True)
+
+                        self.global_step += 1
+                        kbar.update(
+                            i,
+                            values=[
+                                (k, float(v.detach().cpu()))
+                                for k, v in loss_info.items()
+                            ],
+                        )
+                        for key, value in loss_info.items():
+                            self.write_scalar("Losses/" + key, value)
+                        if self.global_step % 100 == 0:
+                            self.writer.flush()
+                        self.post_train_step()
+
+                self.post_train_epoch()
+                self.epoch += 1
+                self.validation()
+        finally:
+            self.writer.close()
+
     def post_train_step(self):
         if self.global_step % self.validation_every != 0:
             return
@@ -100,11 +206,12 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_content_images = val_batch["content_rendering"].to(self.device)
                 val_style_images = val_batch["style_renderings"].to(self.device)
 
-                val_output = self.model(
-                    val_content_images,
-                    val_style_images,
-                    target_images=val_target_images,
-                )
+                with self._autocast_context():
+                    val_output = self.model(
+                        val_content_images,
+                        val_style_images,
+                        target_images=val_target_images,
+                    )
                 val_metrics["ssim"].append(
                     self.ssim(val_output.reconstructed_images, val_target_images)
                 )
@@ -127,11 +234,12 @@ class ARVisualTrainingLoop(TrainingLoop):
         val_content_images = val_batch["content_rendering"].to(self.device)
         val_style_images = val_batch["style_renderings"].to(self.device)
 
-        val_output = self.model(
-            val_content_images,
-            val_style_images,
-            target_images=val_target_images,
-        )
+        with self._autocast_context():
+            val_output = self.model(
+                val_content_images,
+                val_style_images,
+                target_images=val_target_images,
+            )
 
         preview_count = min(8, val_target_images.shape[0])
         first_style = val_style_images[:preview_count, 0]
@@ -179,6 +287,12 @@ if __name__ == "__main__":
         help="Square glyph raster size for AR training",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Batch size (paper default: 32)",
+    )
+    parser.add_argument(
         "--style-glyph-count",
         type=int,
         default=8,
@@ -189,6 +303,37 @@ if __name__ == "__main__":
         type=int,
         default=600_000,
         help="Training iterations (paper: 600k for small set, 1M for large set)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=1e-4,
+        help="AdamW learning rate (paper default: 1e-4)",
+    )
+    parser.add_argument(
+        "--beta1",
+        type=float,
+        default=0.9,
+        help="AdamW beta1 (paper default: 0.9)",
+    )
+    parser.add_argument(
+        "--beta2",
+        type=float,
+        default=0.95,
+        help="AdamW beta2 (paper default: 0.95)",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        choices=["fp32", "bf16", "fp16"],
+        default="bf16",
+        help="Numerical precision for training",
+    )
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=1,
+        help="Number of micro-batches to accumulate per optimizer step",
     )
     parser.add_argument(
         "--validation-every",
