@@ -6,11 +6,19 @@ Requires the Google Fonts repository to be available; set the
 
 import os
 
+import torch
+
 from hrothgar.ar.dataset import ARPhase1DatasetMaker
 
 if "GOOGLE_FONTS_REPO" not in os.environ:
     raise ValueError("GOOGLE_FONTS_REPO environment variable not set, cannot run tests")
 REPOSITORY_PATH = os.getenv("GOOGLE_FONTS_REPO")
+
+
+def _all_images_have_visible_content(images: torch.Tensor) -> bool:
+    """Return True when every image has non-constant pixel values."""
+    flattened = images.reshape(images.shape[0], -1)
+    return bool(torch.all(flattened.amax(dim=1) > flattened.amin(dim=1)))
 
 
 def test_dataset_maker() -> None:
@@ -64,3 +72,20 @@ def test_no_crash_on_full_loader() -> None:
     for _ in range(3):
         batch = next(iter(maker.test_loader()))
         assert "target_rendering" in batch
+
+
+def test_model_inputs_are_not_blank() -> None:
+    """Rendered model inputs should not be completely blank images.
+
+    This guards against dataset or rendering regressions where content, target,
+    or sampled style glyphs collapse to a constant image and silently make it
+    into training and TensorBoard previews.
+    """
+    maker = ARPhase1DatasetMaker(REPOSITORY_PATH, batch_size=8, style_glyph_count=4)
+    batch = next(iter(maker.test_loader()))
+
+    assert _all_images_have_visible_content(batch["target_rendering"])
+    assert _all_images_have_visible_content(batch["content_rendering"])
+
+    style_renderings = batch["style_renderings"].reshape(-1, 3, 128, 128)
+    assert _all_images_have_visible_content(style_renderings)
