@@ -1,16 +1,16 @@
 import itertools
 import os
 
-import tqdm
 import torch
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 import torchvision
+import tqdm
+from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from hrothgar.dataset import DatasetMaker
 from hrothgar.gtok import compute_gtok_loss
+from hrothgar.gtok.dataset import DatasetMaker
+from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.gtok.vgg_loss import VGG
-from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.utils import TrainingLoop
 
 
