@@ -7,7 +7,7 @@ import tqdm
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.gtok import compute_gtok_loss
-from hrothgar.gtok.dataset import DatasetMaker
+from hrothgar.gtok.dataset import GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.gtok.vgg_loss import VGG
@@ -19,7 +19,7 @@ class GtokTrainingLoop(TrainingLoop):
         config = GtokConfig(image_size=train_args.image_size)
         model = GtokModel(config).to(self.device)
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
-        maker = DatasetMaker(
+        maker = GTokDatasetMaker(
             train_args.dataset_path, batch_size=16, image_size=config.image_size
         )
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
