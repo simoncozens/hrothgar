@@ -1,0 +1,841 @@
+"""Autoregressive glyph generator for GAR-Font.
+
+This module implements the vision-only stage of the GAR-Font AR generator:
+
+1. A content encoder extracts structural features from a reference glyph.
+2. A lightweight style encoder extracts visual style features from style references.
+3. A content-style aggregator fuses both streams with stacked cross-attention,
+   following the design used in FsFont and referenced by GAR-Font.
+4. A causal Transformer decoder autoregressively predicts G-Tok codebook indices.
+5. A soft codebook projection feeds the frozen G-Tok decoder to reconstruct images.
+
+The training loop is intentionally left for later; this file focuses on model
+definition and the tensors needed for token- and pixel-level supervision.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import math
+from typing import Dict, Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from hrothgar.llamagen_cnn import Encoder as CNNEncoder
+from hrothgar.gtok.model import (
+    GtokConfig,
+    GtokModel,
+    create_2d_sinusoidal_position_embeddings,
+)
+from hrothgar.utils import SaveLoadModel
+
+
+@dataclass
+class ARModelConfig:
+    """Configuration for the visual-pretraining AR generator."""
+
+    image_size: int = 128
+    encoder_feature_dim: int = 256
+
+    content_encoder_base_channels: int = 128
+    content_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4)
+    content_encoder_num_residual_blocks: int = 2
+
+    style_encoder_base_channels: int = 32
+    style_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4)
+    style_encoder_num_residual_blocks: int = 2
+
+    aggregator_num_layers: int = 3
+    aggregator_num_heads: int = 8
+
+    decoder_hidden_dim: int = 1024
+    decoder_num_layers: int = 24
+    decoder_num_heads: int = 16
+    decoder_mlp_dim: int = 2048
+    decoder_dropout: float = 0.1
+    decoder_attention_dropout: float = 0.1
+
+    freeze_gtok: bool = True
+
+    def __post_init__(self) -> None:
+        if self.image_size <= 0:
+            raise ValueError(f"image_size must be positive, got {self.image_size}")
+        if self.encoder_feature_dim % self.aggregator_num_heads != 0:
+            raise ValueError(
+                "encoder_feature_dim must be divisible by aggregator_num_heads "
+                f"(got {self.encoder_feature_dim} and {self.aggregator_num_heads})"
+            )
+        if self.decoder_hidden_dim % self.decoder_num_heads != 0:
+            raise ValueError(
+                "decoder_hidden_dim must be divisible by decoder_num_heads "
+                f"(got {self.decoder_hidden_dim} and {self.decoder_num_heads})"
+            )
+
+
+@dataclass
+class ARModelOutput:
+    """Outputs returned by ``ARModel.forward``."""
+
+    logits: torch.Tensor
+    reconstructed_images: torch.Tensor
+    soft_token_embeddings: torch.Tensor
+    conditioning_tokens: torch.Tensor
+    target_token_indices: Optional[torch.Tensor]
+
+
+@dataclass
+class ARAdaptationOutput:
+    """Outputs returned by multimodal adaptation methods.
+
+    These tensors support both adaptation objectives:
+    - Optional token/pixel decoding branch (same as visual pretraining path)
+    - Feature-space alignment branch between visual-only and multimodal aggregation
+    """
+
+    multimodal_conditioning_tokens: torch.Tensor
+    visual_conditioning_tokens: torch.Tensor
+    multimodal_aggregated_style_tokens: torch.Tensor
+    visual_aggregated_style_tokens: torch.Tensor
+    logits: Optional[torch.Tensor]
+    reconstructed_images: Optional[torch.Tensor]
+    soft_token_embeddings: Optional[torch.Tensor]
+    target_token_indices: Optional[torch.Tensor]
+
+
+class ContentStyleAttentionLayer(nn.Module):
+    """FsFont-style cross-attention layer for content-style fusion.
+
+    This block mirrors the reference implementation closely: a projected content
+    query attends over projected style keys/values, followed by a learned output
+    projection, residual connection, and layer normalization. There is no MLP in
+    this block, which also matches the reported parameter count of about 0.79M
+    for three 256-channel layers.
+    """
+
+    def __init__(self, feature_dim: int, num_heads: int) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.num_heads = num_heads
+        self.head_dim = feature_dim // num_heads
+
+        self.key_projection = nn.Linear(feature_dim, feature_dim, bias=False)
+        self.value_projection = nn.Linear(feature_dim, feature_dim, bias=False)
+        self.query_projection = nn.Linear(feature_dim, feature_dim, bias=False)
+        self.output_projection = nn.Linear(feature_dim, feature_dim, bias=False)
+        self.layer_norm = nn.LayerNorm(feature_dim, eps=1e-6, elementwise_affine=False)
+
+    def forward(
+        self,
+        content_tokens: torch.Tensor,
+        style_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, content_length, _ = content_tokens.shape
+        style_length = style_tokens.shape[1]
+
+        residual = self.query_projection(content_tokens)
+
+        query = residual.view(batch_size, content_length, self.num_heads, self.head_dim)
+        key = self.key_projection(style_tokens).view(
+            batch_size, style_length, self.num_heads, self.head_dim
+        )
+        value = self.value_projection(style_tokens).view(
+            batch_size, style_length, self.num_heads, self.head_dim
+        )
+
+        query = query.permute(0, 2, 1, 3)
+        key = key.permute(0, 2, 1, 3)
+        value = value.permute(0, 2, 1, 3)
+
+        attention_scores = torch.matmul(query, key.transpose(-2, -1))
+        attention_scores = attention_scores / math.sqrt(self.head_dim)
+        attention_weights = torch.softmax(attention_scores, dim=-1)
+
+        fused = torch.matmul(attention_weights, value)
+        fused = (
+            fused.permute(0, 2, 1, 3)
+            .contiguous()
+            .view(batch_size, content_length, self.feature_dim)
+        )
+        fused = self.output_projection(fused)
+        return self.layer_norm(fused + residual)
+
+
+class ContentStyleAggregator(nn.Module):
+    """Stacked content-style cross-attention fusion module."""
+
+    def __init__(self, feature_dim: int, num_heads: int, num_layers: int) -> None:
+        super().__init__()
+        self.layers = nn.ModuleList(
+            [
+                ContentStyleAttentionLayer(feature_dim, num_heads)
+                for _ in range(num_layers)
+            ]
+        )
+
+    def forward(
+        self,
+        content_tokens: torch.Tensor,
+        style_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        fused_tokens = content_tokens
+        for layer in self.layers:
+            fused_tokens = layer(fused_tokens, style_tokens)
+        return fused_tokens
+
+
+class CausalConditionedDecoderLayer(nn.Module):
+    """Single decoder block with causal self-attention and conditioning cross-attention."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        dropout: float,
+        attention_dropout: float,
+    ) -> None:
+        super().__init__()
+        self.self_attention_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.self_attention = nn.MultiheadAttention(
+            hidden_dim,
+            num_heads,
+            dropout=attention_dropout,
+            batch_first=True,
+        )
+        self.cross_attention_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.cross_attention = nn.MultiheadAttention(
+            hidden_dim,
+            num_heads,
+            dropout=attention_dropout,
+            batch_first=True,
+        )
+        self.mlp_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_dim, mlp_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_dim, hidden_dim),
+            nn.Dropout(dropout),
+        )
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        decoder_tokens: torch.Tensor,
+        conditioning_tokens: torch.Tensor,
+        causal_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        self_attended, _ = self.self_attention(
+            self.self_attention_norm(decoder_tokens),
+            self.self_attention_norm(decoder_tokens),
+            self.self_attention_norm(decoder_tokens),
+            need_weights=False,
+            attn_mask=causal_mask,
+        )
+        decoder_tokens = decoder_tokens + self.dropout(self_attended)
+
+        cross_attended, _ = self.cross_attention(
+            self.cross_attention_norm(decoder_tokens),
+            conditioning_tokens,
+            conditioning_tokens,
+            need_weights=False,
+        )
+        decoder_tokens = decoder_tokens + self.dropout(cross_attended)
+        decoder_tokens = decoder_tokens + self.mlp(self.mlp_norm(decoder_tokens))
+        return decoder_tokens
+
+
+class AutoregressiveTokenDecoder(nn.Module):
+    """Causal Transformer decoder for G-Tok token prediction."""
+
+    def __init__(
+        self,
+        vocab_size: int,
+        sequence_length: int,
+        hidden_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        num_layers: int,
+        dropout: float,
+        attention_dropout: float,
+        conditioning_dim: int,
+    ) -> None:
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.sequence_length = sequence_length
+        self.hidden_dim = hidden_dim
+        self.bos_token_id = vocab_size
+
+        self.token_embedding = nn.Embedding(vocab_size + 1, hidden_dim)
+        self.position_embedding = nn.Parameter(
+            torch.zeros(1, sequence_length, hidden_dim)
+        )
+        self.conditioning_projection = nn.Linear(conditioning_dim, hidden_dim)
+        self.conditioning_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.layers = nn.ModuleList(
+            [
+                CausalConditionedDecoderLayer(
+                    hidden_dim=hidden_dim,
+                    num_heads=num_heads,
+                    mlp_dim=mlp_dim,
+                    dropout=dropout,
+                    attention_dropout=attention_dropout,
+                )
+                for _ in range(num_layers)
+            ]
+        )
+        self.final_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
+        self.output_projection = nn.Linear(hidden_dim, vocab_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def _causal_mask(self, sequence_length: int, device: torch.device) -> torch.Tensor:
+        mask = torch.zeros(sequence_length, sequence_length, device=device)
+        mask = mask.masked_fill(
+            torch.triu(
+                torch.ones(sequence_length, sequence_length, device=device), diagonal=1
+            ).bool(),
+            float("-inf"),
+        )
+        return mask
+
+    def prepare_teacher_forcing_inputs(
+        self,
+        target_token_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, sequence_length = target_token_indices.shape
+        if sequence_length != self.sequence_length:
+            raise ValueError(
+                f"Expected target_token_indices length {self.sequence_length}, got {sequence_length}"
+            )
+        bos_column = torch.full(
+            (batch_size, 1),
+            fill_value=self.bos_token_id,
+            device=target_token_indices.device,
+            dtype=target_token_indices.dtype,
+        )
+        return torch.cat([bos_column, target_token_indices[:, :-1]], dim=1)
+
+    def forward(
+        self,
+        input_token_indices: torch.Tensor,
+        conditioning_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        sequence_length = input_token_indices.shape[1]
+        if sequence_length > self.sequence_length:
+            raise ValueError(
+                f"Decoder input length {sequence_length} exceeds configured sequence length {self.sequence_length}"
+            )
+
+        decoder_tokens = self.token_embedding(input_token_indices)
+        decoder_tokens = (
+            decoder_tokens + self.position_embedding[:, :sequence_length, :]
+        )
+        decoder_tokens = self.dropout(decoder_tokens)
+
+        projected_conditioning = self.conditioning_norm(
+            self.conditioning_projection(conditioning_tokens)
+        )
+        causal_mask = self._causal_mask(sequence_length, input_token_indices.device)
+
+        for layer in self.layers:
+            decoder_tokens = layer(
+                decoder_tokens=decoder_tokens,
+                conditioning_tokens=projected_conditioning,
+                causal_mask=causal_mask,
+            )
+
+        decoder_tokens = self.final_norm(decoder_tokens)
+        return self.output_projection(decoder_tokens)
+
+
+class ARModel(SaveLoadModel):
+    """GAR-Font autoregressive generator model definition."""
+
+    def __init__(
+        self,
+        config: ARModelConfig,
+        gtok_model: Optional[GtokModel] = None,
+        language_adapter: Optional[nn.Module] = None,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.gtok = gtok_model or GtokModel(GtokConfig(image_size=config.image_size))
+
+        if self.gtok.config.image_size != config.image_size:
+            raise ValueError(
+                "ARModel and G-Tok image sizes must match "
+                f"(got {config.image_size} and {self.gtok.config.image_size})"
+            )
+
+        self.sequence_length = self.gtok.sequence_length
+        self.token_grid_height = self.gtok.token_grid_height
+        self.token_grid_width = self.gtok.token_grid_width
+        self.codebook_size = self.gtok.config.quantizer_codebook_size
+        self.codebook_dim = self.gtok.config.quantizer_code_dim
+
+        self.content_encoder = CNNEncoder(
+            in_channels=3,
+            ch=config.content_encoder_base_channels,
+            ch_mult=config.content_encoder_channel_multipliers,
+            num_res_blocks=config.content_encoder_num_residual_blocks,
+            z_channels=config.encoder_feature_dim,
+            dropout=0.0,
+        )
+        self.style_encoder = CNNEncoder(
+            in_channels=3,
+            ch=config.style_encoder_base_channels,
+            ch_mult=config.style_encoder_channel_multipliers,
+            num_res_blocks=config.style_encoder_num_residual_blocks,
+            z_channels=config.encoder_feature_dim,
+            dropout=0.0,
+        )
+        self.aggregator = ContentStyleAggregator(
+            feature_dim=config.encoder_feature_dim,
+            num_heads=config.aggregator_num_heads,
+            num_layers=config.aggregator_num_layers,
+        )
+
+        conditioning_dim = config.encoder_feature_dim * 2
+        self.register_buffer(
+            "conditioning_position_embeddings",
+            create_2d_sinusoidal_position_embeddings(
+                self.sequence_length,
+                self.token_grid_height,
+                self.token_grid_width,
+                conditioning_dim,
+            ),
+            persistent=False,
+        )
+        self.token_decoder = AutoregressiveTokenDecoder(
+            vocab_size=self.codebook_size,
+            sequence_length=self.sequence_length,
+            hidden_dim=config.decoder_hidden_dim,
+            num_heads=config.decoder_num_heads,
+            mlp_dim=config.decoder_mlp_dim,
+            num_layers=config.decoder_num_layers,
+            dropout=config.decoder_dropout,
+            attention_dropout=config.decoder_attention_dropout,
+            conditioning_dim=conditioning_dim,
+        )
+        self.language_adapter: Optional[nn.Module] = None
+        if language_adapter is not None:
+            self.set_language_adapter(language_adapter)
+
+        if config.freeze_gtok:
+            self.freeze_gtok()
+
+    def freeze_gtok(self) -> None:
+        """Freeze G-Tok so the AR stage trains only its own modules."""
+        self.gtok.eval()
+        for parameter in self.gtok.parameters():
+            parameter.requires_grad = False
+
+    @staticmethod
+    def _set_module_trainable(module: nn.Module, trainable: bool) -> None:
+        for parameter in module.parameters():
+            parameter.requires_grad = trainable
+        if trainable:
+            module.train()
+        else:
+            module.eval()
+
+    def set_language_adapter(self, adapter: nn.Module) -> None:
+        """Register a language adapter module for multimodal adaptation mode."""
+        self.language_adapter = adapter
+
+    def freeze_visual_style_path(self) -> None:
+        """Freeze visual style encoder and aggregator for adaptation training."""
+        self._set_module_trainable(self.style_encoder, trainable=False)
+        self._set_module_trainable(self.aggregator, trainable=False)
+
+    def unfreeze_visual_style_path(self) -> None:
+        """Unfreeze visual style encoder and aggregator."""
+        self._set_module_trainable(self.style_encoder, trainable=True)
+        self._set_module_trainable(self.aggregator, trainable=True)
+
+    def encode_content(self, content_images: torch.Tensor) -> torch.Tensor:
+        """Encode content glyphs to token-aligned spatial features."""
+        content_features = self.content_encoder(content_images)
+        batch_size, channels, height, width = content_features.shape
+        if height != self.token_grid_height or width != self.token_grid_width:
+            raise ValueError(
+                "Content encoder output shape does not match G-Tok token grid "
+                f"(got {(height, width)}, expected {(self.token_grid_height, self.token_grid_width)})"
+            )
+        return content_features.permute(0, 2, 3, 1).reshape(
+            batch_size, height * width, channels
+        )
+
+    def encode_style(self, style_reference_images: torch.Tensor) -> torch.Tensor:
+        """Encode style references and flatten them into attention memory tokens."""
+        batch_size, num_references, channels, height, width = (
+            style_reference_images.shape
+        )
+        if channels != 3:
+            raise ValueError(f"Expected RGB style references, got {channels} channels")
+        flattened_images = style_reference_images.reshape(
+            batch_size * num_references, channels, height, width
+        )
+        encoded = self.style_encoder(flattened_images)
+        _, feature_channels, feature_height, feature_width = encoded.shape
+        if (
+            feature_height != self.token_grid_height
+            or feature_width != self.token_grid_width
+        ):
+            raise ValueError(
+                "Style encoder output shape does not match G-Tok token grid "
+                f"(got {(feature_height, feature_width)}, expected {(self.token_grid_height, self.token_grid_width)})"
+            )
+        encoded = encoded.reshape(
+            batch_size,
+            num_references,
+            feature_channels,
+            feature_height,
+            feature_width,
+        )
+        style_tokens = encoded.permute(0, 1, 3, 4, 2).reshape(
+            batch_size,
+            num_references * feature_height * feature_width,
+            feature_channels,
+        )
+        return style_tokens
+
+    def aggregate_conditioning(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+    ) -> torch.Tensor:
+        """Build the conditioning sequence used by the AR decoder."""
+        content_tokens = self.encode_content(content_images)
+        style_tokens = self.encode_style(style_reference_images)
+        aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
+        conditioning_tokens = torch.cat(
+            [content_tokens, aggregated_style_tokens], dim=-1
+        )
+        return conditioning_tokens + self.conditioning_position_embeddings.unsqueeze(0)
+
+    def aggregate_conditioning_components(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return content, style-aggregated, and final visual conditioning tokens."""
+        content_tokens = self.encode_content(content_images)
+        style_tokens = self.encode_style(style_reference_images)
+        aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
+        conditioning_tokens = torch.cat(
+            [content_tokens, aggregated_style_tokens], dim=-1
+        )
+        conditioning_tokens = (
+            conditioning_tokens + self.conditioning_position_embeddings.unsqueeze(0)
+        )
+        return content_tokens, aggregated_style_tokens, conditioning_tokens
+
+    def _adapt_style_tokens_with_language(
+        self,
+        style_tokens: torch.Tensor,
+        text_embeddings: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.language_adapter is None:
+            raise RuntimeError(
+                "No language adapter is registered. Call set_language_adapter(...) before adaptation mode."
+            )
+        adapted_style_tokens = self.language_adapter(style_tokens, text_embeddings)
+        if adapted_style_tokens.shape != style_tokens.shape:
+            raise ValueError(
+                "Language adapter must return style tokens with the same shape as input "
+                f"(got {tuple(adapted_style_tokens.shape)} vs {tuple(style_tokens.shape)})"
+            )
+        return adapted_style_tokens
+
+    def _decode_with_teacher_forcing(
+        self,
+        conditioning_tokens: torch.Tensor,
+        target_token_indices: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
+            target_token_indices
+        )
+        logits = self.token_decoder(decoder_input_tokens, conditioning_tokens)
+        soft_token_embeddings, reconstructed_images = self.soft_decode(logits)
+        return logits, soft_token_embeddings, reconstructed_images
+
+    def target_token_indices_from_images(
+        self, target_images: torch.Tensor
+    ) -> torch.Tensor:
+        """Encode target glyph images into G-Tok codebook indices."""
+        cnn_out = self.gtok.cnn_encoder(target_images)
+        batch_size, channels, height, width = cnn_out.shape
+        cnn_tokens = cnn_out.permute(0, 2, 3, 1).reshape(
+            batch_size, height * width, channels
+        )
+        vit_tokens = self.gtok.vit_encoder(cnn_tokens)[:, 1:, :]
+        quantizer_inputs = self.gtok.vit_encoder_to_quantizer(vit_tokens)
+        quantizer_inputs = quantizer_inputs.reshape(
+            batch_size,
+            self.token_grid_height,
+            self.token_grid_width,
+            self.codebook_dim,
+        ).permute(0, 3, 1, 2)
+        _quantized, _loss_info, indices_info = self.gtok.quantizer(quantizer_inputs)
+        token_indices = indices_info[2].reshape(batch_size, self.sequence_length)
+        return token_indices
+
+    def codebook_embeddings(self) -> torch.Tensor:
+        """Return the codebook matrix used for soft and hard decoding."""
+        codebook = self.gtok.quantizer.embedding.weight
+        if self.gtok.quantizer.l2_norm:
+            codebook = F.normalize(codebook, p=2, dim=-1)
+        return codebook
+
+    def soft_decode(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Project token logits onto the G-Tok codebook and decode to images."""
+        probabilities = torch.softmax(logits, dim=-1)
+        soft_token_embeddings = torch.matmul(probabilities, self.codebook_embeddings())
+        reconstructed_images = self.gtok.decode(soft_token_embeddings)
+        return soft_token_embeddings, reconstructed_images
+
+    def forward(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+        *,
+        target_token_indices: Optional[torch.Tensor] = None,
+        target_images: Optional[torch.Tensor] = None,
+    ) -> ARModelOutput:
+        """Run teacher-forced AR decoding for visual pretraining.
+
+        Either ``target_token_indices`` or ``target_images`` must be provided.
+        The latter is convenient during training because it allows the model to
+        derive token targets directly from the frozen G-Tok tokenizer.
+        """
+        conditioning_tokens = self.aggregate_conditioning(
+            content_images=content_images,
+            style_reference_images=style_reference_images,
+        )
+
+        if target_token_indices is None:
+            if target_images is None:
+                raise ValueError(
+                    "Either target_token_indices or target_images must be provided for ARModel.forward"
+                )
+            with torch.no_grad():
+                target_token_indices = self.target_token_indices_from_images(
+                    target_images
+                )
+        logits, soft_token_embeddings, reconstructed_images = (
+            self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=target_token_indices,
+            )
+        )
+
+        return ARModelOutput(
+            logits=logits,
+            reconstructed_images=reconstructed_images,
+            soft_token_embeddings=soft_token_embeddings,
+            conditioning_tokens=conditioning_tokens,
+            target_token_indices=target_token_indices,
+        )
+
+    def forward_adaptation(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+        text_embeddings: torch.Tensor,
+        *,
+        target_token_indices: Optional[torch.Tensor] = None,
+        target_images: Optional[torch.Tensor] = None,
+        run_decoder: bool = False,
+    ) -> ARAdaptationOutput:
+        """Forward path for visual-language adaptation mode.
+
+        This branch exposes both visual-only and multimodal aggregated features
+        so later training can apply alignment losses between them. Optionally,
+        it can also run the decoder branch for token/pixel supervision.
+        """
+        content_tokens = self.encode_content(content_images)
+        style_tokens = self.encode_style(style_reference_images)
+
+        visual_aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
+        visual_conditioning_tokens = torch.cat(
+            [content_tokens, visual_aggregated_style_tokens], dim=-1
+        )
+        visual_conditioning_tokens = (
+            visual_conditioning_tokens
+            + self.conditioning_position_embeddings.unsqueeze(0)
+        )
+
+        adapted_style_tokens = self._adapt_style_tokens_with_language(
+            style_tokens=style_tokens,
+            text_embeddings=text_embeddings,
+        )
+        multimodal_aggregated_style_tokens = self.aggregator(
+            content_tokens, adapted_style_tokens
+        )
+        multimodal_conditioning_tokens = torch.cat(
+            [content_tokens, multimodal_aggregated_style_tokens], dim=-1
+        )
+        multimodal_conditioning_tokens = (
+            multimodal_conditioning_tokens
+            + self.conditioning_position_embeddings.unsqueeze(0)
+        )
+
+        logits: Optional[torch.Tensor] = None
+        reconstructed_images: Optional[torch.Tensor] = None
+        soft_token_embeddings: Optional[torch.Tensor] = None
+
+        if run_decoder:
+            if target_token_indices is None:
+                if target_images is None:
+                    raise ValueError(
+                        "Either target_token_indices or target_images must be provided when run_decoder=True"
+                    )
+                with torch.no_grad():
+                    target_token_indices = self.target_token_indices_from_images(
+                        target_images
+                    )
+            logits, soft_token_embeddings, reconstructed_images = (
+                self._decode_with_teacher_forcing(
+                    conditioning_tokens=multimodal_conditioning_tokens,
+                    target_token_indices=target_token_indices,
+                )
+            )
+
+        return ARAdaptationOutput(
+            multimodal_conditioning_tokens=multimodal_conditioning_tokens,
+            visual_conditioning_tokens=visual_conditioning_tokens,
+            multimodal_aggregated_style_tokens=multimodal_aggregated_style_tokens,
+            visual_aggregated_style_tokens=visual_aggregated_style_tokens,
+            logits=logits,
+            reconstructed_images=reconstructed_images,
+            soft_token_embeddings=soft_token_embeddings,
+            target_token_indices=target_token_indices,
+        )
+
+    @torch.no_grad()
+    def generate(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+    ) -> ARModelOutput:
+        """Greedily decode a full token sequence and reconstruct the glyph image."""
+        conditioning_tokens = self.aggregate_conditioning(
+            content_images=content_images,
+            style_reference_images=style_reference_images,
+        )
+        batch_size = content_images.shape[0]
+        generated_tokens = torch.full(
+            (batch_size, 1),
+            fill_value=self.token_decoder.bos_token_id,
+            device=content_images.device,
+            dtype=torch.long,
+        )
+
+        predicted_token_indices = []
+        for _ in range(self.sequence_length):
+            logits = self.token_decoder(generated_tokens, conditioning_tokens)
+            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            predicted_token_indices.append(next_token)
+            generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
+
+        predicted_token_indices_tensor = torch.cat(predicted_token_indices, dim=1)
+        logits = self.token_decoder(
+            self.token_decoder.prepare_teacher_forcing_inputs(
+                predicted_token_indices_tensor
+            ),
+            conditioning_tokens,
+        )
+        soft_token_embeddings, reconstructed_images = self.soft_decode(logits)
+        return ARModelOutput(
+            logits=logits,
+            reconstructed_images=reconstructed_images,
+            soft_token_embeddings=soft_token_embeddings,
+            conditioning_tokens=conditioning_tokens,
+            target_token_indices=predicted_token_indices_tensor,
+        )
+
+    @torch.no_grad()
+    def generate_adaptation(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+        text_embeddings: torch.Tensor,
+    ) -> ARAdaptationOutput:
+        """Greedy generation path that uses multimodal conditioning tokens."""
+        content_tokens = self.encode_content(content_images)
+        style_tokens = self.encode_style(style_reference_images)
+        visual_aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
+        visual_conditioning_tokens = torch.cat(
+            [content_tokens, visual_aggregated_style_tokens], dim=-1
+        )
+        visual_conditioning_tokens = (
+            visual_conditioning_tokens
+            + self.conditioning_position_embeddings.unsqueeze(0)
+        )
+
+        adapted_style_tokens = self._adapt_style_tokens_with_language(
+            style_tokens=style_tokens,
+            text_embeddings=text_embeddings,
+        )
+        multimodal_aggregated_style_tokens = self.aggregator(
+            content_tokens, adapted_style_tokens
+        )
+        multimodal_conditioning_tokens = torch.cat(
+            [content_tokens, multimodal_aggregated_style_tokens], dim=-1
+        )
+        multimodal_conditioning_tokens = (
+            multimodal_conditioning_tokens
+            + self.conditioning_position_embeddings.unsqueeze(0)
+        )
+
+        batch_size = content_images.shape[0]
+        generated_tokens = torch.full(
+            (batch_size, 1),
+            fill_value=self.token_decoder.bos_token_id,
+            device=content_images.device,
+            dtype=torch.long,
+        )
+        predicted_token_indices = []
+        for _ in range(self.sequence_length):
+            logits_step = self.token_decoder(
+                generated_tokens, multimodal_conditioning_tokens
+            )
+            next_token = torch.argmax(logits_step[:, -1, :], dim=-1, keepdim=True)
+            predicted_token_indices.append(next_token)
+            generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
+
+        predicted_token_indices_tensor = torch.cat(predicted_token_indices, dim=1)
+        logits, soft_token_embeddings, reconstructed_images = (
+            self._decode_with_teacher_forcing(
+                conditioning_tokens=multimodal_conditioning_tokens,
+                target_token_indices=predicted_token_indices_tensor,
+            )
+        )
+
+        return ARAdaptationOutput(
+            multimodal_conditioning_tokens=multimodal_conditioning_tokens,
+            visual_conditioning_tokens=visual_conditioning_tokens,
+            multimodal_aggregated_style_tokens=multimodal_aggregated_style_tokens,
+            visual_aggregated_style_tokens=visual_aggregated_style_tokens,
+            logits=logits,
+            reconstructed_images=reconstructed_images,
+            soft_token_embeddings=soft_token_embeddings,
+            target_token_indices=predicted_token_indices_tensor,
+        )
+
+    def parameter_counts(self) -> Dict[str, int]:
+        """Return parameter counts for the main AR components."""
+        return {
+            "content_encoder": sum(
+                p.numel() for p in self.content_encoder.parameters()
+            ),
+            "style_encoder": sum(p.numel() for p in self.style_encoder.parameters()),
+            "aggregator": sum(p.numel() for p in self.aggregator.parameters()),
+            "token_decoder": sum(p.numel() for p in self.token_decoder.parameters()),
+            "total_trainable": sum(
+                p.numel() for p in self.parameters() if p.requires_grad
+            ),
+        }

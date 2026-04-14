@@ -1,16 +1,11 @@
 import abc
-import random
-import subprocess
-from typing import Dict
 import datetime
-from pathlib import Path
 import random
 import subprocess
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-import pkbar
 import torch
-from torch.utils.tensorboard import SummaryWriter
 
 
 def torch_setup() -> torch.device:
@@ -71,10 +66,6 @@ class SaveLoadModel(torch.nn.Module):
         state_dict = torch.load(path, map_location=device)
         self.load_state_dict(state_dict)
 
-    @abc.abstractmethod
-    def forward(self):
-        pass
-
 
 class TrainingLoop:
     """A little mini Keras"""
@@ -90,6 +81,8 @@ class TrainingLoop:
     test_loader: torch.utils.data.DataLoader  # Set in post_init
 
     def __init__(self, train_args):
+        from torch.utils.tensorboard import SummaryWriter
+
         self.device = torch_setup()
         git_tag = check_git_clean_and_get_commit_hash()
         run_id = f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{git_tag}"
@@ -151,6 +144,8 @@ class TrainingLoop:
     def train(self):
         if len(self.train_loader) == 0:
             raise ValueError("Training loader is empty; cannot start training.")
+        import pkbar
+
         try:
             while not self.must_stop():
                 kbar = pkbar.Kbar(
