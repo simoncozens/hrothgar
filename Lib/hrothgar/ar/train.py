@@ -36,13 +36,15 @@ class ARVisualTrainingLoop(TrainingLoop):
         gtok = GtokModel(GtokConfig())
         gtok.load(train_args.gtok_model_path, device=self.device)
         model = ARModel(config, gtok_model=gtok).to(self.device)
+        if train_args.style_glyph_count < len(train_args.style_characters or []):
+            train_args.style_glyph_count = len(train_args.style_characters or [])
 
         maker = ARPhase1DatasetMaker(
             train_args.dataset_path,
             batch_size=train_args.batch_size,
             image_size=config.image_size,
             style_glyph_count=train_args.style_glyph_count,
-            common_style_codepoints=train_args.common_style_characters,
+            common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
         )
 
@@ -306,7 +308,7 @@ if __name__ == "__main__":
         help="Number of style glyph references N_s (paper default: 8)",
     )
     parser.add_argument(
-        "--common-style-characters",
+        "--style-characters",
         type=_parse_codepoint,
         help=("Optional string of explicit style characters shared across items."),
     )
@@ -371,7 +373,7 @@ if __name__ == "__main__":
         "--model-path",
         type=str,
         help="Path to save the trained model",
-        default="model/ar_visual_model.pth",
+        default="models/ar_visual_model.pth",
     )
     parser.add_argument(
         "--gtok-model-path",
