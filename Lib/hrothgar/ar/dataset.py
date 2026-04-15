@@ -42,7 +42,9 @@ def _sample_style_codepoints(
         raise ValueError(f"style_glyph_count must be positive, got {style_glyph_count}")
 
     available = [
-        cp for cp in font.codepoints if cp != target_char and _has_non_empty_glyph(font, cp)
+        cp
+        for cp in font.codepoints
+        if cp != target_char and _has_non_empty_glyph(font, cp)
     ]
     if not available:
         return [target_char] * style_glyph_count
@@ -52,7 +54,9 @@ def _sample_style_codepoints(
         selected = [
             cp
             for cp in common_style_codepoints
-            if cp != target_char and cp in font.codepoints and _has_non_empty_glyph(font, cp)
+            if cp != target_char
+            and cp in font.codepoints
+            and _has_non_empty_glyph(font, cp)
         ]
 
     if len(selected) >= style_glyph_count:
@@ -138,9 +142,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             # If reference font lacks a usable glyph for this character, fall back
             # to the target font so content conditioning is never blank.
-            if (
-                not reference_font.has_codepoint(char)
-                or not _has_non_empty_glyph(reference_font, char)
+            if not reference_font.has_codepoint(char) or not _has_non_empty_glyph(
+                reference_font, char
             ):
                 reference_font = font
 
