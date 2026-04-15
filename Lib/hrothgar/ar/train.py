@@ -249,6 +249,10 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_style_images,
                 target_images=val_target_images,
             )
+            autoregression_output = self.model.generate(
+                content_images=val_content_images,
+                style_reference_images=val_style_images,
+            )
 
         preview_count = min(8, val_target_images.shape[0])
         first_style = val_style_images[:preview_count, 0]
@@ -258,6 +262,7 @@ class ARVisualTrainingLoop(TrainingLoop):
                 first_style,
                 val_target_images[:preview_count],
                 val_output.reconstructed_images[:preview_count],
+                autoregression_output.reconstructed_images[:preview_count],
             ],
             dim=0,
         )
