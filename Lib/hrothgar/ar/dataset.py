@@ -16,12 +16,29 @@ from hrothgar.dataset import DatasetMaker
 
 def _has_non_empty_glyph(font, codepoint: int) -> bool:
     """Return True if the font has a non-empty outline for codepoint."""
+    if not hasattr(font, "hb_face"):
+        # Test doubles and lightweight mocks may not expose HarfBuzz handles.
+        return True
     hb_font = hb.Font(font.hb_face)  # type: ignore
     gid = hb_font.get_nominal_glyph(codepoint)
     extents = hb_font.get_glyph_extents(gid)
     if extents is None:
         return False
-    return all(x for x in extents)
+    return not all(x == 0 for x in extents)
+
+
+def _font_has_codepoint(font, codepoint: int) -> bool:
+    if hasattr(font, "has_codepoint"):
+        return bool(font.has_codepoint(codepoint))
+    return codepoint in getattr(font, "codepoints", set())
+
+
+def _is_blank_rendering(rendered) -> bool:
+    max_val = float(rendered.max())
+    min_val = float(rendered.min())
+    # Real blank glyph rasters are typically all-white (1.0) and occasionally
+    # all-black (0.0) in this pipeline.
+    return max_val == min_val and (max_val == 1.0 or max_val == 0.0)
 
 
 def _sample_style_codepoints(
@@ -58,6 +75,18 @@ def _sample_style_codepoints(
             and cp in font.codepoints
             and _has_non_empty_glyph(font, cp)
         ]
+
+    if common_style_codepoints is not None:
+        # If the caller pinned style chars, never leak arbitrary codepoints in.
+        if len(selected) >= style_glyph_count:
+            return selected[:style_glyph_count]
+        if selected:
+            selected.extend(
+                random.choices(selected, k=style_glyph_count - len(selected))
+            )
+        else:
+            selected.extend([target_char] * style_glyph_count)
+        return selected
 
     if len(selected) >= style_glyph_count:
         return selected[:style_glyph_count]
@@ -97,6 +126,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
         common_style_codepoints: Optional[Sequence[int]] = None,
     ) -> None:
         target_codepoint_set = set(target_codepoints) if target_codepoints else None
+        if common_style_codepoints and style_glyph_count < len(common_style_codepoints):
+            style_glyph_count = len(common_style_codepoints)
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
@@ -142,14 +173,15 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             # If reference font lacks a usable glyph for this character, fall back
             # to the target font so content conditioning is never blank.
-            if not reference_font.has_codepoint(char) or not _has_non_empty_glyph(
+            if not _font_has_codepoint(
                 reference_font, char
-            ):
+            ) or not _has_non_empty_glyph(reference_font, char):
                 reference_font = font
 
-            content_renderings.append(
-                torch.tensor(reference_font.render(char, size=self.image_size))
-            )
+            content_render = reference_font.render(char, size=self.image_size)
+            if _is_blank_rendering(content_render):
+                content_render = font.render(char, size=self.image_size)
+            content_renderings.append(torch.tensor(content_render))
 
             sampled_style_chars = _sample_style_codepoints(
                 font=font,
@@ -157,15 +189,18 @@ class ARPhase1DatasetMaker(DatasetMaker):
                 style_glyph_count=self.style_glyph_count,
                 common_style_codepoints=self.common_style_codepoints,
             )
-            style_chars.append(sampled_style_chars)
-            style_renderings.append(
-                torch.stack(
-                    [
-                        torch.tensor(font.render(cp, size=self.image_size))
-                        for cp in sampled_style_chars
-                    ]
-                )
-            )
+            rendered_styles = []
+            sanitized_style_chars = []
+            for cp in sampled_style_chars:
+                style_render = font.render(cp, size=self.image_size)
+                if _is_blank_rendering(style_render):
+                    cp = char
+                    style_render = font.render(cp, size=self.image_size)
+                sanitized_style_chars.append(cp)
+                rendered_styles.append(torch.tensor(style_render))
+
+            style_chars.append(sanitized_style_chars)
+            style_renderings.append(torch.stack(rendered_styles))
             descriptions.append(font.description_with_tags())
 
         return {
