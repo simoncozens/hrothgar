@@ -8,6 +8,22 @@ from typing import Dict, Optional, Tuple
 import torch
 
 
+def check_hbview_exists():
+    """Check if the hbview command-line tool is available."""
+    try:
+        subprocess.run(
+            ["hb-view", "--help"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise RuntimeError(
+            "The hb-view command-line tool is not available. Please install it from apt-get install libharfbuzz-bin"
+        )
+
+
 def torch_setup() -> torch.device:
     """Set random seeds and configure torch for reproducibility and performance."""
     random.seed(1234)

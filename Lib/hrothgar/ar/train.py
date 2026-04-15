@@ -1,6 +1,7 @@
 import itertools
 import os
 from contextlib import nullcontext
+from typing import List
 
 import torch
 import torchvision
@@ -13,6 +14,10 @@ from hrothgar.ar.model import ARModel, ARModelConfig
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokModel, GtokConfig
 from hrothgar.utils import TrainingLoop
+
+
+def _parse_codepoint(value: str) -> List[int]:
+    return [ord(c) for c in value]
 
 
 class ARVisualTrainingLoop(TrainingLoop):
@@ -37,6 +42,8 @@ class ARVisualTrainingLoop(TrainingLoop):
             batch_size=train_args.batch_size,
             image_size=config.image_size,
             style_glyph_count=train_args.style_glyph_count,
+            common_style_codepoints=train_args.common_style_characters,
+            target_codepoints=train_args.target_characters,
         )
 
         self.optimizer = torch.optim.AdamW(
@@ -297,6 +304,19 @@ if __name__ == "__main__":
         type=int,
         default=8,
         help="Number of style glyph references N_s (paper default: 8)",
+    )
+    parser.add_argument(
+        "--common-style-characters",
+        type=_parse_codepoint,
+        help=("Optional string of explicit style characters shared across items."),
+    )
+    parser.add_argument(
+        "--target-characters",
+        type=_parse_codepoint,
+        help=(
+            "Optional string of target characters to emit in train/test datasets. "
+            "When set, fonts are filtered to contain them and emitted chars are restricted to this set."
+        ),
     )
     parser.add_argument(
         "--target-steps",
