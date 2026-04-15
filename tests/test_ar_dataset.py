@@ -69,3 +69,18 @@ def test_collate_ar_phase1_common_style_codepoints() -> None:
     )
     out = maker.collate_fn(batch)
     assert out["style_chars"].tolist() == [[66, 67, 68]]
+
+
+def test_collate_ar_phase1_common_style_codepoints_do_not_leak() -> None:
+    style_font = DummyFont({65, 66, 67, 68, 69, 0x0312})
+    batch = [{"char": 65, "font": style_font}]
+
+    maker = ARPhase1DatasetMaker(
+        repo_url="tests/dummy_repo",
+        batch_size=1,
+        style_glyph_count=5,
+        common_style_codepoints=[66, 67],
+    )
+    out = maker.collate_fn(batch)
+    sampled = out["style_chars"].tolist()[0]
+    assert all(cp in {66, 67} for cp in sampled)

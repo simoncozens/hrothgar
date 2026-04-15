@@ -250,10 +250,10 @@ def render(
     new_img2 = np.asarray(new_img2, dtype=np.float32)
     # (H, W) -> (3, H, W)
     new_img2 = np.stack([new_img2] * 3, axis=0)
-    if new_img2.max() == new_img2.min():
-        hb_font = hb.Font(hb_face)  # type: ignore
-        gid = hb_font.get_nominal_glyph(ord(text))
-        extents = hb_font.get_glyph_extents(gid)
-        print(f"Glyph for {text} in font {font} is blank after rendering")
-        print(f"Glyph extents: {extents}")
+    # if new_img2.max() == new_img2.min():
+    #     hb_font = hb.Font(hb_face)  # type: ignore
+    #     gid = hb_font.get_nominal_glyph(ord(text))
+    #     extents = hb_font.get_glyph_extents(gid)
+    #     print(f"Glyph for {text} in font {font} is blank after rendering")
+    #     print(f"Glyph extents: {extents}")
     return new_img2 / 255.0
