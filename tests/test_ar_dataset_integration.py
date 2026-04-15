@@ -89,3 +89,23 @@ def test_model_inputs_are_not_blank() -> None:
 
     style_renderings = batch["style_renderings"].reshape(-1, 3, 128, 128)
     assert _all_images_have_visible_content(style_renderings)
+
+
+def test_target_codepoints_restrict_emitted_chars() -> None:
+    """When target_codepoints is set, train/test chars are restricted to that set."""
+    target_codepoints = [0x41]  # Latin capital A
+    maker = ARPhase1DatasetMaker(
+        REPOSITORY_PATH,
+        batch_size=8,
+        target_codepoints=target_codepoints,
+    )
+
+    train_set = maker.train_set()
+    test_set = maker.test_set()
+    assert len(train_set) > 0
+    assert len(test_set) > 0
+
+    emitted_train_chars = {char for _font, char in train_set.order}
+    emitted_test_chars = {char for _font, char in test_set.order}
+    assert emitted_train_chars <= set(target_codepoints)
+    assert emitted_test_chars <= set(target_codepoints)

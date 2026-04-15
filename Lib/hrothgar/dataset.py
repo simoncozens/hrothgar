@@ -1,4 +1,4 @@
-from typing import Optional, Set
+from typing import Callable, Optional, Set
 
 import uharfbuzz as hb
 from glyphsets import GlyphSet
@@ -8,7 +8,9 @@ from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.googlefonts import GoogleFonts
 
-LATIN_CORE = GlyphSet("GF_Latin_Core").get_characters()
+LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
+# Skip combining characters
+LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
 
 
 class DatasetMaker:
@@ -19,10 +21,22 @@ class DatasetMaker:
         repo_url: str,
         batch_size: int,
         having: Optional[Set[int]] = None,
+        target_codepoints: Optional[Set[int]] = None,
         canary_size: Optional[int] = None,
         image_size: int = 128,
     ):
-        self.googlefonts = GoogleFonts(repo_url, having=having)
+        self.target_codepoints = set(target_codepoints) if target_codepoints else None
+        having_filter: Optional[Set[int]] = None
+        if having is not None:
+            having_filter = set(having)
+        if self.target_codepoints is not None:
+            having_filter = (
+                set(self.target_codepoints)
+                if having_filter is None
+                else having_filter | self.target_codepoints
+            )
+
+        self.googlefonts = GoogleFonts(repo_url, having=having_filter)
         self.batch_size = batch_size
         self.image_size = image_size
 
@@ -39,10 +53,22 @@ class DatasetMaker:
         print("Test fonts:", len(self.test_fonts))
 
     def train_set(self):
-        return Dataset(self.train_fonts, self.test_latincore_chars, test=False)
+        return Dataset(
+            self.train_fonts, codepoint_filter_fn=self.train_codepoint_filter
+        )
 
     def test_set(self):
-        return Dataset(self.test_fonts, self.test_latincore_chars, test=True)
+        return Dataset(self.test_fonts, codepoint_filter_fn=self.test_codepoint_filter)
+
+    def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        if self.target_codepoints is not None:
+            return set(font_codepoints) & self.target_codepoints
+        return set(font_codepoints) - set(self.test_latincore_chars)
+
+    def test_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        if self.target_codepoints is not None:
+            return set(font_codepoints) & self.target_codepoints
+        return set(font_codepoints) & set(self.test_latincore_chars)
 
     def train_loader(self):
         return DataLoader(
@@ -50,7 +76,7 @@ class DatasetMaker:
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            collate_fn=lambda batch: self.collate_fn(batch),
+            collate_fn=self.collate_fn,
         )
 
     def test_loader(self):
@@ -59,7 +85,7 @@ class DatasetMaker:
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
-            collate_fn=lambda batch: self.collate_fn(batch),
+            collate_fn=self.collate_fn,
         )
 
     def collate_fn(self, batch):
@@ -67,16 +93,12 @@ class DatasetMaker:
 
 
 class Dataset(TorchDataset):
-    def __init__(self, fonts, test_latincore_chars, test=False):
+    def __init__(self, fonts, codepoint_filter_fn: Callable[[Set[int]], Set[int]]):
         self.fonts = fonts
-        self.test_latincore_chars = test_latincore_chars
-        self.is_test = test
+        self.codepoint_filter_fn = codepoint_filter_fn
         self.order = []
         for font in self.fonts:
-            if self.is_test:
-                chars = set(font.codepoints) & set(self.test_latincore_chars)
-            else:
-                chars = set(font.codepoints) - set(self.test_latincore_chars)
+            chars = self.codepoint_filter_fn(set(font.codepoints))
             for char in chars:
                 # Skip empty glyphs; they can destabilize training targets.
                 hb_font = hb.Font(font.hb_face)  # type: ignore

@@ -10,7 +10,18 @@ import random
 from typing import Optional, Sequence, Set
 
 import torch
+import uharfbuzz as hb
 from hrothgar.dataset import DatasetMaker
+
+
+def _has_non_empty_glyph(font, codepoint: int) -> bool:
+    """Return True if the font has a non-empty outline for codepoint."""
+    hb_font = hb.Font(font.hb_face)  # type: ignore
+    gid = hb_font.get_nominal_glyph(codepoint)
+    extents = hb_font.get_glyph_extents(gid)
+    if extents is None:
+        return False
+    return all(x for x in extents)
 
 
 def _sample_style_codepoints(
@@ -30,7 +41,9 @@ def _sample_style_codepoints(
     if style_glyph_count <= 0:
         raise ValueError(f"style_glyph_count must be positive, got {style_glyph_count}")
 
-    available = [cp for cp in font.codepoints if cp != target_char]
+    available = [
+        cp for cp in font.codepoints if cp != target_char and _has_non_empty_glyph(font, cp)
+    ]
     if not available:
         return [target_char] * style_glyph_count
 
@@ -39,7 +52,7 @@ def _sample_style_codepoints(
         selected = [
             cp
             for cp in common_style_codepoints
-            if cp != target_char and cp in font.codepoints
+            if cp != target_char and cp in font.codepoints and _has_non_empty_glyph(font, cp)
         ]
 
     if len(selected) >= style_glyph_count:
@@ -73,15 +86,18 @@ class ARPhase1DatasetMaker(DatasetMaker):
         repo_url: str,
         batch_size: int,
         having: Optional[Set[int]] = None,
+        target_codepoints: Optional[Sequence[int]] = None,
         canary_size: Optional[int] = None,
         image_size: int = 128,
         style_glyph_count: int = 8,
         common_style_codepoints: Optional[Sequence[int]] = None,
     ) -> None:
+        target_codepoint_set = set(target_codepoints) if target_codepoints else None
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
             having=having,
+            target_codepoints=target_codepoint_set,
             canary_size=canary_size,
             image_size=image_size,
         )
@@ -119,6 +135,14 @@ class ARPhase1DatasetMaker(DatasetMaker):
             font = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
+
+            # If reference font lacks a usable glyph for this character, fall back
+            # to the target font so content conditioning is never blank.
+            if (
+                not reference_font.has_codepoint(char)
+                or not _has_non_empty_glyph(reference_font, char)
+            ):
+                reference_font = font
 
             content_renderings.append(
                 torch.tensor(reference_font.render(char, size=self.image_size))

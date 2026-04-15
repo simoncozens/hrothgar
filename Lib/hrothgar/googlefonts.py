@@ -9,6 +9,10 @@ import uharfbuzz as hb
 from gftools.util.google_fonts import Metadata
 from PIL import Image, ImageChops
 
+from hrothgar.utils import check_hbview_exists
+
+check_hbview_exists()
+
 
 class GoogleFonts:
     """A class for interacting with the Google Fonts repository.
@@ -234,6 +238,7 @@ def render(
         # and 0.5 upem worth of descent below the baseline.
         scale = size / (1.5 * upem)
         if int(new_img.width * scale) == 0 or int(new_img.height * scale) == 0:
+            print(f"Failed to render glyph for {text} in font {font}")
             # Return zeros
             return np.zeros((3, size, size), dtype=np.float32)
         new_img = new_img.resize(
@@ -245,4 +250,10 @@ def render(
     new_img2 = np.asarray(new_img2, dtype=np.float32)
     # (H, W) -> (3, H, W)
     new_img2 = np.stack([new_img2] * 3, axis=0)
+    if new_img2.max() == new_img2.min():
+        hb_font = hb.Font(hb_face)  # type: ignore
+        gid = hb_font.get_nominal_glyph(ord(text))
+        extents = hb_font.get_glyph_extents(gid)
+        print(f"Glyph for {text} in font {font} is blank after rendering")
+        print(f"Glyph extents: {extents}")
     return new_img2 / 255.0
