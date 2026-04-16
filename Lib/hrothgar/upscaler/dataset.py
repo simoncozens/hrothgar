@@ -44,9 +44,7 @@ class UpscalerDatasetMaker(DatasetMaker):
         self.upscale_factor = high_res_size / low_res_size
 
         codepoints = (
-            set(target_codepoints)
-            if target_codepoints is not None
-            else set(LATIN_CORE)
+            set(target_codepoints) if target_codepoints is not None else set(LATIN_CORE)
         )
 
         super().__init__(

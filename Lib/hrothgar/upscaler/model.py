@@ -89,10 +89,15 @@ class UpscalerModel(SaveLoadModel):
         self.input_projection = nn.Conv2d(3, config.base_channels, 3, 1, 1)
 
         self.residual_body = nn.Sequential(
-            *[ResidualBlock(config.base_channels) for _ in range(config.num_residual_blocks)]
+            *[
+                ResidualBlock(config.base_channels)
+                for _ in range(config.num_residual_blocks)
+            ]
         )
 
-        self.body_projection = nn.Conv2d(config.base_channels, config.base_channels, 3, 1, 1)
+        self.body_projection = nn.Conv2d(
+            config.base_channels, config.base_channels, 3, 1, 1
+        )
 
         num_upsample_stages = config.upscale_factor.bit_length() - 1
         if 2**num_upsample_stages != config.upscale_factor:
@@ -101,7 +106,10 @@ class UpscalerModel(SaveLoadModel):
                 f"(got {config.upscale_factor})"
             )
         self.upsampler = nn.Sequential(
-            *[PixelShuffleUpsample(config.base_channels) for _ in range(num_upsample_stages)]
+            *[
+                PixelShuffleUpsample(config.base_channels)
+                for _ in range(num_upsample_stages)
+            ]
         )
         self.output_head = nn.Conv2d(config.base_channels, 3, 3, 1, 1)
 
@@ -130,10 +138,14 @@ class UpscalerModel(SaveLoadModel):
         self.gtok_feature_adapter = nn.Sequential(
             nn.Conv2d(gtok_feature_dim, self.config.base_channels, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(self.config.base_channels, self.config.base_channels, kernel_size=1),
+            nn.Conv2d(
+                self.config.base_channels, self.config.base_channels, kernel_size=1
+            ),
         )
 
-    def _extract_gtok_feature_map(self, low_res: torch.Tensor) -> Optional[torch.Tensor]:
+    def _extract_gtok_feature_map(
+        self, low_res: torch.Tensor
+    ) -> Optional[torch.Tensor]:
         if self.gtok is None:
             return None
 
