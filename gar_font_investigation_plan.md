@@ -220,7 +220,25 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Can we batch NFA across fonts efficiently?
   - Profile: total time to process 100 fonts × 10 missing glyphs each
 
-### Phase 5: Vectorization Integration (Weeks 10-14)
+### Phase 5: Glyph Super-Resolution (Weeks 10-12)
+
+**Goal:** Upscale generated glyph rasters before vectorization while preserving edge fidelity.
+
+- [ ] **Prototype SR baseline**
+  - Train a supervised 2x/4x upscaler on Latin core glyph pairs from Google Fonts
+  - Use aligned pairs: render high-resolution glyphs, then downsample for low-resolution input
+  - Baseline loss: BCE/L1 reconstruction + edge-aware term (Sobel/Canny-weighted)
+
+- [ ] **Glyph-aware conditioning experiments**
+  - Condition the upscaler on frozen G-Tok encoder features (CNN only vs. CNN+ViT)
+  - Compare against bicubic and non-conditioned SR baseline
+  - Evaluate terminal sharpness, stroke continuity, and curve smoothness on held-out fonts
+
+- [ ] **Resolution handoff study**
+  - Determine whether 128->256 or 128->512 upscaling is the best quality/compute trade-off
+  - Quantify downstream impact on vectorizer outputs (path smoothness, corner stability)
+
+### Phase 6: Vectorization Integration (Weeks 12-14)
 
 **Goal:** Connect raster glyph generation to vector output.
 
@@ -239,7 +257,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Determine minimum resolution needed for acceptable vector output
   - If higher resolution is needed, revisit G-Tok token count
 
-### Phase 6: Evaluation & Scaling (Weeks 12-16)
+### Phase 7: Evaluation & Scaling (Weeks 14-16)
 
 **Goal:** End-to-end evaluation on realistic catalogue scenarios.
 
@@ -266,7 +284,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 |---|---|---|---|
 | **CNN architecture mismatch** — LlamaGen CNN doesn't match GAR-Font's intent | Medium | Medium | LlamaGen is explicitly cited as the baseline. Parameter counts should match. If not, adjust channel counts. |
 | **Non-Chinese generalization** — model trained on Chinese may not transfer to Latin/etc. | Low | High | We're training from scratch on our multi-script data. The architecture is script-agnostic. |
-| **Resolution bottleneck** — 64×64 too low for vectorization | High | High | Addressed in Phase 5. Fallback: train at 128×128 from the start with 256 tokens. |
+| **Resolution bottleneck** — 64×64 too low for vectorization | High | High | Addressed in Phase 5 SR and Phase 6 vectorization handoff. Fallback: train at 128×128 from the start with 256 tokens. |
 | **Training cost** — 314M Transformer + 1M iterations is expensive | Medium | Medium | Start with small dataset (400 fonts). Single A100 should suffice for the tokenizer; need 2-4 for the generator. |
 | **Vectorization quality** — separate pipeline introduces artifacts | Medium | Medium | Your existing vectorization work should handle this. Joint training is the stretch goal. |
 

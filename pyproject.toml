@@ -17,7 +17,8 @@ dependencies = [
     "scikit-learn",
     "pkbar",
     "torchmetrics",
-    "tensorboard",
+    "tensorboard", 
+    "jaxtyping"
 ]
 # Also pydiffvg but that's not on pypi!
 
