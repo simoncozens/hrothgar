@@ -117,7 +117,10 @@ class RelativePolarCommand(CommandRepresentation):
 
                 if has_in and not has_out:
                     commands.append(
-                        cls("N_POLAR_IN", [r, cos_phi, sin_phi, in_len, in_cos_phi, in_sin_phi])
+                        cls(
+                            "N_POLAR_IN",
+                            [r, cos_phi, sin_phi, in_len, in_cos_phi, in_sin_phi],
+                        )
                     )
                 elif has_out and not has_in:
                     commands.append(
@@ -324,7 +327,9 @@ class RelativePolarCommand(CommandRepresentation):
 
                 # Handle directions expressed in the local (f_hat, r_hat) frame
                 def _dir_from_cos_sin(
-                    length: torch.Tensor, cos_angle: torch.Tensor, sin_angle: torch.Tensor
+                    length: torch.Tensor,
+                    cos_angle: torch.Tensor,
+                    sin_angle: torch.Tensor,
                 ) -> torch.Tensor:
                     return length * (cos_angle * f_hat + sin_angle * r_hat)
 
@@ -357,7 +362,9 @@ class RelativePolarCommand(CommandRepresentation):
                 pos_abs = current_pos
 
                 def _dir_from_cos_sin_in(
-                    length: torch.Tensor, cos_angle: torch.Tensor, sin_angle: torch.Tensor
+                    length: torch.Tensor,
+                    cos_angle: torch.Tensor,
+                    sin_angle: torch.Tensor,
                 ) -> torch.Tensor:
                     return length * (cos_angle * f_hat + sin_angle * r_hat)
 
@@ -381,7 +388,9 @@ class RelativePolarCommand(CommandRepresentation):
                 pos_abs = current_pos
 
                 def _dir_from_cos_sin_out(
-                    length: torch.Tensor, cos_angle: torch.Tensor, sin_angle: torch.Tensor
+                    length: torch.Tensor,
+                    cos_angle: torch.Tensor,
+                    sin_angle: torch.Tensor,
                 ) -> torch.Tensor:
                     return length * (cos_angle * f_hat + sin_angle * r_hat)
 
