@@ -130,6 +130,56 @@ class GoogleFont:
         return char in self.codepoints
 
 
+class StandaloneFont:
+    """A font loaded from a local file path without Google Fonts repository structure.
+
+    This is used for NFA (Novel Font Adaptation) when adapting to fonts that are
+    not part of the Google Fonts repository, or when the repo is unavailable.
+
+    It exposes the same interface as ``GoogleFont`` (``codepoints``, ``render``,
+    ``reference_font``, ``has_codepoint``, ``hb_face``) so it can be used
+    as a drop-in replacement in dataset collation code.
+    """
+
+    def __init__(
+        self,
+        path: Union[str, Path],
+        reference: Optional["StandaloneFont | GoogleFont"] = None,
+    ) -> None:
+        self.path = Path(path)
+        self.hb_face = hb.Face(hb.Blob.from_file_path(str(self.path)))
+        self.family = self.path.stem
+        self._reference = reference
+
+    @cached_property
+    def codepoints(self) -> Set[int]:
+        """Unicode codepoints present in this font."""
+        return set(self.hb_face.unicodes)
+
+    def render(self, char: int, size: int = 64) -> np.ndarray:
+        """Render a single glyph as a (3, size, size) float32 array."""
+        try:
+            return render(self.path, chr(char), size, self.hb_face, do_trim=False)
+        except Exception:
+            return np.ones((3, size, size), dtype=np.float32)
+
+    def reference_font(self) -> Optional["StandaloneFont | GoogleFont"]:
+        """Return the reference (content) font, or None if not set."""
+        return self._reference
+
+    def has_codepoint(self, char: int) -> bool:
+        """Returns whether this font has a glyph for the given character."""
+        return char in self.codepoints
+
+    def description(self) -> str:
+        """Empty description — no metadata available for standalone fonts."""
+        return ""
+
+    def tags(self) -> Dict[str, float]:
+        """Empty tags — no metadata available for standalone fonts."""
+        return {}
+
+
 def centile_to_text(score: int) -> str:
     if score < 20:
         return "not at all"
