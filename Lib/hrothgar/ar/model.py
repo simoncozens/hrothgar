@@ -30,6 +30,7 @@ from hrothgar.gtok.model import (
     create_2d_sinusoidal_position_embeddings,
 )
 from hrothgar.utils import SaveLoadModel
+from tqdm import tqdm
 
 
 @dataclass
@@ -898,7 +899,7 @@ class ARModel(SaveLoadModel):
         )
 
         predicted_token_indices = []
-        for _ in range(self.sequence_length):
+        for _ in tqdm(range(self.sequence_length)):
             logits = self.token_decoder(generated_tokens, conditioning_tokens)
             next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
             predicted_token_indices.append(next_token)
