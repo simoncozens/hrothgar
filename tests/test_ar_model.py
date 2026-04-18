@@ -4,7 +4,13 @@ import torch
 import torch.nn as nn
 import pytest
 
-from hrothgar.ar.model import ARModel, ARModelConfig, ContentStyleAggregator, LoRAConfig, LoRALinear
+from hrothgar.ar.model import (
+    ARModel,
+    ARModelConfig,
+    ContentStyleAggregator,
+    LoRAConfig,
+    LoRALinear,
+)
 from hrothgar.gtok.model import GtokConfig, GtokModel
 
 
@@ -218,6 +224,10 @@ def test_lora_linear_base_frozen() -> None:
     assert all(not p.requires_grad for p in lora.base.parameters())
     assert lora.lora_A.requires_grad
     assert lora.lora_B.requires_grad
+    assert lora.lora_A.device == base.weight.device
+    assert lora.lora_B.device == base.weight.device
+    assert lora.lora_A.dtype == base.weight.dtype
+    assert lora.lora_B.dtype == base.weight.dtype
 
 
 def test_lora_linear_modifies_output_after_b_init() -> None:
@@ -251,9 +261,9 @@ def test_inject_lora_trainable_param_count_is_small() -> None:
     model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
     trainable = sum(p.numel() for p in model.trainable_parameters())
     # With rank=4, LoRA should be < 5% of total parameters.
-    assert trainable < 0.05 * total_before, (
-        f"LoRA params ({trainable:,}) unexpectedly large vs total ({total_before:,})"
-    )
+    assert (
+        trainable < 0.05 * total_before
+    ), f"LoRA params ({trainable:,}) unexpectedly large vs total ({total_before:,})"
 
 
 def test_enable_nfa_mode_idempotent_raises() -> None:
@@ -313,4 +323,3 @@ def test_lora_state_dict_roundtrip() -> None:
         v1 = model.token_decoder.state_dict()[key]
         v2 = model2.token_decoder.state_dict()[key]
         assert torch.allclose(v1, v2), f"Mismatch in {key} after roundtrip"
-
