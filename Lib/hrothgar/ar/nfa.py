@@ -128,7 +128,9 @@ class NFADatasetMaker:
         train_cps, val_cps = train_test_split(
             candidate_codepoints, test_size=0.2, random_state=42
         )
-        print(f"NFA font '{font.family}': {len(train_cps)} train / {len(val_cps)} val codepoints")
+        print(
+            f"NFA font '{font.family}': {len(train_cps)} train / {len(val_cps)} val codepoints"
+        )
         self.train_set = NFAGlyphDataset(font, train_cps)
         self.val_set = NFAGlyphDataset(font, val_cps)
 
@@ -157,9 +159,9 @@ class NFADatasetMaker:
             char = item["char"]
             reference_font = font.reference_font() or font
 
-            if not _font_has_codepoint(reference_font, char) or not _has_non_empty_glyph(
+            if not _font_has_codepoint(
                 reference_font, char
-            ):
+            ) or not _has_non_empty_glyph(reference_font, char):
                 reference_font = font
 
             content_render = reference_font.render(char, size=self.image_size)
@@ -184,8 +186,12 @@ class NFADatasetMaker:
                 rendered_styles.append(torch.tensor(style_render))
 
             style_renderings.append(torch.stack(rendered_styles))
-            style_chars_list.append(torch.tensor(sanitized_style_chars, dtype=torch.long))
-            descriptions.append(font.description() if hasattr(font, "description") else "")
+            style_chars_list.append(
+                torch.tensor(sanitized_style_chars, dtype=torch.long)
+            )
+            descriptions.append(
+                font.description() if hasattr(font, "description") else ""
+            )
 
         return {
             "target_rendering": target_renderings,
@@ -232,13 +238,9 @@ class ARNFATrainingLoop(TrainingLoop):
         config = ARModelConfig(image_size=train_args.image_size)
 
         if not os.path.exists(train_args.gtok_model_path):
-            raise ValueError(
-                f"G-Tok model not found at {train_args.gtok_model_path}"
-            )
+            raise ValueError(f"G-Tok model not found at {train_args.gtok_model_path}")
         if not os.path.exists(train_args.base_model_path):
-            raise ValueError(
-                f"Base AR model not found at {train_args.base_model_path}"
-            )
+            raise ValueError(f"Base AR model not found at {train_args.base_model_path}")
 
         gtok = GtokModel(GtokConfig())
         gtok.load(train_args.gtok_model_path, device=self.device)
@@ -502,8 +504,10 @@ def _load_font(
             gf = GoogleFonts(dataset_path)
             reference = gf.families_by_name.get("Noto Sans")
         except Exception as exc:
-            print(f"Warning: could not load reference font from repo ({exc}); "
-                  "content glyphs will fall back to the target font itself.")
+            print(
+                f"Warning: could not load reference font from repo ({exc}); "
+                "content glyphs will fall back to the target font itself."
+            )
 
     return StandaloneFont(font_path, reference=reference)
 
