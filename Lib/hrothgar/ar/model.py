@@ -104,6 +104,78 @@ class ARAdaptationOutput:
     target_token_indices: Optional[torch.Tensor]
 
 
+@dataclass
+class LoRAConfig:
+    """Configuration for LoRA adaptation layers in the AR decoder.
+
+    Attributes:
+        rank: Rank of the low-rank decomposition. Smaller ranks use less memory;
+            typical values are 4–64.
+        alpha: Scaling factor for the LoRA output. The effective scale applied
+            is ``alpha / rank``, keeping learning dynamics stable across ranks.
+    """
+
+    rank: int = 16
+    alpha: float = 16.0
+
+    def __post_init__(self) -> None:
+        if self.rank <= 0:
+            raise ValueError(f"LoRA rank must be positive, got {self.rank}")
+        if self.alpha <= 0.0:
+            raise ValueError(f"LoRA alpha must be positive, got {self.alpha}")
+
+
+class LoRALinear(nn.Module):
+    """LoRA-adapted linear layer.
+
+    Wraps an existing ``nn.Linear`` with low-rank adaptation matrices A ∈
+    R^{rank×in_features} and B ∈ R^{out_features×rank}.  The forward pass
+    computes ``base(x) + (alpha/rank) * x @ A.T @ B.T``.
+
+    The base weights are frozen; only A and B are trainable.  B is zero-
+    initialised so the adapter has no effect at the start of fine-tuning.
+    """
+
+    def __init__(self, base_linear: nn.Linear, rank: int, alpha: float) -> None:
+        super().__init__()
+        self.base = base_linear
+        for param in self.base.parameters():
+            param.requires_grad = False
+
+        self.lora_A = nn.Parameter(torch.empty(rank, base_linear.in_features))
+        self.lora_B = nn.Parameter(torch.zeros(base_linear.out_features, rank))
+        self.scaling = alpha / rank
+
+        nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
+
+    @property
+    def in_features(self) -> int:
+        """Input feature dimension, delegated to the base layer."""
+        return self.base.in_features
+
+    @property
+    def out_features(self) -> int:
+        """Output feature dimension, delegated to the base layer."""
+        return self.base.out_features
+
+    @property
+    def weight(self) -> torch.Tensor:
+        """Merged weight matrix, required by nn.MultiheadAttention's out_proj access pattern.
+
+        Returns ``base.weight + (lora_B @ lora_A) * scaling``.  Gradients flow
+        only through the LoRA matrices because base.weight is frozen.
+        """
+        return self.base.weight + (self.lora_B @ self.lora_A) * self.scaling
+
+    @property
+    def bias(self) -> Optional[torch.Tensor]:
+        """Bias delegated to the base layer (may be None)."""
+        return self.base.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.base(x) + (x @ self.lora_A.T @ self.lora_B.T) * self.scaling
+
+
 class ContentStyleAttentionLayer(nn.Module):
     """FsFont-style cross-attention layer for content-style fusion.
 
@@ -289,6 +361,7 @@ class AutoregressiveTokenDecoder(nn.Module):
         self.final_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
         self.output_projection = nn.Linear(hidden_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
+        self._lora_injected: bool = False
 
     def _causal_mask(self, sequence_length: int, device: torch.device) -> torch.Tensor:
         mask = torch.zeros(sequence_length, sequence_length, device=device)
@@ -348,6 +421,57 @@ class AutoregressiveTokenDecoder(nn.Module):
 
         decoder_tokens = self.final_norm(decoder_tokens)
         return self.output_projection(decoder_tokens)
+
+    def inject_lora(self, config: LoRAConfig) -> None:
+        """Inject LoRA adaptation into the decoder's linear layers.
+
+        Replaces the MLP projections and attention output projections in every
+        decoder layer, plus the final output projection, with ``LoRALinear``
+        wrappers.  The base weights of each replaced layer are frozen; only
+        the new LoRA matrices are trainable.
+
+        May only be called once per decoder instance.
+        """
+        if self._lora_injected:
+            raise RuntimeError(
+                "LoRA has already been injected into this decoder.  "
+                "Create a fresh model before injecting again."
+            )
+        for layer in self.layers:
+            # MLP up/down projections.
+            layer.mlp[0] = LoRALinear(layer.mlp[0], config.rank, config.alpha)
+            layer.mlp[3] = LoRALinear(layer.mlp[3], config.rank, config.alpha)
+            # Attention output projections (nn.MultiheadAttention exposes out_proj as
+            # a plain nn.Linear, which is the natural target for output-side LoRA).
+            layer.self_attention.out_proj = LoRALinear(
+                layer.self_attention.out_proj, config.rank, config.alpha
+            )
+            layer.cross_attention.out_proj = LoRALinear(
+                layer.cross_attention.out_proj, config.rank, config.alpha
+            )
+        self.output_projection = LoRALinear(
+            self.output_projection, config.rank, config.alpha
+        )
+        self._lora_injected = True
+
+    def get_lora_state_dict(self) -> Dict[str, torch.Tensor]:
+        """Return a state dict containing only the LoRA parameters.
+
+        Useful for saving a compact per-font adaptation checkpoint.
+        """
+        return {k: v for k, v in self.state_dict().items() if "lora_" in k}
+
+    def load_lora_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> None:
+        """Load LoRA parameters from a previously saved adaptation checkpoint.
+
+        The decoder must already have LoRA injected before calling this.
+        """
+        if not self._lora_injected:
+            raise RuntimeError(
+                "LoRA must be injected before loading a LoRA state dict.  "
+                "Call inject_lora() first."
+            )
+        self.load_state_dict(state_dict, strict=False)
 
 
 class ARModel(SaveLoadModel):
@@ -426,6 +550,8 @@ class ARModel(SaveLoadModel):
         if config.freeze_gtok:
             self.freeze_gtok()
 
+        self._nfa_mode: bool = False
+
     def freeze_gtok(self) -> None:
         """Freeze G-Tok so the AR stage trains only its own modules."""
         self.gtok.eval()
@@ -454,6 +580,43 @@ class ARModel(SaveLoadModel):
         """Unfreeze visual style encoder and aggregator."""
         self._set_module_trainable(self.style_encoder, trainable=True)
         self._set_module_trainable(self.aggregator, trainable=True)
+
+    def enable_nfa_mode(self, lora_config: LoRAConfig) -> None:
+        """Switch to Novel Font Adaptation mode.
+
+        Freezes all base parameters, then injects LoRA into the token decoder.
+        After this call only the LoRA parameters are trainable; the optimizer
+        should be constructed from ``trainable_parameters()`` rather than
+        ``parameters()``.
+
+        May only be called once per model instance.
+        """
+        if self._nfa_mode:
+            raise RuntimeError(
+                "Model is already in NFA mode.  "
+                "Create a fresh model instance to re-apply NFA."
+            )
+        # Freeze everything including G-Tok.
+        for param in self.parameters():
+            param.requires_grad = False
+        # Inject LoRA — this creates new trainable parameters inside the decoder.
+        self.token_decoder.inject_lora(lora_config)
+        # Ensure G-Tok stays in eval mode regardless of outer train() calls.
+        self.freeze_gtok()
+        self._nfa_mode = True
+
+    @property
+    def is_nfa_mode(self) -> bool:
+        """True once ``enable_nfa_mode`` has been called."""
+        return self._nfa_mode
+
+    def trainable_parameters(self) -> list[torch.nn.Parameter]:
+        """Return a list of parameters that currently require gradients.
+
+        In NFA mode this is just the injected LoRA matrices.  In normal
+        pretraining mode it is all non-GTok parameters.
+        """
+        return [p for p in self.parameters() if p.requires_grad]
 
     def encode_content(self, content_images: torch.Tensor) -> torch.Tensor:
         """Encode content glyphs to token-aligned spatial features."""

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from hrothgar.ar.model import ARModel, ARModelConfig, ContentStyleAggregator
+from hrothgar.ar.model import ARModel, ARModelConfig, ContentStyleAggregator, LoRAConfig, LoRALinear
 from hrothgar.gtok.model import GtokConfig, GtokModel
 
 
@@ -195,3 +195,122 @@ def test_freeze_unfreeze_visual_style_path() -> None:
     model.unfreeze_visual_style_path()
     assert all(p.requires_grad for p in model.style_encoder.parameters())
     assert all(p.requires_grad for p in model.aggregator.parameters())
+
+
+# ---------------------------------------------------------------------------
+# LoRA tests
+# ---------------------------------------------------------------------------
+
+
+def test_lora_linear_zero_init_unchanged_output() -> None:
+    """A freshly constructed LoRALinear should produce the same output as its base."""
+    base = nn.Linear(32, 64)
+    lora = LoRALinear(base, rank=4, alpha=4.0)
+    x = torch.randn(2, 32)
+    with torch.no_grad():
+        assert torch.allclose(lora(x), base(x))
+
+
+def test_lora_linear_base_frozen() -> None:
+    """Base weights inside LoRALinear must not be trainable."""
+    base = nn.Linear(16, 32)
+    lora = LoRALinear(base, rank=4, alpha=4.0)
+    assert all(not p.requires_grad for p in lora.base.parameters())
+    assert lora.lora_A.requires_grad
+    assert lora.lora_B.requires_grad
+
+
+def test_lora_linear_modifies_output_after_b_init() -> None:
+    """After manually setting lora_B to non-zero, output should differ from base."""
+    base = nn.Linear(16, 32, bias=False)
+    lora = LoRALinear(base, rank=4, alpha=4.0)
+    with torch.no_grad():
+        lora.lora_B.fill_(1.0)
+    x = torch.randn(2, 16)
+    with torch.no_grad():
+        assert not torch.allclose(lora(x), base(x))
+
+
+def test_inject_lora_only_lora_params_trainable() -> None:
+    """After enable_nfa_mode, only LoRA params in the decoder should be trainable."""
+    model = make_test_models()
+    lora_config = LoRAConfig(rank=4, alpha=4.0)
+    model.enable_nfa_mode(lora_config)
+
+    for name, param in model.named_parameters():
+        if "lora_" in name:
+            assert param.requires_grad, f"LoRA param {name} should be trainable"
+        else:
+            assert not param.requires_grad, f"Non-LoRA param {name} should be frozen"
+
+
+def test_inject_lora_trainable_param_count_is_small() -> None:
+    """LoRA parameter count should be a small fraction of total parameters."""
+    model = make_test_models()
+    total_before = sum(p.numel() for p in model.parameters())
+    model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+    trainable = sum(p.numel() for p in model.trainable_parameters())
+    # With rank=4, LoRA should be < 5% of total parameters.
+    assert trainable < 0.05 * total_before, (
+        f"LoRA params ({trainable:,}) unexpectedly large vs total ({total_before:,})"
+    )
+
+
+def test_enable_nfa_mode_idempotent_raises() -> None:
+    """Calling enable_nfa_mode twice should raise RuntimeError."""
+    model = make_test_models()
+    model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+    with pytest.raises(RuntimeError):
+        model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+
+
+def test_inject_lora_idempotent_raises() -> None:
+    """Calling inject_lora twice on the decoder should raise RuntimeError."""
+    model = make_test_models()
+    config = LoRAConfig(rank=4, alpha=4.0)
+    model.token_decoder.inject_lora(config)
+    with pytest.raises(RuntimeError):
+        model.token_decoder.inject_lora(config)
+
+
+def test_nfa_forward_produces_valid_output() -> None:
+    """Model in NFA mode should produce the same output shapes as normal mode."""
+    model = make_test_models()
+    model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+    model.eval()
+
+    content_images = torch.randn(2, 3, 64, 64)
+    style_images = torch.randn(2, 4, 3, 64, 64)
+    target_images = torch.randn(2, 3, 64, 64)
+
+    with torch.no_grad():
+        output = model(content_images, style_images, target_images=target_images)
+
+    assert output.logits.shape == (2, model.sequence_length, model.codebook_size)
+    assert output.reconstructed_images.shape == target_images.shape
+
+
+def test_lora_state_dict_roundtrip() -> None:
+    """get_lora_state_dict / load_lora_state_dict should preserve LoRA values."""
+    model = make_test_models()
+    model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+
+    # Modify LoRA B matrices so they are non-zero.
+    with torch.no_grad():
+        for name, param in model.token_decoder.named_parameters():
+            if "lora_B" in name:
+                param.fill_(0.5)
+
+    lora_state = model.token_decoder.get_lora_state_dict()
+    assert all("lora_" in k for k in lora_state)
+
+    # Create a second model, inject LoRA, load the state.
+    model2 = make_test_models()
+    model2.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+    model2.token_decoder.load_lora_state_dict(lora_state)
+
+    for key in lora_state:
+        v1 = model.token_decoder.state_dict()[key]
+        v2 = model2.token_decoder.state_dict()[key]
+        assert torch.allclose(v1, v2), f"Mismatch in {key} after roundtrip"
+
