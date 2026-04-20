@@ -8,3 +8,4 @@ logs/
 *.pyc
 foo.py
 build/
+uv.lock

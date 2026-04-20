@@ -13,6 +13,19 @@ LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
 LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
 
 
+def _has_non_empty_outline(extents) -> bool:
+    """Return True when HarfBuzz extents indicate drawable geometry."""
+    if extents is None:
+        return False
+    _x_bearing, _y_bearing, width, height = extents
+    return not (width == 0 and height == 0)
+
+
+def _hb_font_for_face(face):
+    """Construct a HarfBuzz Font object for a face."""
+    return getattr(hb, "Font")(face)
+
+
 class DatasetMaker:
     """Create train/test splits and loaders over glyph rendering items."""
 
@@ -49,8 +62,8 @@ class DatasetMaker:
             fonts = self.googlefonts.fonts
 
         self.train_fonts, self.test_fonts = train_test_split(fonts)
-        print("Train fonts:", len(self.train_fonts))
-        print("Test fonts:", len(self.test_fonts))
+        # print("Train fonts:", len(self.train_fonts))
+        # print("Test fonts:", len(self.test_fonts))
 
     def train_set(self):
         return Dataset(
@@ -98,13 +111,13 @@ class Dataset(TorchDataset):
         self.codepoint_filter_fn = codepoint_filter_fn
         self.order = []
         for font in self.fonts:
+            hb_font = _hb_font_for_face(font.hb_face)
             chars = self.codepoint_filter_fn(set(font.codepoints))
             for char in chars:
                 # Skip empty glyphs; they can destabilize training targets.
-                hb_font = hb.Font(font.hb_face)  # type: ignore
                 gid = hb_font.get_nominal_glyph(char)
                 extents = hb_font.get_glyph_extents(gid)
-                if all(x for x in extents):
+                if _has_non_empty_outline(extents):
                     self.order.append((font, char))
 
     def __len__(self):
@@ -114,5 +127,28 @@ class Dataset(TorchDataset):
         font, char = self.order[idx]
         return {
             "char": char,
+            "font": font,
+        }
+
+
+class AllGidsDataset(TorchDataset):
+    def __init__(self, fonts):
+        self.fonts = fonts
+        self.order = []
+        for font in self.fonts:
+            hb_font = _hb_font_for_face(font.hb_face)
+            for gid in range(1, font.hb_face.glyph_count):
+                # Skip empty glyphs; they can destabilize training targets.
+                extents = hb_font.get_glyph_extents(gid)
+                if _has_non_empty_outline(extents):
+                    self.order.append((font, gid))
+
+    def __len__(self):
+        return len(self.order)
+
+    def __getitem__(self, idx):
+        font, gid = self.order[idx]
+        return {
+            "gid": gid,
             "font": font,
         }

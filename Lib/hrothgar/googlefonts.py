@@ -1,17 +1,50 @@
 from functools import cached_property
-import io
-import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Self, Set, Union
+from hrothgar.render import render_gid
 
 import numpy as np
 import uharfbuzz as hb
 from gftools.util.google_fonts import Metadata
-from PIL import Image, ImageChops
 
-from hrothgar.utils import check_hbview_exists
 
-check_hbview_exists()
+class Font:
+    """A font, whether standalone or from the Google Fonts repository. This is an abstract base class that defines the interface for fonts, and provides some common functionality. The concrete implementations are GoogleFont and StandaloneFont."""
+
+    hb_face: hb.Face
+    path: Path
+
+    def render(self, char: int, size: int = 64) -> np.ndarray:
+        """Render a single glyph as a (3, size, size) float32 array."""
+        try:
+            gid = hb.Font(self.hb_face).get_nominal_glyph(char)
+            return self.render_gid(gid, size)
+        except Exception:
+            return np.ones((3, size, size), dtype=np.float32)
+
+    def render_gid(self, gid: int, size: int = 64) -> np.ndarray:
+        """Render a single glyph by GID as a (3, size, size) float32 array."""
+        try:
+            return render_gid(self.path, gid, size)
+        except Exception:
+            return np.ones((3, size, size), dtype=np.float32)
+
+    @cached_property
+    def codepoints(self) -> Set[int]:
+        """Unicode codepoints present in this font."""
+        return set(self.hb_face.unicodes)
+
+    def has_codepoint(self, char: int) -> bool:
+        """Returns whether this font has a glyph for the given character."""
+        return char in self.codepoints
+
+    def description(self) -> str:
+        """Empty description — no metadata available for standalone fonts."""
+        return ""
+
+    def tags(self) -> Dict[str, float]:
+        """Empty tags — no metadata available for standalone fonts."""
+        return {}
 
 
 class GoogleFonts:
@@ -35,8 +68,7 @@ class GoogleFonts:
             except Exception as _e:
                 # print(f"Error loading font {font_path}: {e}")
                 continue
-            # Skip noto
-            if font_path.parts[-2].startswith("noto"):
+            if self.should_skip(font):
                 continue
             if having is not None:
                 if any(not font.has_codepoint(cp) for cp in having):
@@ -52,8 +84,25 @@ class GoogleFonts:
                 self.tags[family] = self.tags.get(family, {})
                 self.tags[family][tag] = float(value)
 
+    def should_skip(self, font: GoogleFont) -> bool:
+        if font.path.parts[-2].startswith("noto"):
+            return True
+        # Skip CJK; we don't want these big fonts with lots of characters
+        # and a different glyph construction style to dominate
+        has_cjk = [
+            "chinese-hongkong",
+            "chinese-simplified",
+            "chinese-traditional",
+            "japanese",
+            "korean",
+        ]
+        subsets = font.metadata.subsets
+        if any(subset in subsets for subset in has_cjk):
+            return True
+        return False
 
-class GoogleFont:
+
+class GoogleFont(Font):
     """A single font in the Google Fonts repository."""
 
     def __init__(self, path: str | Path, gf: GoogleFonts | None = None):
@@ -65,20 +114,9 @@ class GoogleFont:
         self.hb_face = hb.Face(hb.Blob.from_file_path(self.path))
         self.gf = gf
 
-    @cached_property
-    def codepoints(self):
-        return set(self.hb_face.unicodes)
-
     def tags(self) -> Dict[str, float]:
         """Returns the tags for this font, as a dictionary of tag name to value. The values are centiles from 0 to 100."""
         return self.gf.tags.get(self.family, {}) if self.gf else {}
-
-    def render(self, char: int, size: int = 64) -> np.ndarray:
-        """Renders the given character as a square image of the requested size. The character should be given as a Unicode code point (i.e. ord("a") for "a")."""
-        try:
-            return render(self.path, chr(char), size, self.hb_face, do_trim=False)
-        except Exception as _e:
-            return np.zeros((3, size, size), dtype=np.float32)
 
     def description(self) -> str:
         """Returns the description of this font, as a string. This is taken from the article if it exists, otherwise from the description, otherwise it's empty."""
@@ -125,12 +163,8 @@ class GoogleFont:
         else:
             return GoogleFonts.families_by_name.get("Noto Sans")
 
-    def has_codepoint(self, char: int) -> bool:
-        """Returns whether this font has a glyph for the given character."""
-        return char in self.codepoints
 
-
-class StandaloneFont:
+class StandaloneFont(Font):
     """A font loaded from a local file path without Google Fonts repository structure.
 
     This is used for NFA (Novel Font Adaptation) when adapting to fonts that are
@@ -151,33 +185,9 @@ class StandaloneFont:
         self.family = self.path.stem
         self._reference = reference
 
-    @cached_property
-    def codepoints(self) -> Set[int]:
-        """Unicode codepoints present in this font."""
-        return set(self.hb_face.unicodes)
-
-    def render(self, char: int, size: int = 64) -> np.ndarray:
-        """Render a single glyph as a (3, size, size) float32 array."""
-        try:
-            return render(self.path, chr(char), size, self.hb_face, do_trim=False)
-        except Exception:
-            return np.ones((3, size, size), dtype=np.float32)
-
     def reference_font(self) -> Optional["StandaloneFont | GoogleFont"]:
         """Return the reference (content) font, or None if not set."""
         return self._reference
-
-    def has_codepoint(self, char: int) -> bool:
-        """Returns whether this font has a glyph for the given character."""
-        return char in self.codepoints
-
-    def description(self) -> str:
-        """Empty description — no metadata available for standalone fonts."""
-        return ""
-
-    def tags(self) -> Dict[str, float]:
-        """Empty tags — no metadata available for standalone fonts."""
-        return {}
 
 
 def centile_to_text(score: int) -> str:
@@ -206,104 +216,3 @@ def dehtml(html: str) -> str:
         elif not in_tag:
             text += c
     return " ".join(text.split())
-
-
-# Glyph rendering utils
-def trim(im):
-    bg = Image.new(im.mode, im.size, im.getpixel((0, 0)))
-    diff = ImageChops.difference(im, bg)
-    diff = ImageChops.add(diff, diff, 2.0, -100)
-    bbox = diff.getbbox()
-    if bbox:
-        return im.crop(bbox)
-    return im
-
-
-def _render(vars_text, font, text):
-    return subprocess.run(
-        [
-            "hb-view",
-            "-o",
-            "-",
-            "-O",
-            "png",
-            vars_text,
-            "--font-size=1024",
-            font,
-            text,
-        ],
-        check=True,
-        capture_output=True,
-    ).stdout
-
-
-def render(
-    font,
-    text: str,
-    size: int,
-    hb_face: hb.Face,
-    variation: Dict[str, float] = {},
-    do_trim=False,
-):
-    if not variation:
-        vars_text = "--variations=wght=400"
-    else:
-        vars_text = "--variations=" + ",".join(
-            [f"{k}={v}" for k, v in variation.items()]
-        )
-    image = _render(vars_text, font, text)
-    image = Image.open(io.BytesIO(image))
-    width, height = image.size
-    if do_trim:
-        image = trim(image)
-        width, height = image.size
-        scale = min(size / width, size / height)
-        new_img = image.resize((int(width * scale), int(height * scale)))
-        width, height = new_img.size
-    else:
-        new_img = image
-
-    new_img2 = Image.new("L", (size, size))
-    # White background
-    new_img2.paste(255, (0, 0, size, size))
-    if do_trim:
-        new_img2.paste(
-            new_img,
-            (int((size - width) / 2), int((size - height) / 2)),
-        )
-    else:
-        # Paste it at known coordinates. This is the bit that nobody
-        # thinks about. The X coordinate is easy, we'll put it at 0.
-        # The Y coordinate is a bit more tricky, because we want the
-        # glyph to be aligned on the baseline, regardless of the font's
-        # vertical metrics.
-        upem = hb_face.upem
-        ascent = hb.Font(hb_face).get_font_extents("ltr").ascender
-        # We've received a glyph at upem scale, which means that the height of
-        # the glyph image is ascent - descent. We want to scale and position the
-        # glyph such that (a) all glyphs are scaled by the same amount, regardless
-        # of their vertical metrics, and (b) the baseline is three quarters of the way
-        # up the image. When we scale it let's assume that all glyphs fit inside
-        # 1.5x the upem. So we have one upem worth of ascent above the baseline
-        # and 0.5 upem worth of descent below the baseline.
-        scale = size / (1.5 * upem)
-        if int(new_img.width * scale) == 0 or int(new_img.height * scale) == 0:
-            print(f"Failed to render glyph for {text} in font {font}")
-            # Return zeros
-            return np.zeros((3, size, size), dtype=np.float32)
-        new_img = new_img.resize(
-            (int(new_img.width * scale), int(new_img.height * scale))
-        )
-        scaled_ascent = ascent * scale
-        baseline_y = int(size * 0.66)
-        new_img2.paste(new_img, (0, int(baseline_y - scaled_ascent)))
-    new_img2 = np.asarray(new_img2, dtype=np.float32)
-    # (H, W) -> (3, H, W)
-    new_img2 = np.stack([new_img2] * 3, axis=0)
-    # if new_img2.max() == new_img2.min():
-    #     hb_font = hb.Font(hb_face)  # type: ignore
-    #     gid = hb_font.get_nominal_glyph(ord(text))
-    #     extents = hb_font.get_glyph_extents(gid)
-    #     print(f"Glyph for {text} in font {font} is blank after rendering")
-    #     print(f"Glyph extents: {extents}")
-    return new_img2 / 255.0

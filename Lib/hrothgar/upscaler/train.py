@@ -151,6 +151,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--tag", type=str, help="Tag for the training run")
     parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow training with uncommitted changes in the git repository (not recommended)",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=32,
