@@ -84,7 +84,7 @@ class GoogleFonts:
                 self.tags[family] = self.tags.get(family, {})
                 self.tags[family][tag] = float(value)
 
-    def should_skip(self, font: GoogleFont) -> bool:
+    def should_skip(self, font: "GoogleFont") -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
         # Skip CJK; we don't want these big fonts with lots of characters
