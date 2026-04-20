@@ -1,4 +1,3 @@
-import abc
 import datetime
 import random
 import subprocess
@@ -6,22 +5,6 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import torch
-
-
-def check_hbview_exists():
-    """Check if the hbview command-line tool is available."""
-    try:
-        subprocess.run(
-            ["hb-view", "--help"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raise RuntimeError(
-            "The hb-view command-line tool is not available. Please install it from apt-get install libharfbuzz-bin"
-        )
 
 
 def torch_setup() -> torch.device:
@@ -44,9 +27,10 @@ def progress_values(loss_info: Dict[str, torch.Tensor]):
     return [(key, float(value.detach().cpu())) for key, value in loss_info.items()]
 
 
-def check_git_clean_and_get_commit_hash() -> str:
+def check_git_clean_and_get_commit_hash(train_args) -> str:
     """Check that the git repository is clean and return the current commit hash."""
     try:
+        allow_dirty = bool(getattr(train_args, "allow_dirty", False))
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             stdout=subprocess.PIPE,
@@ -54,7 +38,7 @@ def check_git_clean_and_get_commit_hash() -> str:
             text=True,
             check=True,
         )
-        if result.stdout.strip():
+        if result.stdout.strip() and not allow_dirty:
             raise RuntimeError(
                 "Git repository has uncommitted changes. Please commit or stash them before training."
             )
@@ -100,7 +84,7 @@ class TrainingLoop:
         from torch.utils.tensorboard import SummaryWriter
 
         self.device = torch_setup()
-        git_tag = check_git_clean_and_get_commit_hash()
+        git_tag = check_git_clean_and_get_commit_hash(train_args)
         run_id = f"logs/{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{git_tag}"
         if train_args.tag:
             run_id += f"-{train_args.tag}"

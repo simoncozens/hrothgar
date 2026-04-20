@@ -18,7 +18,8 @@ dependencies = [
     "pkbar",
     "torchmetrics",
     "tensorboard", 
-    "jaxtyping"
+    "jaxtyping", 
+    "freetype-py"
 ]
 # Also pydiffvg but that's not on pypi!
 

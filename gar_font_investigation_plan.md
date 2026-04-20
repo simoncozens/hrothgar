@@ -112,6 +112,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Download LlamaGen tokenizer code as CNN backbone reference
   - Obtain FsFont/LF-Font cross-attention aggregator reference
   - Set up a small-scale test (e.g. 50 fonts × 200 glyphs) for fast iteration
+  - Prototype standalone FreeType renderer for direct GID rendering with fixed baseline/sidebearing placement
 
 ### Phase 1: G-Tok Tokenizer (Weeks 2-4)
 

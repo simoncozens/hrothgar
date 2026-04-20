@@ -1,18 +1,18 @@
 """Dataset maker for glyph super-resolution.
 
 This prototype emits low-resolution and high-resolution raster pairs for the
-Latin core character set, using the shared train/test split logic from
+Latin core gidacter set, using the shared train/test split logic from
 ``hrothgar.dataset.DatasetMaker``.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Set
+from typing import Optional, Set
 
 import torch
 import torch.nn.functional as F
 
-from hrothgar.dataset import DatasetMaker, LATIN_CORE
+from hrothgar.dataset import AllGidsDataset, DatasetMaker
 
 
 class UpscalerDatasetMaker(DatasetMaker):
@@ -24,7 +24,6 @@ class UpscalerDatasetMaker(DatasetMaker):
         batch_size: int,
         low_res_size: int = 128,
         high_res_size: int = 512,
-        target_codepoints: Optional[Sequence[int]] = None,
         canary_size: Optional[int] = None,
         having: Optional[Set[int]] = None,
     ) -> None:
@@ -43,25 +42,26 @@ class UpscalerDatasetMaker(DatasetMaker):
         self.high_res_size = high_res_size
         self.upscale_factor = high_res_size / low_res_size
 
-        codepoints = (
-            set(target_codepoints) if target_codepoints is not None else set(LATIN_CORE)
-        )
-
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
-            target_codepoints=codepoints,
             canary_size=canary_size,
             having=having,
             image_size=high_res_size,
         )
 
+    def train_set(self):
+        return AllGidsDataset(self.train_fonts)
+
+    def test_set(self):
+        return AllGidsDataset(self.test_fonts)
+
     def collate_fn(self, batch):
-        chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
+        gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
         high_res = torch.stack(
             [
                 torch.tensor(
-                    item["font"].render(item["char"], size=self.high_res_size),
+                    item["font"].render_gid(item["gid"], size=self.high_res_size),
                     dtype=torch.float32,
                 )
                 for item in batch
@@ -75,15 +75,10 @@ class UpscalerDatasetMaker(DatasetMaker):
             mode="area",
         )
 
-        descriptions = [item["font"].description_with_tags() for item in batch]
-        font_names = [item["font"].family for item in batch]
-
         return {
-            "char": chars,
+            "gid": gids,
             "low_res": low_res,
             "high_res": high_res,
-            "description": descriptions,
-            "font_family": font_names,
         }
 
 

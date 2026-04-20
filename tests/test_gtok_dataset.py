@@ -23,12 +23,12 @@ def test_data_loader():
     # Check we can read a few batches
     for _ in range(3):
         batch = next(iter(test_loader))
-        assert "char" in batch
+        assert "gid" in batch
         assert "rendering" in batch
         assert "description" in batch
 
         assert batch["rendering"].shape == (32, 3, 128, 128)
-        assert batch["char"].shape == (32,)
+        assert batch["gid"].shape == (32,)
 
 
 def test_no_crash_on_space():
