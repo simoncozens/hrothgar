@@ -78,7 +78,9 @@ def _choose_reference_font(
     if reference_family == "none":
         return None
     if dataset_path is None:
-        print("No --dataset-path provided; falling back to self-reference content glyphs.")
+        print(
+            "No --dataset-path provided; falling back to self-reference content glyphs."
+        )
         return None
 
     gf = GoogleFonts(dataset_path)
@@ -222,9 +224,9 @@ def _build_generation_inputs(
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     reference_font = font.reference_font() or font
-    if not _font_has_codepoint(
+    if not _font_has_codepoint(reference_font, target_char) or not _has_non_empty_glyph(
         reference_font, target_char
-    ) or not _has_non_empty_glyph(reference_font, target_char):
+    ):
         reference_font = font
 
     content_render = reference_font.render(target_char, size=image_size)
@@ -402,7 +404,9 @@ def main() -> None:
 
     finetuned_ar_path = args.finetuned_ar_path
     if finetuned_ar_path is None:
-        finetuned_ar_path = args.output_dir / f"{args.font_path.stem}_ar_nfa_finetuned.pth"
+        finetuned_ar_path = (
+            args.output_dir / f"{args.font_path.stem}_ar_nfa_finetuned.pth"
+        )
     ar_model.save(str(finetuned_ar_path))
     print(f"Saved fine-tuned AR checkpoint: {finetuned_ar_path}")
 
@@ -412,9 +416,26 @@ def main() -> None:
     print(f"Saved LoRA-only checkpoint: {lora_only_path}")
 
     # Generate a 128x128 glyph.
-    if not font.has_codepoint(target_char):
+    # Missing target glyphs in the adapted font are expected in this workflow.
+    # We only require that at least one content source can render the target
+    # character (selected reference font or the target font itself).
+    reference_for_target = font.reference_font() or font
+    if not _font_has_codepoint(
+        reference_for_target, target_char
+    ) and not _font_has_codepoint(font, target_char):
         raise ValueError(
-            f"Target character U+{target_char:04X} is not present in {args.font_path}"
+            "Target character "
+            f"U+{target_char:04X} is missing in both the target font and the "
+            "selected reference font. Provide --dataset-path with a suitable "
+            "--reference-family (noto-sans or noto-serif), or choose a supported "
+            "target character."
+        )
+
+    if not _font_has_codepoint(font, target_char):
+        print(
+            "Target character "
+            f"U+{target_char:04X} is missing in the target font; using "
+            f"reference font content rendering from '{args.reference_family}'."
         )
 
     ar_model.eval()
@@ -452,7 +473,9 @@ def main() -> None:
         upscaled_512 = upscaler(low_res_tensor).squeeze(0).detach().cpu().numpy()
 
     codepoint_label = f"U+{target_char:04X}"
-    output_512_path = args.output_dir / f"{args.font_path.stem}_{codepoint_label}_512.png"
+    output_512_path = (
+        args.output_dir / f"{args.font_path.stem}_{codepoint_label}_512.png"
+    )
     _to_image(upscaled_512).save(output_512_path)
     print(f"Saved upscaled result: {output_512_path}")
 

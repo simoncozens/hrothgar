@@ -76,13 +76,16 @@ def _paste_bitmap_onto_canvas(
     canvas[dst_y0_clamped:dst_y1_clamped, dst_x0_clamped:dst_x1_clamped] = 255 - src
 
 
-def render_gid(font_path: str | Path, gid: int, size: int) -> np.ndarray:
+def render_gid(
+    font_path: str | Path, gid: int, size: int, trim_to_rsb: bool = False
+) -> np.ndarray:
     """Render a glyph by GID into a square image.
 
     Args:
         font_path: Path to the font file.
         gid: Glyph index (GID) to render.
         size: Output image size. Output is (3, size, size).
+        trim_to_rsb: If True, trim the output to the right sidebearing instead of the full square. This can be useful for certain applications but may produce variable-width outputs.
 
     Returns:
         Float32 image in [0, 1], shaped (3, size, size).
@@ -109,8 +112,12 @@ def render_gid(font_path: str | Path, gid: int, size: int) -> np.ndarray:
     )
 
     glyph_slot = face.glyph
+    actual_width = glyph_slot.linearHoriAdvance / 65536
     bitmap_array = _bitmap_to_array(glyph_slot.bitmap)
-    image = np.full((size, size), 255, dtype=np.uint8)
+    if trim_to_rsb:
+        image = np.full((size, int(np.ceil(actual_width))), 255, dtype=np.uint8)
+    else:
+        image = np.full((size, size), 255, dtype=np.uint8)
     baseline_y = int(size * 0.66)
     _paste_bitmap_onto_canvas(
         canvas=image,
@@ -130,6 +137,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("gid", type=int, help="Glyph ID to render")
     parser.add_argument("--size", type=int, default=128, help="Output size")
     parser.add_argument(
+        "--save",
+        action="store_true",
+        help="Save rendering to a PNG file next to the font",
+    )
+    parser.add_argument(
+        "--trim",
+        action="store_true",
+        help="Trim output width to the right sidebearing instead of the full square",
+    )
+
+    parser.add_argument(
         "--show",
         action="store_true",
         help="Display rendering using matplotlib",
@@ -140,7 +158,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     """Debug entry point to render a single glyph and display it."""
     args = _parse_args()
-    rendering = render_gid(args.font, args.gid, args.size)
+    rendering = render_gid(args.font, args.gid, args.size, trim_to_rsb=args.trim)
 
     non_white_pixels = int((rendering[0] < 1.0).sum())
     print("Rendered non-white pixels:", non_white_pixels)
@@ -154,6 +172,12 @@ def main() -> None:
         plt.axis("off")
         plt.tight_layout()
         plt.show()
+    if args.save:
+        import matplotlib.pyplot as plt
+
+        output_path = args.font.with_suffix(f".gid{args.gid}.png")
+        plt.imsave(output_path, rendering[0], cmap="gray", vmin=0.0, vmax=1.0)
+        print(f"Saved rendering to {output_path}")
 
 
 if __name__ == "__main__":
