@@ -146,7 +146,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 
 **Goal:** Conditional glyph generation from content + visual style references.
 
-- [ ] **Implement components**
+- [x] **Implement components**
   - Content encoder: CNN (reuse G-Tok's CNN encoder architecture, 28.56M)
   - Visual style encoder: lightweight CNN (2.78M, ~4-5 conv layers + pooling)
   - Content-style aggregator: 3-layer cross-attention (content queries, style keys/values)
@@ -154,7 +154,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Soft decoding: Softmax(logits) · Codebook → G-Tok decoder
   - [x] AR phase-1 dataset maker and collation implemented (`target_rendering`, `content_rendering`, configurable `style_renderings` count)
 
-- [ ] **Training (Stage 1: visual pretraining)**
+- [x] **Training (Stage 1: visual pretraining)**
   - Input: 1 content glyph + 8 style references → predict target glyph tokens
   - Loss: CE over token indices + L1 pixel reconstruction
   - AdamW (β1=0.9, β2=0.95), batch 32, lr 1e-4
@@ -207,6 +207,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 - [ ] **NFA (Novel Font Adaptation)**
   - [x] Add LoRA adapters to Transformer decoder layers (implemented in `ARModel` with decoder-layer injection and LoRA-only checkpoint support)
   - [x] Add NFA fine-tuning loop scaffold (single-font dataset maker + training loop in `Lib/hrothgar/ar/nfa.py`)
+  - [x] Add end-to-end single-font generation orchestrator (`generate.py`) that fine-tunes GTok + AR(NFA), generates 128px glyphs, and upscales to 512px
   - [ ] Fine-tune on N target font glyphs (paper uses 128; try 256/512 with our data)
   - [ ] 10 epochs, lr 2e-5
   - [ ] Measure: Time per font, quality improvement vs. number of adaptation glyphs
