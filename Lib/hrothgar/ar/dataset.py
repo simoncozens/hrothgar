@@ -11,7 +11,7 @@ from typing import Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from hrothgar.dataset import DatasetMaker
+from hrothgar.dataset import DatasetMaker, LATIN_CORE
 
 
 def _has_non_empty_glyph(font, codepoint: int) -> bool:
@@ -63,6 +63,9 @@ def _sample_style_codepoints(
         for cp in font.codepoints
         if cp != target_char and _has_non_empty_glyph(font, cp)
     ]
+    # Restrict to GF Latin Core
+    available = [cp for cp in available if cp in LATIN_CORE]
+
     if not available:
         return [target_char] * style_glyph_count
 
