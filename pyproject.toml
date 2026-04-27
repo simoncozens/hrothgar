@@ -19,7 +19,8 @@ dependencies = [
     "torchmetrics",
     "tensorboard", 
     "jaxtyping", 
-    "freetype-py"
+    "freetype-py",
+    "matrix-disk-cache"
 ]
 # Also pydiffvg but that's not on pypi!
 
