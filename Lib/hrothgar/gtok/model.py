@@ -37,7 +37,7 @@ class GtokConfig:
     # CNN encoder/decoder parameters (from LlamaGen)
     cnn_base_channels: int = 128
     cnn_channel_multipliers: Optional[List[int]] = (
-        None  # If None, defaults to [1, 2, 2, 4] for an 8x downsampling pyramid.
+        None  # If None, defaults to [1, 2, 2, 4, 4] for a 16x downsampling pyramid.
     )
     cnn_num_residual_blocks: int = 2
     cnn_latent_channels: int = 256
@@ -62,7 +62,7 @@ class GtokConfig:
     def __post_init__(self):
         """Set defaults for list parameters."""
         if self.cnn_channel_multipliers is None:
-            self.cnn_channel_multipliers = [1, 2, 2, 4]
+            self.cnn_channel_multipliers = [1, 2, 2, 4, 4]
         if self.image_size <= 0:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
         if self.vit_hidden_dim % self.vit_num_heads != 0:

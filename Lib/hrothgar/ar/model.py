@@ -41,11 +41,11 @@ class ARModelConfig:
     encoder_feature_dim: int = 256
 
     content_encoder_base_channels: int = 128
-    content_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4)
+    content_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4, 4)
     content_encoder_num_residual_blocks: int = 2
 
     style_encoder_base_channels: int = 32
-    style_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4)
+    style_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4, 4)
     style_encoder_num_residual_blocks: int = 2
 
     aggregator_num_layers: int = 3

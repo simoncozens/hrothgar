@@ -222,7 +222,7 @@ class TestGtokConfig:
         assert config.quantizer_codebook_size == 2048
         assert config.quantizer_code_dim == 8
         assert config.vit_num_layers == 6
-        assert config.cnn_channel_multipliers == [1, 2, 2, 4]
+        assert config.cnn_channel_multipliers == [1, 2, 2, 4, 4]
 
     def test_config_custom_values(self):
         """Test that config accepts custom values."""
@@ -238,7 +238,7 @@ class TestGtokConfig:
         assert config.quantizer_codebook_size == 1024
         assert config.vit_num_layers == 4
         # Other values should still have defaults
-        assert config.cnn_channel_multipliers == [1, 2, 2, 4]
+        assert config.cnn_channel_multipliers == [1, 2, 2, 4, 4]
 
 
 class TestGtokModel:
@@ -254,9 +254,9 @@ class TestGtokModel:
         assert isinstance(model.vit_decoder, CausalViTDecoder)
         assert isinstance(model.cnn_decoder, torch.nn.Module)
         assert isinstance(model.quantizer, torch.nn.Module)
-        assert model.token_grid_height == 16
-        assert model.token_grid_width == 16
-        assert model.sequence_length == 256
+        assert model.token_grid_height == 8
+        assert model.token_grid_width == 8
+        assert model.sequence_length == 64
 
     def test_forward_pass(self):
         """Test forward pass through complete model."""
@@ -347,7 +347,7 @@ class TestGtokModel:
             reconstructed, _ = model(images)
 
         assert reconstructed.shape == images.shape
-        assert model.sequence_length == 64
+        assert model.sequence_length == 16
 
 
 class TestViTEncoderParameterNames:
