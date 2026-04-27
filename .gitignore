@@ -1,3 +1,4 @@
+image_cache/
 /models/
 /scripts/
 *.egg-info
