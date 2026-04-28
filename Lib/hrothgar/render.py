@@ -79,7 +79,7 @@ def _paste_bitmap_onto_canvas(
 from matrix_disk_cache import MatrixDiskCache
 
 # Initialize the cache with an optional maxsize
-cache = MatrixDiskCache(cache_dir="image_cache", maxsize=100)
+cache = MatrixDiskCache(cache_dir="image_cache")
 
 
 @cache.cache
