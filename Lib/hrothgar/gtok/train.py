@@ -14,9 +14,37 @@ from hrothgar.gtok.vgg_loss import VGG
 from hrothgar.utils import TrainingLoop
 
 
+def _parse_int_list(value: str) -> list[int]:
+    """Parse a comma-separated integer list from CLI input."""
+    items = [part.strip() for part in value.split(",") if part.strip()]
+    if not items:
+        raise ValueError("Expected a comma-separated list of integers")
+    return [int(item) for item in items]
+
+
 class GtokTrainingLoop(TrainingLoop):
     def post_init(self, train_args):
-        config = GtokConfig(image_size=train_args.image_size)
+        gtok_config_kwargs = {
+            "image_size": train_args.image_size,
+        }
+        if train_args.cnn_channel_multipliers is not None:
+            gtok_config_kwargs["cnn_channel_multipliers"] = (
+                train_args.cnn_channel_multipliers
+            )
+        if train_args.cnn_latent_channels is not None:
+            gtok_config_kwargs["cnn_latent_channels"] = train_args.cnn_latent_channels
+        if train_args.quantizer_codebook_size is not None:
+            gtok_config_kwargs["quantizer_codebook_size"] = (
+                train_args.quantizer_codebook_size
+            )
+        if train_args.quantizer_code_dim is not None:
+            gtok_config_kwargs["quantizer_code_dim"] = train_args.quantizer_code_dim
+        if train_args.quantizer_entropy_loss_ratio is not None:
+            gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
+                train_args.quantizer_entropy_loss_ratio
+            )
+
+        config = GtokConfig(**gtok_config_kwargs)
         model = GtokModel(config).to(self.device)
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
@@ -121,6 +149,39 @@ if __name__ == "__main__":
         type=str,
         help="Path to save the trained model",
         default="gtok_model.pth",
+    )
+    parser.add_argument(
+        "--cnn-channel-multipliers",
+        type=_parse_int_list,
+        default=None,
+        help=(
+            "Optional comma-separated CNN channel multipliers for the tokenizer "
+            "pyramid (for example: 1,2,2,4,4)."
+        ),
+    )
+    parser.add_argument(
+        "--cnn-latent-channels",
+        type=int,
+        default=None,
+        help="Optional tokenizer latent channel count override.",
+    )
+    parser.add_argument(
+        "--quantizer-codebook-size",
+        type=int,
+        default=None,
+        help="Optional VQ codebook size override.",
+    )
+    parser.add_argument(
+        "--quantizer-code-dim",
+        type=int,
+        default=None,
+        help="Optional VQ code dimensionality override.",
+    )
+    parser.add_argument(
+        "--quantizer-entropy-loss-ratio",
+        type=float,
+        default=None,
+        help="Optional entropy regularization weight override for the VQ quantizer.",
     )
     args = parser.parse_args()
     if not args.dataset_path:
