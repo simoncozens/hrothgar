@@ -20,6 +20,14 @@ def _parse_codepoint(value: str) -> List[int]:
     return [ord(c) for c in value]
 
 
+def _parse_int_list(value: str) -> List[int]:
+    """Parse a comma-separated integer list from CLI input."""
+    items = [part.strip() for part in value.split(",") if part.strip()]
+    if not items:
+        raise ValueError("Expected a comma-separated list of integers")
+    return [int(item) for item in items]
+
+
 class ARVisualTrainingLoop(TrainingLoop):
     """Visual-only AR stage training loop.
 
@@ -33,7 +41,31 @@ class ARVisualTrainingLoop(TrainingLoop):
             raise ValueError(
                 f"G-Tok model not found at {train_args.gtok_model_path}, cannot run AR training"
             )
-        gtok = GtokModel(GtokConfig())
+        gtok_config_kwargs = {
+            "image_size": config.image_size,
+        }
+        if train_args.gtok_cnn_channel_multipliers is not None:
+            gtok_config_kwargs["cnn_channel_multipliers"] = (
+                train_args.gtok_cnn_channel_multipliers
+            )
+        if train_args.gtok_cnn_latent_channels is not None:
+            gtok_config_kwargs["cnn_latent_channels"] = (
+                train_args.gtok_cnn_latent_channels
+            )
+        if train_args.gtok_quantizer_codebook_size is not None:
+            gtok_config_kwargs["quantizer_codebook_size"] = (
+                train_args.gtok_quantizer_codebook_size
+            )
+        if train_args.gtok_quantizer_code_dim is not None:
+            gtok_config_kwargs["quantizer_code_dim"] = (
+                train_args.gtok_quantizer_code_dim
+            )
+        if train_args.gtok_quantizer_entropy_loss_ratio is not None:
+            gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
+                train_args.gtok_quantizer_entropy_loss_ratio
+            )
+
+        gtok = GtokModel(GtokConfig(**gtok_config_kwargs))
         gtok.load(train_args.gtok_model_path, device=self.device)
         model = ARModel(config, gtok_model=gtok).to(self.device)
         if train_args.style_glyph_count < len(train_args.style_characters or []):
@@ -385,6 +417,39 @@ if __name__ == "__main__":
         type=str,
         help="Path to load the trained tokenizer model",
         default="models/gtok_model.pth",
+    )
+    parser.add_argument(
+        "--gtok-cnn-channel-multipliers",
+        type=_parse_int_list,
+        default=None,
+        help=(
+            "Optional comma-separated tokenizer CNN channel multipliers used when "
+            "instantiating the tokenizer for checkpoint loading (for example: 1,2,2,4,4)."
+        ),
+    )
+    parser.add_argument(
+        "--gtok-cnn-latent-channels",
+        type=int,
+        default=None,
+        help="Optional tokenizer latent channel count used for checkpoint loading.",
+    )
+    parser.add_argument(
+        "--gtok-quantizer-codebook-size",
+        type=int,
+        default=None,
+        help="Optional tokenizer codebook size used for checkpoint loading.",
+    )
+    parser.add_argument(
+        "--gtok-quantizer-code-dim",
+        type=int,
+        default=None,
+        help="Optional tokenizer code dimensionality used for checkpoint loading.",
+    )
+    parser.add_argument(
+        "--gtok-quantizer-entropy-loss-ratio",
+        type=float,
+        default=None,
+        help="Optional tokenizer entropy loss ratio used for checkpoint loading.",
     )
 
     args = parser.parse_args()
