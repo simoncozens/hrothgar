@@ -204,7 +204,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             style_chars.append(sanitized_style_chars)
             style_renderings.append(torch.stack(rendered_styles))
-            # descriptions.append(font.description_with_tags())
+            descriptions.append(font.description_with_tags())
 
         return {
             "char": chars,
@@ -212,7 +212,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
             "content_rendering": torch.stack(content_renderings),
             "style_renderings": torch.stack(style_renderings),
             "style_chars": torch.tensor(style_chars, dtype=torch.long),
-            # "description": descriptions,
+            "description": descriptions,
         }
 
 
