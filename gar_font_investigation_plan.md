@@ -182,6 +182,8 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Projection layer (0.52M) into visual feature space
   - 6-layer cross-attention adapter between text and visual style features
   - Concatenate text-fused representation with visual style features
+  - [x] Initial multimodal wiring landed: AR model adaptation path (`forward_adaptation` / `generate_adaptation`) now has runnable training integration in `Lib/hrothgar/ar/train.py` (`--mode multimodal`).
+  - [x] Added concrete adapter module in `Lib/hrothgar/ar/multimodal.py` (`TextStyleAdapter`) and frozen text-description encoder (`HashedDescriptionEncoder`) to consume dataset `description` strings.
 
 - [ ] **Extend for our style tags**
   - Approach A (simple): Format as structured text, e.g. "A font that is 80% happy, 20% formal, 90% script, with..."
