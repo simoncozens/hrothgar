@@ -1,6 +1,7 @@
 import os
 
 from hrothgar.gtok.dataset import GTokDatasetMaker
+from hrothgar.dataset import LATIN_CORE
 
 if "GOOGLE_FONTS_REPO" not in os.environ:
     raise ValueError("GOOGLE_FONTS_REPO environment variable not set, cannot run tests")
@@ -23,12 +24,12 @@ def test_data_loader():
     # Check we can read a few batches
     for _ in range(3):
         batch = next(iter(test_loader))
-        assert "gid" in batch
+        assert "char" in batch
         assert "rendering" in batch
         assert "description" in batch
 
         assert batch["rendering"].shape == (32, 3, 128, 128)
-        assert batch["gid"].shape == (32,)
+        assert batch["char"].shape == (32,)
 
 
 def test_no_crash_on_space():
@@ -38,3 +39,11 @@ def test_no_crash_on_space():
     for batch in test_loader:
         assert "rendering" in batch
     # If we make it through all batches, then we know we didn't crash on anything with no outlines
+
+
+def test_dataset_restricted_to_latin_core():
+    maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=8)
+    train = maker.train_set()
+    emitted_chars = {char for _font, char in train.order}
+    assert emitted_chars
+    assert emitted_chars <= set(LATIN_CORE)
