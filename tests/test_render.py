@@ -1,6 +1,8 @@
 import numpy as np
+import uharfbuzz as hb
+from pathlib import Path
 
-from hrothgar.render import _paste_bitmap_onto_canvas
+from hrothgar.render import _paste_bitmap_onto_canvas, render_gid
 
 
 def test_paste_bitmap_aligns_to_baseline() -> None:
@@ -54,3 +56,15 @@ def test_paste_bitmap_crops_negative_left_sidebearing() -> None:
     assert canvas[0, 0] == 127
     assert canvas[0, 1] == 0
     assert canvas[0, 2] == 255
+
+
+def test_variable_font_axis_positions_change_rendering() -> None:
+    font_path = Path("tests/dummy_repo/ofl/roboto/Roboto[wdth,wght].ttf")
+    face = hb.Face(hb.Blob.from_file_path(str(font_path)))
+    gid = hb.Font(face).get_nominal_glyph(ord("A"))
+
+    regular = render_gid(font_path, gid, size=128, axis_position=(100.0, 100.0))
+    heavy = render_gid(font_path, gid, size=128, axis_position=(900.0, 100.0))
+
+    assert regular.shape == heavy.shape
+    assert not np.allclose(regular, heavy)
