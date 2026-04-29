@@ -44,6 +44,13 @@ def test_no_crash_on_space():
 def test_dataset_restricted_to_latin_core():
     maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=8)
     train = maker.train_set()
-    emitted_chars = {char for _font, char in train.order}
+    emitted_chars = {char for _font, char, _axis in train.order}
     assert emitted_chars
     assert emitted_chars <= set(LATIN_CORE)
+
+
+def test_dataset_contains_axis_positions():
+    maker = GTokDatasetMaker(REPOSITORY_PATH, batch_size=8)
+    train = maker.train_set()
+    assert train.order
+    assert any(axis == [] for _font, _char, axis in train.order)

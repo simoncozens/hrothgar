@@ -1,11 +1,14 @@
 from functools import cached_property
+import itertools
 from pathlib import Path
-from typing import Dict, Optional, Self, Set, Union
+from typing import Dict, List, Optional, Self, Set, Union
+
 from hrothgar.render import render_gid
 
 import numpy as np
 import uharfbuzz as hb
 from gftools.util.google_fonts import Metadata
+from fontTools.ttLib import TTFont
 
 
 class Font:
@@ -14,18 +17,23 @@ class Font:
     hb_face: hb.Face
     path: Path
 
-    def render(self, char: int, size: int = 64) -> np.ndarray:
+    def render(
+        self, char: int, size: int = 64, axis_position: Optional[List[float]] = None
+    ) -> np.ndarray:
         """Render a single glyph as a (3, size, size) float32 array."""
         try:
             gid = hb.Font(self.hb_face).get_nominal_glyph(char)
-            return self.render_gid(gid, size)
+            return self.render_gid(gid, size, axis_position=axis_position)
         except Exception:
             return np.ones((3, size, size), dtype=np.float32)
 
-    def render_gid(self, gid: int, size: int = 64) -> np.ndarray:
+    def render_gid(
+        self, gid: int, size: int = 64, axis_position: Optional[List[float]] = None
+    ) -> np.ndarray:
         """Render a single glyph by GID as a (3, size, size) float32 array."""
         try:
-            return render_gid(self.path, gid, size)
+            axis_tuple = tuple(axis_position) if axis_position is not None else None
+            return render_gid(self.path, gid, size, axis_position=axis_tuple)
         except Exception:
             return np.ones((3, size, size), dtype=np.float32)
 
@@ -45,6 +53,23 @@ class Font:
     def tags(self) -> Dict[str, float]:
         """Empty tags — no metadata available for standalone fonts."""
         return {}
+
+    def sample_axis_positions(self, splits: int = 5) -> List[List[float]]:
+        """Sample axis positions for this font. If the font has no variable axes, returns a list of lists, with each internal list being the user-space location on the axes ordered by their order in the fvar table."""
+        if "fvar" not in self.hb_face.table_tags:
+            return [[]]
+        # Slow path
+        ttfont = TTFont(self.path)
+        axes = {
+            ix: np.linspace(axis.minValue, axis.maxValue, splits).tolist()
+            for ix, axis in enumerate(ttfont["fvar"].axes[0:5])
+            # Use first five axes to stop things like Amstelvar dominating the dataset
+        }
+        # Take Cartesian product, convert each set of coordinates to list in order
+        tags = axes.keys()
+        instances = itertools.product(*axes.values())
+        instances = [[instance[ix] for ix in tags] for instance in instances]
+        return [[]] + instances
 
 
 class GoogleFonts:

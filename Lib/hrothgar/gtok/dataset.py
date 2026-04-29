@@ -4,9 +4,69 @@ Loads the Google Fonts repository and produces batches of
 (char, rendering, description) tuples for training.
 """
 
-import torch
+from __future__ import annotations
 
-from hrothgar.dataset import Dataset, DatasetMaker, LATIN_CORE
+from typing import Iterable, List, Sequence
+
+import torch
+from torch.utils.data import Dataset as TorchDataset
+
+from hrothgar.dataset import DatasetMaker, LATIN_CORE
+
+
+def _limit_axis_positions(
+    positions: Sequence[Sequence[float]], max_positions: int
+) -> List[List[float]]:
+    """Downsample axis positions deterministically to cap dataset growth."""
+    if max_positions <= 0 or len(positions) <= max_positions:
+        return [list(pos) for pos in positions]
+    if max_positions == 1:
+        return [list(positions[0])]
+
+    step = (len(positions) - 1) / (max_positions - 1)
+    selected: List[List[float]] = []
+    selected_indices: set[int] = set()
+    for i in range(max_positions):
+        idx = int(round(i * step))
+        if idx in selected_indices:
+            continue
+        selected_indices.add(idx)
+        selected.append(list(positions[idx]))
+    return selected
+
+
+class GTokAxisDataset(TorchDataset):
+    """Latin-Core dataset expanded across sampled variable-font axis positions."""
+
+    def __init__(
+        self,
+        fonts: Iterable,
+        *,
+        codepoint_filter_fn,
+        axis_splits: int,
+        max_axis_positions_per_font: int,
+    ):
+        self.order = []
+        for font in fonts:
+            chars = sorted(codepoint_filter_fn(set(font.codepoints)))
+            axis_positions = font.sample_axis_positions(splits=axis_splits)
+            axis_positions = _limit_axis_positions(
+                axis_positions, max_axis_positions_per_font
+            )
+            for char in chars:
+                for axis_position in axis_positions:
+                    self.order.append((font, char, axis_position))
+
+    def __len__(self):
+        return len(self.order)
+
+    def __getitem__(self, idx):
+        font, char, axis_position = self.order[idx]
+        return {
+            "char": char,
+            "axis_position": axis_position,
+            "font": font,
+        }
 
 
 class GTokDatasetMaker(DatasetMaker):
@@ -14,6 +74,10 @@ class GTokDatasetMaker(DatasetMaker):
         target = kwargs.pop("target_codepoints", None)
         if target is None:
             target = set(LATIN_CORE)
+        self.axis_splits = kwargs.pop("axis_splits", 3)
+        self.max_axis_positions_per_font = kwargs.pop(
+            "max_axis_positions_per_font", 24
+        )
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
@@ -25,16 +89,32 @@ class GTokDatasetMaker(DatasetMaker):
         )
 
     def train_set(self):
-        return Dataset(self.train_fonts, codepoint_filter_fn=self.train_codepoint_filter)
+        return GTokAxisDataset(
+            self.train_fonts,
+            codepoint_filter_fn=self.train_codepoint_filter,
+            axis_splits=self.axis_splits,
+            max_axis_positions_per_font=self.max_axis_positions_per_font,
+        )
 
     def test_set(self):
-        return Dataset(self.test_fonts, codepoint_filter_fn=self.test_codepoint_filter)
+        return GTokAxisDataset(
+            self.test_fonts,
+            codepoint_filter_fn=self.test_codepoint_filter,
+            axis_splits=self.axis_splits,
+            max_axis_positions_per_font=self.max_axis_positions_per_font,
+        )
 
     def collate_fn(self, batch):
         chars = torch.tensor([item["char"] for item in batch])
         renderings = torch.stack(
             [
-                torch.tensor(item["font"].render(item["char"], size=self.image_size))
+                torch.tensor(
+                    item["font"].render(
+                        item["char"],
+                        size=self.image_size,
+                        axis_position=item["axis_position"],
+                    )
+                )
                 for item in batch
             ]
         )

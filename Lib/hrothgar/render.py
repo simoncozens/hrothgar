@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Sequence
 
 import freetype
 import numpy as np
@@ -84,7 +84,11 @@ cache = MatrixDiskCache(cache_dir="image_cache", maxsize=100)
 
 @cache.cache
 def render_gid(
-    font_path: str | Path, gid: int, size: int, trim_to_rsb: bool = False
+    font_path: str | Path,
+    gid: int,
+    size: int,
+    trim_to_rsb: bool = False,
+    axis_position: Optional[Sequence[float]] = None,
 ) -> np.ndarray:
     """Render a glyph by GID into a square image.
 
@@ -93,6 +97,8 @@ def render_gid(
         gid: Glyph index (GID) to render.
         size: Output image size. Output is (3, size, size).
         trim_to_rsb: If True, trim the output to the right sidebearing instead of the full square. This can be useful for certain applications but may produce variable-width outputs.
+        axis_position: Optional in-order list of variable-font user-space
+            design coordinates (matching fvar axis order).
 
     Returns:
         Float32 image in [0, 1], shaped (3, size, size).
@@ -103,6 +109,9 @@ def render_gid(
         raise ValueError("gid must be non-negative")
 
     face = freetype.Face(str(font_path))
+    if axis_position:
+        # freetype-py forwards this to FT_Set_Var_Design_Coordinates.
+        face.set_var_design_coords([float(v) for v in axis_position])
     upem = int(face.units_per_EM)
     if upem <= 0:
         raise ValueError(f"Font has invalid units-per-em: {upem}")
