@@ -47,7 +47,9 @@ def _pick_device() -> torch.device:
     return torch.device("cpu")
 
 
-def _render_pair(font: StandaloneFont, *, char: int | None, gid: int | None) -> tuple[np.ndarray, np.ndarray, str]:
+def _render_pair(
+    font: StandaloneFont, *, char: int | None, gid: int | None
+) -> tuple[np.ndarray, np.ndarray, str]:
     if gid is not None:
         low_res = render_gid(font.path, gid=gid, size=128)
         high_res = render_gid(font.path, gid=gid, size=512)
@@ -148,7 +150,9 @@ def main() -> None:
     model.load(str(args.model_path), device=device)
     model.eval()
 
-    low_res_tensor = torch.tensor(low_res, dtype=torch.float32, device=device).unsqueeze(0)
+    low_res_tensor = torch.tensor(
+        low_res, dtype=torch.float32, device=device
+    ).unsqueeze(0)
     with torch.no_grad():
         upscaled = model(low_res_tensor).squeeze(0).detach().cpu().numpy()
 

@@ -75,9 +75,7 @@ class GTokDatasetMaker(DatasetMaker):
         if target is None:
             target = set(LATIN_CORE)
         self.axis_splits = kwargs.pop("axis_splits", 3)
-        self.max_axis_positions_per_font = kwargs.pop(
-            "max_axis_positions_per_font", 24
-        )
+        self.max_axis_positions_per_font = kwargs.pop("max_axis_positions_per_font", 24)
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
