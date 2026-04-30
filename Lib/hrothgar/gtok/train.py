@@ -1,5 +1,8 @@
 import itertools
+import json
 import os
+from dataclasses import asdict
+from pathlib import Path
 
 import torch
 import torchvision
@@ -20,6 +23,13 @@ def _parse_int_list(value: str) -> list[int]:
     if not items:
         raise ValueError("Expected a comma-separated list of integers")
     return [int(item) for item in items]
+
+
+def _config_path_for_model(model_path: str) -> Path:
+    path = Path(model_path)
+    if path.suffix == ".pth":
+        return path.with_suffix(".conf.json")
+    return Path(str(path).replace(".pth", ".conf.json"))
 
 
 class GtokTrainingLoop(TrainingLoop):
@@ -45,6 +55,13 @@ class GtokTrainingLoop(TrainingLoop):
             )
 
         config = GtokConfig(**gtok_config_kwargs)
+        config_path = _config_path_for_model(train_args.model_path)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with config_path.open("w", encoding="utf-8") as f:
+            json.dump(asdict(config), f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"Saved GTok config to {config_path}")
+
         model = GtokModel(config).to(self.device)
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(

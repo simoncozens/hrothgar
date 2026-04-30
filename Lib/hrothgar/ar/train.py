@@ -1,6 +1,8 @@
 import itertools
+import json
 import os
 from contextlib import nullcontext
+from pathlib import Path
 from typing import List, Optional
 
 import torch
@@ -39,6 +41,24 @@ def _parse_int_list(value: str) -> List[int]:
     return [int(item) for item in items]
 
 
+def _gtok_config_path_for_model(model_path: str) -> Path:
+    path = Path(model_path)
+    if path.suffix == ".pth":
+        return path.with_suffix(".conf.json")
+    return Path(str(path).replace(".pth", ".conf.json"))
+
+
+def _load_gtok_config_from_sidecar(model_path: str) -> Optional[dict]:
+    config_path = _gtok_config_path_for_model(model_path)
+    if not config_path.exists():
+        return None
+    with config_path.open("r", encoding="utf-8") as f:
+        loaded = json.load(f)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Invalid G-Tok config JSON in {config_path}: expected object")
+    return loaded
+
+
 def _gtok_config_kwargs_from_args(train_args, image_size: int) -> dict:
     gtok_config_kwargs = {
         "image_size": image_size,
@@ -69,9 +89,20 @@ def _load_gtok_from_args(
         raise ValueError(
             f"G-Tok model not found at {train_args.gtok_model_path}, cannot run AR training"
         )
-    gtok = GtokModel(
-        GtokConfig(**_gtok_config_kwargs_from_args(train_args, image_size=image_size))
-    )
+    config_kwargs = _load_gtok_config_from_sidecar(train_args.gtok_model_path)
+    if config_kwargs is None:
+        config_kwargs = _gtok_config_kwargs_from_args(train_args, image_size=image_size)
+        print(
+            "Warning: no GTok sidecar config found; falling back to AR CLI tokenizer overrides."
+        )
+
+    if int(config_kwargs.get("image_size", image_size)) != image_size:
+        raise ValueError(
+            "AR image size must match the tokenizer config "
+            f"(AR image_size={image_size}, GTok image_size={config_kwargs.get('image_size')})."
+        )
+
+    gtok = GtokModel(GtokConfig(**config_kwargs))
     gtok.load(train_args.gtok_model_path, device=device)
     return gtok
 
@@ -807,33 +838,33 @@ if __name__ == "__main__":
         type=_parse_int_list,
         default=None,
         help=(
-            "Optional comma-separated tokenizer CNN channel multipliers used when "
-            "instantiating the tokenizer for checkpoint loading (for example: 1,2,2,4,4)."
+            "Fallback-only tokenizer CNN channel multipliers used if the GTok "
+            "sidecar config JSON is missing (for example: 1,2,2,4,4)."
         ),
     )
     parser.add_argument(
         "--gtok-cnn-latent-channels",
         type=int,
         default=None,
-        help="Optional tokenizer latent channel count used for checkpoint loading.",
+        help="Fallback-only tokenizer latent channel count used when sidecar config is missing.",
     )
     parser.add_argument(
         "--gtok-quantizer-codebook-size",
         type=int,
         default=None,
-        help="Optional tokenizer codebook size used for checkpoint loading.",
+        help="Fallback-only tokenizer codebook size used when sidecar config is missing.",
     )
     parser.add_argument(
         "--gtok-quantizer-code-dim",
         type=int,
         default=None,
-        help="Optional tokenizer code dimensionality used for checkpoint loading.",
+        help="Fallback-only tokenizer code dimensionality used when sidecar config is missing.",
     )
     parser.add_argument(
         "--gtok-quantizer-entropy-loss-ratio",
         type=float,
         default=None,
-        help="Optional tokenizer entropy loss ratio used for checkpoint loading.",
+        help="Fallback-only tokenizer entropy loss ratio used when sidecar config is missing.",
     )
     parser.add_argument(
         "--adaptation-alignment-weight",
