@@ -3,14 +3,16 @@ import json
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import Dict, Optional, Set
 
 import torch
 import torchvision
 import tqdm
+from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from hrothgar.gtok import compute_gtok_loss
-from hrothgar.gtok.dataset import GTokDatasetMaker
+from hrothgar.gtok import GtokLossWeights, compute_gtok_loss
+from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.gtok.vgg_loss import VGG
@@ -30,6 +32,19 @@ def _config_path_for_model(model_path: str) -> Path:
     if path.suffix == ".pth":
         return path.with_suffix(".conf.json")
     return Path(str(path).replace(".pth", ".conf.json"))
+
+
+def _read_targeted_validation_families(path: Optional[str]) -> Set[str]:
+    if not path:
+        return set()
+    families: Set[str] = set()
+    with Path(path).open("r", encoding="utf-8") as f:
+        for line in f:
+            family = line.strip()
+            if not family or family.startswith("#"):
+                continue
+            families.add(family)
+    return families
 
 
 class GtokTrainingLoop(TrainingLoop):
@@ -63,13 +78,58 @@ class GtokTrainingLoop(TrainingLoop):
         print(f"Saved GTok config to {config_path}")
 
         model = GtokModel(config).to(self.device)
+        self.loss_weights = GtokLossWeights(
+            l1=train_args.loss_weight_l1,
+            perceptual=train_args.loss_weight_perceptual,
+        )
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
             train_args.dataset_path, batch_size=16, image_size=config.image_size
         )
+        self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
+        self.targeted_test_loader = None
+        self.targeted_validation_families = _read_targeted_validation_families(
+            train_args.targeted_validation_families_file
+        )
+        if self.targeted_validation_families:
+            filtered_fonts = [
+                font
+                for font in maker.test_fonts
+                if getattr(font, "family", None) in self.targeted_validation_families
+            ]
+            if filtered_fonts:
+                dataset = GTokAxisDataset(
+                    filtered_fonts,
+                    codepoint_filter_fn=maker.test_codepoint_filter,
+                    axis_splits=maker.axis_splits,
+                    max_axis_positions_per_font=maker.max_axis_positions_per_font,
+                )
+                if len(dataset) > 0:
+                    self.targeted_test_loader = DataLoader(
+                        dataset,
+                        batch_size=16,
+                        shuffle=True,
+                        drop_last=False,
+                        collate_fn=maker.collate_fn,
+                    )
+                    print(
+                        "Enabled targeted validation for "
+                        f"{len(filtered_fonts)} families from "
+                        f"{train_args.targeted_validation_families_file}"
+                    )
+                else:
+                    print(
+                        "Targeted validation families matched fonts but produced "
+                        "no validation samples after filtering; skipping targeted validation."
+                    )
+            else:
+                print(
+                    "Targeted validation families file did not match any test families; "
+                    "skipping targeted validation."
+                )
         self.perceptual_loss_fn = VGG().to(self.device)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
@@ -91,8 +151,63 @@ class GtokTrainingLoop(TrainingLoop):
             gt_images,
             vq_loss_info,
             perceptual_loss_fn=self.perceptual_loss_fn,
+            weights=self.loss_weights,
         )
         return loss, loss_info
+
+    def _run_validation_pass(
+        self,
+        loader,
+        *,
+        metric_prefix: str,
+        recon_image_tag: str,
+        max_batches: int = 100,
+    ) -> Optional[torch.Tensor]:
+        val_metrics: Dict[str, list[torch.Tensor]] = {"ssim": [], "lpips": []}
+        bucket_metrics: Dict[str, Dict[str, list[torch.Tensor]]] = {}
+
+        for val_batch in tqdm.tqdm(
+            itertools.islice(loader, max_batches),
+            desc=metric_prefix,
+            total=max_batches,
+        ):
+            val_gt_images = val_batch["rendering"].to(self.device)
+            val_recon_images, _ = self.model(val_gt_images)
+            classifications = val_batch.get(
+                "classification", ["UNKNOWN"] * val_gt_images.shape[0]
+            )
+
+            for idx, cls in enumerate(classifications):
+                cls_name = cls or "UNKNOWN"
+                ssim_val = self.ssim(
+                    val_recon_images[idx : idx + 1], val_gt_images[idx : idx + 1]
+                )
+                lpips_val = self.lpips(
+                    val_recon_images[idx : idx + 1], val_gt_images[idx : idx + 1]
+                )
+                val_metrics["ssim"].append(ssim_val)
+                val_metrics["lpips"].append(lpips_val)
+                if cls_name not in bucket_metrics:
+                    bucket_metrics[cls_name] = {"ssim": [], "lpips": []}
+                bucket_metrics[cls_name]["ssim"].append(ssim_val)
+                bucket_metrics[cls_name]["lpips"].append(lpips_val)
+
+        if not val_metrics["ssim"]:
+            return None
+
+        avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
+        avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
+        self.write_scalar(f"{metric_prefix}/SSIM", avg_ssim)
+        self.write_scalar(f"{metric_prefix}/LPIPS", avg_lpips)
+
+        for cls_name, cls_metrics in bucket_metrics.items():
+            cls_ssim = torch.mean(torch.stack(cls_metrics["ssim"]))
+            cls_lpips = torch.mean(torch.stack(cls_metrics["lpips"]))
+            self.write_scalar(f"{metric_prefix}/Buckets/{cls_name}/SSIM", cls_ssim)
+            self.write_scalar(f"{metric_prefix}/Buckets/{cls_name}/LPIPS", cls_lpips)
+
+        self.visualize(loader=loader, image_tag=recon_image_tag)
+        return avg_ssim
 
     def post_train_step(self):
         # Do some validation every 1000 steps
@@ -100,35 +215,30 @@ class GtokTrainingLoop(TrainingLoop):
             return
         self.model.eval()
         with torch.no_grad():
-            # Compute SSIM and LPIPS on the validation set and log them to TensorBoard
-            val_metrics = {"ssim": [], "lpips": []}
-            # Just do 100 batches
-            for val_batch in tqdm.tqdm(
-                itertools.islice(self.test_loader, 100),
-                desc="Validation",
-                total=100,
-            ):
-                val_gt_images = val_batch["rendering"].to(self.device)
-                val_recon_images, _ = self.model(val_gt_images)
-                val_metrics["ssim"].append(self.ssim(val_recon_images, val_gt_images))
-                val_metrics["lpips"].append(self.lpips(val_recon_images, val_gt_images))
-            avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
-            avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
-            self.write_scalar("Validation/SSIM", avg_ssim)
-            self.write_scalar("Validation/LPIPS", avg_lpips)
-            self.checkpoint_if_best(avg_ssim)
-            self.visualize()
+            avg_ssim = self._run_validation_pass(
+                self.test_loader,
+                metric_prefix="Validation",
+                recon_image_tag="Reconstruction/GT_vs_Recon",
+            )
+            if avg_ssim is not None:
+                self.checkpoint_if_best(avg_ssim)
+            if self.targeted_test_loader is not None:
+                self._run_validation_pass(
+                    self.targeted_test_loader,
+                    metric_prefix="Validation/Targeted",
+                    recon_image_tag="Reconstruction/Targeted_GT_vs_Recon",
+                )
         self.model.train()
 
-    def visualize(self):
+    def visualize(self, loader, image_tag: str):
         # Also display some pretty pictures
-        val_batch = next(iter(self.test_loader))
+        val_batch = next(iter(loader))
         val_gt_images = val_batch["rendering"].to(self.device)
         val_recon_images, _ = self.model(val_gt_images)
         # Log a grid of reconstructed vs. target images
         recon_grid = torch.cat([val_gt_images[:16], val_recon_images[:16]], dim=0)
         self.writer.add_image(
-            "Reconstruction/GT_vs_Recon",
+            image_tag,
             torchvision.utils.make_grid(recon_grid, nrow=16),
             self.global_step,
         )
@@ -199,6 +309,28 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="Optional entropy regularization weight override for the VQ quantizer.",
+    )
+    parser.add_argument(
+        "--targeted-validation-families-file",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to a newline-delimited text file of font family names. "
+            "When provided, logs additional targeted validation metrics and "
+            "reconstruction previews using only these families."
+        ),
+    )
+    parser.add_argument(
+        "--loss-weight-l1",
+        type=float,
+        default=1.0,
+        help="Weight for the L1 reconstruction loss term.",
+    )
+    parser.add_argument(
+        "--loss-weight-perceptual",
+        type=float,
+        default=0.1,
+        help="Weight for the perceptual (VGG) loss term.",
     )
     args = parser.parse_args()
     if not args.dataset_path:
