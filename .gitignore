@@ -1,3 +1,5 @@
+*finetuned*pth
+*.png
 image_cache/
 /models/
 /scripts/
