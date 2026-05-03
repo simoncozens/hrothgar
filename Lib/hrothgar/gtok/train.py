@@ -11,6 +11,7 @@ import tqdm
 from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
+from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok import GtokLossWeights, compute_gtok_loss
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
@@ -95,9 +96,10 @@ class GtokTrainingLoop(TrainingLoop):
             train_args.targeted_validation_families_file
         )
         if self.targeted_validation_families:
+            gf = GoogleFonts(train_args.dataset_path)
             filtered_fonts = [
                 font
-                for font in maker.test_fonts
+                for font in gf.fonts
                 if getattr(font, "family", None) in self.targeted_validation_families
             ]
             if filtered_fonts:
