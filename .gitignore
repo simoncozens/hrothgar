@@ -1,3 +1,4 @@
+*.txt
 *finetuned*pth
 *.png
 image_cache/
