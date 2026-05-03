@@ -202,11 +202,30 @@ class GtokTrainingLoop(TrainingLoop):
         self.write_scalar(f"{metric_prefix}/SSIM", avg_ssim)
         self.write_scalar(f"{metric_prefix}/LPIPS", avg_lpips)
 
+        bucket_ssim_scalars: Dict[str, float] = {}
+        bucket_lpips_scalars: Dict[str, float] = {}
         for cls_name, cls_metrics in bucket_metrics.items():
-            cls_ssim = torch.mean(torch.stack(cls_metrics["ssim"]))
-            cls_lpips = torch.mean(torch.stack(cls_metrics["lpips"]))
-            self.write_scalar(f"{metric_prefix}/Buckets/{cls_name}/SSIM", cls_ssim)
-            self.write_scalar(f"{metric_prefix}/Buckets/{cls_name}/LPIPS", cls_lpips)
+            # Keep labels flat in TensorBoard for easy cross-class comparison.
+            label = cls_name.replace("/", "_")
+            bucket_ssim_scalars[label] = float(
+                torch.mean(torch.stack(cls_metrics["ssim"])).detach().cpu()
+            )
+            bucket_lpips_scalars[label] = float(
+                torch.mean(torch.stack(cls_metrics["lpips"])).detach().cpu()
+            )
+
+        if bucket_ssim_scalars:
+            self.writer.add_scalars(
+                f"{metric_prefix}/Buckets/SSIM",
+                bucket_ssim_scalars,
+                self.global_step,
+            )
+        if bucket_lpips_scalars:
+            self.writer.add_scalars(
+                f"{metric_prefix}/Buckets/LPIPS",
+                bucket_lpips_scalars,
+                self.global_step,
+            )
 
         self.visualize(loader=loader, image_tag=recon_image_tag)
         return avg_ssim
