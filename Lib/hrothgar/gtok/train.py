@@ -82,10 +82,14 @@ class GtokTrainingLoop(TrainingLoop):
         self.loss_weights = GtokLossWeights(
             l1=train_args.loss_weight_l1,
             perceptual=train_args.loss_weight_perceptual,
+            edge=train_args.loss_weight_edge,
         )
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
-            train_args.dataset_path, batch_size=16, image_size=config.image_size
+            train_args.dataset_path,
+            batch_size=16,
+            image_size=config.image_size,
+            class_balanced=train_args.class_balanced,
         )
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -352,6 +356,26 @@ if __name__ == "__main__":
         type=float,
         default=0.1,
         help="Weight for the perceptual (VGG) loss term.",
+    )
+    parser.add_argument(
+        "--loss-weight-edge",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight for the Sobel gradient-magnitude (edge) loss term. "
+            "Penalises contour blurring more strongly than pixel-space L1 alone. "
+            "Default 0.0 (disabled); try 0.5–2.0 to enable."
+        ),
+    )
+    parser.add_argument(
+        "--class-balanced",
+        action="store_true",
+        default=False,
+        help=(
+            "When set, uses inverse class-frequency weighted sampling during "
+            "training so that under-represented font classes (e.g. handwriting, "
+            "display) are sampled proportionally more often."
+        ),
     )
     args = parser.parse_args()
     if not args.dataset_path:

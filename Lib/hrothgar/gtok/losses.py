@@ -5,7 +5,9 @@ G-Tok tokenizer:
 
 1. L1 reconstruction loss between reconstructed and target glyph images
 2. Optional perceptual loss (e.g. VGG feature-space MSE)
-3. Vector-quantizer losses returned by the model (VQ, commitment, entropy)
+3. Edge/gradient loss: Sobel-filtered gradient magnitude difference, which
+   penalises contour blurring more strongly than pixel-space L1 alone.
+4. Vector-quantizer losses returned by the model (VQ, commitment, entropy)
 
 The public helper returns both the scalar total loss and an explicit dictionary
 of individual terms for TensorBoard logging.
@@ -18,12 +20,45 @@ import torch
 import torch.nn.functional as F
 
 
+def _sobel_gradient_magnitude(images: torch.Tensor) -> torch.Tensor:
+    """Compute per-pixel Sobel gradient magnitude for a batch of images.
+
+    Each spatial channel is filtered independently.  The result has the same
+    shape as the input and represents the local edge strength at each pixel.
+
+    Args:
+        images: Float tensor of shape ``(B, C, H, W)``.
+
+    Returns:
+        Gradient magnitude tensor of shape ``(B, C, H, W)``.
+    """
+    sobel_x = torch.tensor(
+        [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]],
+        dtype=images.dtype,
+        device=images.device,
+    ).view(1, 1, 3, 3)
+    sobel_y = torch.tensor(
+        [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]],
+        dtype=images.dtype,
+        device=images.device,
+    ).view(1, 1, 3, 3)
+
+    B, C, H, W = images.shape
+    flat = images.view(B * C, 1, H, W)
+    grad_x = F.conv2d(flat, sobel_x, padding=1)
+    grad_y = F.conv2d(flat, sobel_y, padding=1)
+    # Add small epsilon to avoid zero-gradient sqrt instability.
+    magnitude = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+    return magnitude.view(B, C, H, W)
+
+
 @dataclass(frozen=True)
 class GtokLossWeights:
     """Weights applied to each loss term in ``compute_gtok_loss``."""
 
     l1: float = 1.0
     perceptual: float = 0.1
+    edge: float = 0.0
     vq: float = 1.0
     commit: float = 1.0
     entropy: float = 1.0
@@ -75,6 +110,10 @@ def compute_gtok_loss(
     else:
         perceptual_loss = perceptual_loss_fn(reconstructed_images, target_images)
 
+    recon_edges = _sobel_gradient_magnitude(reconstructed_images)
+    target_edges = _sobel_gradient_magnitude(target_images)
+    edge_loss = F.l1_loss(recon_edges, target_edges)
+
     vq_loss_raw, commit_loss_raw, entropy_loss_raw, codebook_usage_raw = vq_loss_info
 
     vq_loss = (
@@ -98,6 +137,7 @@ def compute_gtok_loss(
 
     weighted_l1 = weights.l1 * l1_loss
     weighted_perceptual = weights.perceptual * perceptual_loss
+    weighted_edge = weights.edge * edge_loss
     weighted_vq = weights.vq * vq_loss
     weighted_commit = weights.commit * commit_loss
     weighted_entropy = weights.entropy * entropy_loss
@@ -105,6 +145,7 @@ def compute_gtok_loss(
     total_loss = (
         weighted_l1
         + weighted_perceptual
+        + weighted_edge
         + weighted_vq
         + weighted_commit
         + weighted_entropy
@@ -114,12 +155,14 @@ def compute_gtok_loss(
         "total": total_loss,
         "l1": l1_loss,
         "perceptual": perceptual_loss,
+        "edge": edge_loss,
         "vq": vq_loss,
         "commit": commit_loss,
         "entropy": entropy_loss,
         "codebook_usage": codebook_usage,
         "weighted_l1": weighted_l1,
         "weighted_perceptual": weighted_perceptual,
+        "weighted_edge": weighted_edge,
         "weighted_vq": weighted_vq,
         "weighted_commit": weighted_commit,
         "weighted_entropy": weighted_entropy,
