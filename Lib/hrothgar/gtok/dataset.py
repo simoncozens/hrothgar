@@ -117,9 +117,11 @@ class GTokDatasetMaker(DatasetMaker):
             ]
         )
         descriptions = [item["font"].description_with_tags() for item in batch]
+        classifications = [item["font"].classification() for item in batch]
 
         return {
             "char": chars,
             "rendering": renderings,
             "description": descriptions,
+            "classification": classifications,
         }

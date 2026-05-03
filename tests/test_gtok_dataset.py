@@ -27,9 +27,11 @@ def test_data_loader():
         assert "char" in batch
         assert "rendering" in batch
         assert "description" in batch
+        assert "classification" in batch
 
         assert batch["rendering"].shape == (32, 3, 128, 128)
         assert batch["char"].shape == (32,)
+        assert len(batch["classification"]) == 32
 
 
 def test_no_crash_on_space():
