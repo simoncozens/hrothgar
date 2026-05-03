@@ -54,6 +54,10 @@ class Font:
         """Empty tags — no metadata available for standalone fonts."""
         return {}
 
+    def classification(self) -> str:
+        """Coarse style classification used for bucketed training metrics."""
+        return "UNKNOWN"
+
     def sample_axis_positions(self, splits: int = 5) -> List[List[float]]:
         """Sample axis positions for this font. If the font has no variable axes, returns a list of lists, with each internal list being the user-space location on the axes ordered by their order in the fvar table."""
         if "fvar" not in self.hb_face.table_tags:
@@ -181,12 +185,23 @@ class GoogleFont(Font):
 
     def reference_font(self) -> Union[Self, None]:
         """Returns a reference font for this font, based on its stroke tags. This is used to provide a baseline for comparison when describing the font."""
-        if self.metadata.stroke == "SANS_SERIF":
+        if (
+            self.metadata.stroke == "SANS_SERIF"
+            or self.metadata.category == "SANS_SERIF"
+        ):
             return GoogleFonts.families_by_name.get("Noto Sans")
-        elif self.metadata.stroke == "SERIF":
+        elif self.metadata.stroke == "SERIF" or self.metadata.category == "SERIF":
             return GoogleFonts.families_by_name.get("Noto Serif")
         else:
             return GoogleFonts.families_by_name.get("Noto Sans")
+
+    def classification(self) -> str:
+        c = self.metadata.classifications or self.metadata.category
+        if isinstance(c, str):
+            return c
+        if c is None:
+            return "UNKNOWN"
+        return "/".join(c)
 
 
 class StandaloneFont(Font):
