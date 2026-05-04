@@ -69,6 +69,14 @@ class GtokTrainingLoop(TrainingLoop):
             gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
                 train_args.quantizer_entropy_loss_ratio
             )
+        if train_args.text_conditioning_model_name is not None:
+            gtok_config_kwargs["text_conditioning_model_name"] = (
+                train_args.text_conditioning_model_name
+            )
+        if train_args.text_conditioning_max_length is not None:
+            gtok_config_kwargs["text_conditioning_max_length"] = (
+                train_args.text_conditioning_max_length
+            )
 
         config = GtokConfig(**gtok_config_kwargs)
         config_path = _config_path_for_model(train_args.model_path)
@@ -151,7 +159,8 @@ class GtokTrainingLoop(TrainingLoop):
 
     def train_step(self, batch):
         gt_images = batch["rendering"].to(self.device)
-        recon_images, vq_loss_info = self.model(gt_images)
+        descriptions = batch.get("description")
+        recon_images, vq_loss_info = self.model(gt_images, descriptions=descriptions)
         loss, loss_info = compute_gtok_loss(
             recon_images,
             gt_images,
@@ -178,7 +187,11 @@ class GtokTrainingLoop(TrainingLoop):
             total=max_batches,
         ):
             val_gt_images = val_batch["rendering"].to(self.device)
-            val_recon_images, _ = self.model(val_gt_images)
+            val_descriptions = val_batch.get("description")
+            val_recon_images, _ = self.model(
+                val_gt_images,
+                descriptions=val_descriptions,
+            )
             classifications = val_batch.get(
                 "classification", ["UNKNOWN"] * val_gt_images.shape[0]
             )
@@ -259,7 +272,8 @@ class GtokTrainingLoop(TrainingLoop):
         # Also display some pretty pictures
         val_batch = next(iter(loader))
         val_gt_images = val_batch["rendering"].to(self.device)
-        val_recon_images, _ = self.model(val_gt_images)
+        val_descriptions = val_batch.get("description")
+        val_recon_images, _ = self.model(val_gt_images, descriptions=val_descriptions)
         # Log a grid of reconstructed vs. target images
         recon_grid = torch.cat([val_gt_images[:16], val_recon_images[:16]], dim=0)
         self.writer.add_image(
@@ -334,6 +348,21 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help="Optional entropy regularization weight override for the VQ quantizer.",
+    )
+    parser.add_argument(
+        "--text-conditioning-model-name",
+        type=str,
+        default="google/flan-t5-small",
+        help=(
+            "Optional Hugging Face model name for frozen text conditioning "
+            "(for example: google/flan-t5-small)."
+        ),
+    )
+    parser.add_argument(
+        "--text-conditioning-max-length",
+        type=int,
+        default=128,
+        help="Maximum tokenized length for text conditioning prompts.",
     )
     parser.add_argument(
         "--targeted-validation-families-file",
