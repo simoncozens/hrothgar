@@ -183,6 +183,28 @@ class GoogleFont(Font):
             desc += tag_descriptions
         return desc
 
+    def display_score(self) -> float:
+        """Compute the display-ness score for this font (0-100).
+        
+        Returns a numeric score indicating how display-like the font is,
+        based on its tag composition. Higher values indicate more display-oriented
+        characteristics (ornaments, effects, distinctive styling).
+        """
+        return compute_display_score(self.tags())
+
+    def description_with_tags_and_display(self) -> str:
+        """Returns the description with tags and explicit display conditioning.
+        
+        This version prepends a natural language description of the font's
+        display characteristics before the other tags. Useful for conditioning
+        the model to understand display vs. text fonts.
+        """
+        display = self.display_score()
+        display_descriptor = (
+            f"This is a {centile_to_text(int(display))} display font. "
+        )
+        return display_descriptor + self.description_with_tags()
+
     def reference_font(self) -> Union[Self, None]:
         """Returns a reference font for this font, based on its stroke tags. This is used to provide a baseline for comparison when describing the font."""
         if (
@@ -241,6 +263,83 @@ def centile_to_text(score: int) -> str:
         return "somewhat"
     else:
         return "very"
+
+
+def compute_display_score(tags: Dict[str, float]) -> float:
+    """Derive a display-ness score (0-100) from a font's tag composition.
+    
+    Display fonts are characterized by distinctive visual features like ornaments,
+    effects, and non-standard construction. This function identifies tags that
+    correlate with display typography and combines them into a single signal.
+    
+    Args:
+        tags: Dictionary of tag names to centile values (0-100).
+        
+    Returns:
+        A composite display score in the range [0, 100].
+    """
+    # Tags strongly indicating display characteristics
+    display_positive = {
+        '/Theme/Stencil': 2.0,
+        '/Theme/Inline': 2.0,
+        '/Theme/Pixel': 2.0,
+        '/Theme/Blackletter': 2.0,
+        '/Serif/Fat Face': 1.8,
+        '/Theme/Tuscan': 1.8,
+        '/Theme/Woodtype': 1.8,
+        '/Theme/Distressed': 1.4,
+        '/Theme/Art Deco': 1.6,
+        '/Theme/Medieval': 1.6,
+        '/Theme/Shaded': 1.6,
+        '/Expressive/Innovative': 1.2,
+        '/Theme/Brush': 1.2,
+        '/Expressive/Futuristic': 1.4,
+        '/Sans/Glyphic': 1.4,
+        '/Expressive/Excited': 1.0,
+        '/Sans/Superellipse': 1.2,
+        '/Script/Formal': 1.0,
+        '/Script/Handwritten': 0.8,
+        '/Slab/Clarendon': 0.6,
+    }
+    
+    # Tags indicating text/body-oriented fonts (reduce display score)
+    display_negative = {
+        '/Purpose/Easy Reading': -2.0,
+        '/Expressive/Calm': -1.2,
+        '/Expressive/Competent': -0.8,
+        '/Expressive/Sincere': -0.6,
+        '/Sans/Humanist': -0.8,
+        '/Serif/Old Style Garalde': -1.0,
+        '/Serif/Transitional': -1.0,
+        '/Serif/Modern': -0.8,
+        '/Slab/Humanist': -0.8,
+    }
+    
+    # Compute direct weighted scores
+    positive_score = 0.0
+    positive_count = 0
+    for tag, weight in display_positive.items():
+        if tag in tags:
+            positive_score += (tags[tag] / 100.0) * weight
+            positive_count += 1
+    
+    negative_score = 0.0
+    negative_count = 0
+    for tag, weight in display_negative.items():
+        if tag in tags:
+            negative_score += (tags[tag] / 100.0) * weight
+            negative_count += 1
+    
+    # Compute average contribution per present tag
+    # This avoids penalizing fonts that simply don't have many tags
+    positive_avg = positive_score / positive_count if positive_count > 0 else 0.0
+    negative_avg = abs(negative_score) / negative_count if negative_count > 0 else 0.0
+    
+    # Combine: positive pushes toward 100, negative pushes toward 0
+    # If no tags: score = 50 (neutral)
+    display_score = 50.0 + 50.0 * (positive_avg - negative_avg)
+    
+    return max(0.0, min(100.0, display_score))
 
 
 def dehtml(html: str) -> str:
