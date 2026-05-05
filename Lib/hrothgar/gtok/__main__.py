@@ -107,7 +107,7 @@ def main() -> None:
     if not args.model_path.exists():
         raise FileNotFoundError(f"G-Tok model file not found: {args.model_path}")
 
-    device = _pick_device()
+    device = pick_device()
     print(f"Using device: {device}")
 
     model, config = load_model(args.model_path, device)

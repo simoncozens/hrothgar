@@ -16,7 +16,6 @@ This script orchestrates a complete many-shot generation pass for one font:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -67,26 +66,6 @@ def _to_image(image_chw: np.ndarray) -> Image.Image:
     image_hwc = np.transpose(np.clip(image_chw, 0.0, 1.0), (1, 2, 0))
     image_u8 = (image_hwc * 255.0).round().astype(np.uint8)
     return Image.fromarray(image_u8)
-
-
-def _choose_reference_font(
-    dataset_path: Path,
-    reference_family: str,
-) -> Optional[GoogleFont]:
-    if reference_family == "none":
-        return None
-    gf = GoogleFonts(dataset_path)
-    if reference_family == "noto-sans":
-        family_name = "Noto Sans"
-    else:
-        family_name = "Noto Serif"
-
-    reference = gf.families_by_name.get(family_name)
-    if reference is None:
-        raise ValueError(
-            f"Could not find '{family_name}' in Google Fonts repo at {dataset_path}"
-        )
-    return reference
 
 
 def fine_tune_ar_nfa(
