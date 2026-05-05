@@ -12,6 +12,7 @@ import torch
 from hrothgar.googlefonts import StandaloneFont
 from hrothgar.render import render_gid
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
+from hrothgar.utils import pick_device
 
 
 def _parse_char(value: str) -> int:
@@ -37,14 +38,6 @@ def _array_for_plot(image_chw: np.ndarray) -> np.ndarray:
 def _save_image(path: Path, image_chw: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.imsave(path, _array_for_plot(image_chw), vmin=0.0, vmax=1.0)
-
-
-def _pick_device() -> torch.device:
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
 
 
 def _render_pair(
@@ -136,7 +129,7 @@ def main() -> None:
     font = StandaloneFont(args.font)
     low_res, high_res, label = _render_pair(font, char=char, gid=gid)
 
-    device = _pick_device()
+    device = pick_device()
     print(f"Using device: {device}")
 
     config = UpscalerConfig(

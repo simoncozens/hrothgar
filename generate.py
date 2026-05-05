@@ -42,16 +42,9 @@ from hrothgar.googlefonts import (
     find_google_font_by_basename,
 )
 from hrothgar.gtok import GtokFineTuneConfig, fine_tune_gtok_decoder_only
-from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
-
-
-def _pick_device() -> torch.device:
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
+from hrothgar.utils import pick_device
 
 
 def _parse_char(value: str) -> int:
@@ -94,32 +87,6 @@ def _choose_reference_font(
             f"Could not find '{family_name}' in Google Fonts repo at {dataset_path}"
         )
     return reference
-
-
-def _gtok_config_path_for_model(model_path: Path) -> Path:
-    if model_path.suffix == ".pth":
-        return model_path.with_suffix(".conf.json")
-    return Path(str(model_path).replace(".pth", ".conf.json"))
-
-
-def _load_gtok_config_from_sidecar(model_path: Path, image_size: int) -> GtokConfig:
-    config_path = _gtok_config_path_for_model(model_path)
-    if not config_path.exists():
-        return GtokConfig(image_size=image_size)
-    with config_path.open("r", encoding="utf-8") as f:
-        loaded = json.load(f)
-    if not isinstance(loaded, dict):
-        raise ValueError(f"Invalid G-Tok config JSON in {config_path}: expected object")
-    return GtokConfig(**loaded)
-
-
-def _save_gtok_config_sidecar(model_path: Path, config: GtokConfig) -> None:
-    from dataclasses import asdict
-
-    config_path = _gtok_config_path_for_model(model_path)
-    with config_path.open("w", encoding="utf-8") as f:
-        json.dump(asdict(config), f, indent=2, sort_keys=True)
-        f.write("\n")
 
 
 def fine_tune_ar_nfa(
@@ -313,27 +280,20 @@ def main() -> None:
 
     target_char = _parse_char(args.target_char)
     style_codepoints = _parse_codepoint_string(args.style_characters)
-    device = _pick_device()
+    device = pick_device()
     print(f"Using device: {device}")
 
-    google_fonts = GoogleFonts(args.dataset_path)
-    matched_google_font = find_google_font_by_basename(google_fonts, args.font_path)
+    matched_google_font = find_google_font_by_basename(
+        args.dataset_path, args.font_path
+    )
     font_description = matched_google_font.description_with_tags_and_display()
 
-    reference_font = _choose_reference_font(args.dataset_path, args.reference_family)
-    font = StandaloneFont(matched_google_font.path, reference=reference_font)
-
     # Load GTok and adapt only its decoder path on Latin Core glyphs.
-    gtok_config = _load_gtok_config_from_sidecar(
-        args.gtok_model_path,
-        image_size=args.image_size,
-    )
-    gtok = GtokModel(gtok_config).to(device)
-    gtok.load(str(args.gtok_model_path), device=device)
+    gtok, _gtok_config = load_gtok_model(args.gtok_model_path, device)
     if args.gtok_epochs > 0:
         fine_tune_gtok_decoder_only(
             model=gtok,
-            font=font,
+            font=matched_google_font,
             image_size=args.image_size,
             description=font_description,
             config=GtokFineTuneConfig(

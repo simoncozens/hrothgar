@@ -25,7 +25,7 @@ from hrothgar.ar.multimodal import (
     TextStyleAdapterConfig,
 )
 from hrothgar.gtok.llamagen_lpips import LPIPS
-from hrothgar.gtok.model import GtokModel, GtokConfig
+from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.utils import TrainingLoop
 
 
@@ -41,72 +41,6 @@ def _parse_int_list(value: str) -> List[int]:
     return [int(item) for item in items]
 
 
-def _gtok_config_path_for_model(model_path: str) -> Path:
-    path = Path(model_path)
-    if path.suffix == ".pth":
-        return path.with_suffix(".conf.json")
-    return Path(str(path).replace(".pth", ".conf.json"))
-
-
-def _load_gtok_config_from_sidecar(model_path: str) -> Optional[dict]:
-    config_path = _gtok_config_path_for_model(model_path)
-    if not config_path.exists():
-        return None
-    with config_path.open("r", encoding="utf-8") as f:
-        loaded = json.load(f)
-    if not isinstance(loaded, dict):
-        raise ValueError(f"Invalid G-Tok config JSON in {config_path}: expected object")
-    return loaded
-
-
-def _gtok_config_kwargs_from_args(train_args, image_size: int) -> dict:
-    gtok_config_kwargs = {
-        "image_size": image_size,
-    }
-    if train_args.gtok_cnn_channel_multipliers is not None:
-        gtok_config_kwargs["cnn_channel_multipliers"] = (
-            train_args.gtok_cnn_channel_multipliers
-        )
-    if train_args.gtok_cnn_latent_channels is not None:
-        gtok_config_kwargs["cnn_latent_channels"] = train_args.gtok_cnn_latent_channels
-    if train_args.gtok_quantizer_codebook_size is not None:
-        gtok_config_kwargs["quantizer_codebook_size"] = (
-            train_args.gtok_quantizer_codebook_size
-        )
-    if train_args.gtok_quantizer_code_dim is not None:
-        gtok_config_kwargs["quantizer_code_dim"] = train_args.gtok_quantizer_code_dim
-    if train_args.gtok_quantizer_entropy_loss_ratio is not None:
-        gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
-            train_args.gtok_quantizer_entropy_loss_ratio
-        )
-    return gtok_config_kwargs
-
-
-def _load_gtok_from_args(
-    train_args, *, image_size: int, device: torch.device
-) -> GtokModel:
-    if not os.path.exists(train_args.gtok_model_path):
-        raise ValueError(
-            f"G-Tok model not found at {train_args.gtok_model_path}, cannot run AR training"
-        )
-    config_kwargs = _load_gtok_config_from_sidecar(train_args.gtok_model_path)
-    if config_kwargs is None:
-        config_kwargs = _gtok_config_kwargs_from_args(train_args, image_size=image_size)
-        print(
-            "Warning: no GTok sidecar config found; falling back to AR CLI tokenizer overrides."
-        )
-
-    if int(config_kwargs.get("image_size", image_size)) != image_size:
-        raise ValueError(
-            "AR image size must match the tokenizer config "
-            f"(AR image_size={image_size}, GTok image_size={config_kwargs.get('image_size')})."
-        )
-
-    gtok = GtokModel(GtokConfig(**config_kwargs))
-    gtok.load(train_args.gtok_model_path, device=device)
-    return gtok
-
-
 class ARVisualTrainingLoop(TrainingLoop):
     """Visual-only AR stage training loop.
 
@@ -116,9 +50,8 @@ class ARVisualTrainingLoop(TrainingLoop):
 
     def post_init(self, train_args):
         config = ARModelConfig(image_size=train_args.image_size)
-        gtok = _load_gtok_from_args(
-            train_args,
-            image_size=config.image_size,
+        gtok, _gtok_config = load_gtok_model(
+            train_args.gtok_model_path,
             device=self.device,
         )
         model = ARModel(config, gtok_model=gtok).to(self.device)
@@ -842,39 +775,6 @@ if __name__ == "__main__":
             "Path to a pretrained visual AR checkpoint. Required for "
             "--mode multimodal."
         ),
-    )
-    parser.add_argument(
-        "--gtok-cnn-channel-multipliers",
-        type=_parse_int_list,
-        default=None,
-        help=(
-            "Fallback-only tokenizer CNN channel multipliers used if the GTok "
-            "sidecar config JSON is missing (for example: 1,2,2,4,4)."
-        ),
-    )
-    parser.add_argument(
-        "--gtok-cnn-latent-channels",
-        type=int,
-        default=None,
-        help="Fallback-only tokenizer latent channel count used when sidecar config is missing.",
-    )
-    parser.add_argument(
-        "--gtok-quantizer-codebook-size",
-        type=int,
-        default=None,
-        help="Fallback-only tokenizer codebook size used when sidecar config is missing.",
-    )
-    parser.add_argument(
-        "--gtok-quantizer-code-dim",
-        type=int,
-        default=None,
-        help="Fallback-only tokenizer code dimensionality used when sidecar config is missing.",
-    )
-    parser.add_argument(
-        "--gtok-quantizer-entropy-loss-ratio",
-        type=float,
-        default=None,
-        help="Fallback-only tokenizer entropy loss ratio used when sidecar config is missing.",
     )
     parser.add_argument(
         "--adaptation-alignment-weight",
