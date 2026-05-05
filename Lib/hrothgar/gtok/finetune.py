@@ -3,11 +3,20 @@
 This module intentionally keeps the tokenizer's encoder-side token semantics
 stable while allowing the decoder path to adapt to a specific font's raster
 style. The intended use is single-font adaptation before AR fine-tuning.
+
+Usage::
+
+    python -m hrothgar.gtok.finetune \
+        --model-path models/gtok_model.pth \
+        --output-model-path outputs/gtok_finetuned.pth \
+        --dataset-path /path/to/google/fonts \
+        --font-path /path/to/google/fonts/ofl/roboto/Roboto-Regular.ttf
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -15,8 +24,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from hrothgar.dataset import Dataset, LATIN_CORE
+from hrothgar.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.losses import GtokLossWeights, compute_gtok_loss
-from hrothgar.gtok.model import GtokModel
+from hrothgar.gtok.model import GtokModel, load_model
+from hrothgar.utils import pick_device
 
 
 def _latin_core_filter(font_codepoints: set[int]) -> set[int]:
@@ -139,3 +150,88 @@ def fine_tune_gtok_decoder_only(
 
         avg_loss = running_loss / max(len(loader), 1)
         progress(f"  GTok epoch {epoch + 1}: avg loss={avg_loss:.5f}")
+
+
+def _build_parser() -> "argparse.ArgumentParser":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Fine-tune a GTok checkpoint on one Google Font using decoder-only "
+            "adaptation over Latin Core glyphs."
+        )
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        required=True,
+        help="Path to the existing GTok checkpoint (.pth)",
+    )
+    parser.add_argument(
+        "--output-model-path",
+        type=Path,
+        required=True,
+        help="Path to write the fine-tuned GTok checkpoint (.pth)",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        required=True,
+        help="Path to the Google Fonts repository",
+    )
+    parser.add_argument(
+        "--font-path",
+        type=Path,
+        required=True,
+        help=(
+            "Path to the target font file. It is matched by basename against "
+            "fonts in --dataset-path."
+        ),
+    )
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if not args.model_path.exists():
+        raise FileNotFoundError(f"GTok model file not found: {args.model_path}")
+    if not args.dataset_path.exists():
+        raise FileNotFoundError(
+            f"Google Fonts repo path not found: {args.dataset_path}"
+        )
+    if not args.font_path.exists():
+        raise FileNotFoundError(f"Font file not found: {args.font_path}")
+
+    device = pick_device()
+    print(f"Using device: {device}")
+
+    model, config = load_model(args.model_path, device)
+    matched_font = find_google_font_by_basename(args.dataset_path, args.font_path)
+    description = matched_font.description_with_tags_and_display()
+
+    fine_tune_gtok_decoder_only(
+        model=model,
+        font=matched_font,
+        image_size=config.image_size,
+        config=GtokFineTuneConfig(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+        ),
+        device=device,
+        description=description,
+    )
+
+    args.output_model_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save(str(args.output_model_path))
+    config.save_sidecar(args.output_model_path)
+    print(f"Saved fine-tuned GTok checkpoint: {args.output_model_path}")
+
+
+if __name__ == "__main__":
+    main()
