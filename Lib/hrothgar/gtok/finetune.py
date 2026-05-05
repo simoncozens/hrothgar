@@ -78,6 +78,7 @@ def fine_tune_gtok_decoder_only(
     image_size: int,
     config: GtokFineTuneConfig,
     device: torch.device,
+    description: str | None = None,
     progress: Callable[[str], None] = print,
 ) -> None:
     """Adapt only the G-Tok decoder path on Latin Core glyphs from one font."""
@@ -115,9 +116,15 @@ def fine_tune_gtok_decoder_only(
         running_loss = 0.0
         for batch in tqdm(loader, desc=f"GTok epoch {epoch + 1}/{config.epochs}"):
             images = batch["rendering"].to(device)
+            descriptions = (
+                [description] * images.shape[0] if description is not None else None
+            )
 
             optimizer.zero_grad(set_to_none=True)
-            reconstructed_images, vq_loss_info = model(images)
+            reconstructed_images, vq_loss_info = model(
+                images,
+                descriptions=descriptions,
+            )
             loss, _ = compute_gtok_loss(
                 reconstructed_images,
                 images,

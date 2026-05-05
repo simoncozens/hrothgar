@@ -139,7 +139,7 @@ class NFADatasetMaker:
 
         Returns the same keys as ``ARPhase1DatasetMaker.collate_fn``:
         ``target_rendering``, ``content_rendering``, ``style_renderings``,
-        ``chars``, ``style_chars``, and ``descriptions``.
+        ``chars``, ``style_chars``, and ``description``.
         """
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
         target_renderings = torch.stack(
@@ -189,9 +189,12 @@ class NFADatasetMaker:
             style_chars_list.append(
                 torch.tensor(sanitized_style_chars, dtype=torch.long)
             )
-            descriptions.append(
-                font.description() if hasattr(font, "description") else ""
-            )
+            if hasattr(font, "description_with_tags_and_display"):
+                descriptions.append(font.description_with_tags_and_display())
+            elif hasattr(font, "description"):
+                descriptions.append(font.description())
+            else:
+                descriptions.append("")
 
         return {
             "target_rendering": target_renderings,
@@ -199,7 +202,7 @@ class NFADatasetMaker:
             "style_renderings": torch.stack(style_renderings),
             "chars": chars,
             "style_chars": torch.stack(style_chars_list),
-            "descriptions": descriptions,
+            "description": descriptions,
         }
 
     def train_loader(self) -> DataLoader:
@@ -332,11 +335,13 @@ class ARNFATrainingLoop(TrainingLoop):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
         style_images = batch["style_renderings"].to(self.device)
+        descriptions = batch.get("description")
 
         model_output = self.model(
             content_images,
             style_images,
             target_images=target_images,
+            descriptions=descriptions,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
@@ -423,10 +428,14 @@ class ARNFATrainingLoop(TrainingLoop):
                 val_target = val_batch["target_rendering"].to(self.device)
                 val_content = val_batch["content_rendering"].to(self.device)
                 val_style = val_batch["style_renderings"].to(self.device)
+                val_descriptions = val_batch.get("description")
 
                 with self._autocast_context():
                     val_output = self.model(
-                        val_content, val_style, target_images=val_target
+                        val_content,
+                        val_style,
+                        target_images=val_target,
+                        descriptions=val_descriptions,
                     )
                 val_metrics["ssim"].append(
                     self.ssim(val_output.reconstructed_images, val_target)
@@ -455,12 +464,19 @@ class ARNFATrainingLoop(TrainingLoop):
         val_target = val_batch["target_rendering"].to(self.device)
         val_content = val_batch["content_rendering"].to(self.device)
         val_style = val_batch["style_renderings"].to(self.device)
+        val_descriptions = val_batch.get("description")
 
         with self._autocast_context():
-            val_output = self.model(val_content, val_style, target_images=val_target)
+            val_output = self.model(
+                val_content,
+                val_style,
+                target_images=val_target,
+                descriptions=val_descriptions,
+            )
             autoregression_output = self.model.generate(
                 content_images=val_content,
                 style_reference_images=val_style,
+                descriptions=val_descriptions,
             )
 
         preview_count = min(8, val_target.shape[0])

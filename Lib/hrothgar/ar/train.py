@@ -200,11 +200,13 @@ class ARVisualTrainingLoop(TrainingLoop):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
         style_reference_images = batch["style_renderings"].to(self.device)
+        descriptions = batch.get("description")
 
         model_output = self.model(
             content_images,
             style_reference_images,
             target_images=target_images,
+            descriptions=descriptions,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
@@ -300,12 +302,14 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_target_images = val_batch["target_rendering"].to(self.device)
                 val_content_images = val_batch["content_rendering"].to(self.device)
                 val_style_images = val_batch["style_renderings"].to(self.device)
+                val_descriptions = val_batch.get("description")
 
                 with self._autocast_context():
                     val_output = self.model(
                         val_content_images,
                         val_style_images,
                         target_images=val_target_images,
+                        descriptions=val_descriptions,
                     )
                 val_metrics["ssim"].append(
                     self.ssim(val_output.reconstructed_images, val_target_images)
@@ -328,16 +332,19 @@ class ARVisualTrainingLoop(TrainingLoop):
         val_target_images = val_batch["target_rendering"].to(self.device)
         val_content_images = val_batch["content_rendering"].to(self.device)
         val_style_images = val_batch["style_renderings"].to(self.device)
+        val_descriptions = val_batch.get("description")
 
         with self._autocast_context():
             val_output = self.model(
                 val_content_images,
                 val_style_images,
                 target_images=val_target_images,
+                descriptions=val_descriptions,
             )
             autoregression_output = self.model.generate(
                 content_images=val_content_images,
                 style_reference_images=val_style_images,
+                descriptions=val_descriptions,
             )
 
         preview_count = min(8, val_target_images.shape[0])
@@ -516,6 +523,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             description_embeddings,
             target_images=target_images,
             run_decoder=self.run_decoder,
+            descriptions=batch.get("description"),
         )
         loss, loss_info = compute_ar_adaptation_loss(
             model_output,
@@ -630,6 +638,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                         val_description_embeddings,
                         target_images=val_target_images,
                         run_decoder=self.run_decoder,
+                        descriptions=val_batch.get("description"),
                     )
                     _loss, loss_info = compute_ar_adaptation_loss(
                         val_output,
@@ -678,6 +687,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                 val_description_embeddings,
                 target_images=val_target_images,
                 run_decoder=True,
+                descriptions=val_batch.get("description"),
             )
             autoregression_output = self.model.generate_adaptation(
                 content_images=val_content_images,

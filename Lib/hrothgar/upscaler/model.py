@@ -7,8 +7,10 @@ edge fidelity during upscaling.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -121,7 +123,7 @@ class UpscalerModel(SaveLoadModel):
         if not self.use_gtok_encoder:
             return
 
-        gtok_config = GtokConfig(image_size=self.config.low_res_size)
+        gtok_config = self._load_gtok_config()
         self.gtok = GtokModel(gtok_config)
         if self.config.gtok_model_path and os.path.exists(self.config.gtok_model_path):
             state_dict = torch.load(self.config.gtok_model_path, map_location="cpu")
@@ -142,6 +144,29 @@ class UpscalerModel(SaveLoadModel):
                 self.config.base_channels, self.config.base_channels, kernel_size=1
             ),
         )
+
+    def _load_gtok_config(self) -> GtokConfig:
+        if not self.config.gtok_model_path:
+            return GtokConfig(image_size=self.config.low_res_size)
+
+        model_path = Path(self.config.gtok_model_path)
+        if model_path.suffix == ".pth":
+            config_path = model_path.with_suffix(".conf.json")
+        else:
+            config_path = Path(str(model_path).replace(".pth", ".conf.json"))
+
+        if not config_path.exists():
+            return GtokConfig(image_size=self.config.low_res_size)
+
+        with config_path.open("r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"Invalid G-Tok config JSON in {config_path}: expected object"
+            )
+
+        loaded.setdefault("image_size", self.config.low_res_size)
+        return GtokConfig(**loaded)
 
     def _extract_gtok_feature_map(
         self, low_res: torch.Tensor

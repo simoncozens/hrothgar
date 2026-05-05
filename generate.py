@@ -16,6 +16,7 @@ This script orchestrates a complete many-shot generation pass for one font:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -34,7 +35,12 @@ from hrothgar.ar.dataset import (
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
 from hrothgar.ar.nfa import NFADatasetMaker
-from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
+from hrothgar.googlefonts import (
+    GoogleFont,
+    GoogleFonts,
+    StandaloneFont,
+    find_google_font_by_basename,
+)
 from hrothgar.gtok import GtokFineTuneConfig, fine_tune_gtok_decoder_only
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
@@ -71,17 +77,11 @@ def _to_image(image_chw: np.ndarray) -> Image.Image:
 
 
 def _choose_reference_font(
-    dataset_path: Optional[Path],
+    dataset_path: Path,
     reference_family: str,
 ) -> Optional[GoogleFont]:
     if reference_family == "none":
         return None
-    if dataset_path is None:
-        print(
-            "No --dataset-path provided; falling back to self-reference content glyphs."
-        )
-        return None
-
     gf = GoogleFonts(dataset_path)
     if reference_family == "noto-sans":
         family_name = "Noto Sans"
@@ -96,6 +96,32 @@ def _choose_reference_font(
     return reference
 
 
+def _gtok_config_path_for_model(model_path: Path) -> Path:
+    if model_path.suffix == ".pth":
+        return model_path.with_suffix(".conf.json")
+    return Path(str(model_path).replace(".pth", ".conf.json"))
+
+
+def _load_gtok_config_from_sidecar(model_path: Path, image_size: int) -> GtokConfig:
+    config_path = _gtok_config_path_for_model(model_path)
+    if not config_path.exists():
+        return GtokConfig(image_size=image_size)
+    with config_path.open("r", encoding="utf-8") as f:
+        loaded = json.load(f)
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Invalid G-Tok config JSON in {config_path}: expected object")
+    return GtokConfig(**loaded)
+
+
+def _save_gtok_config_sidecar(model_path: Path, config: GtokConfig) -> None:
+    from dataclasses import asdict
+
+    config_path = _gtok_config_path_for_model(model_path)
+    with config_path.open("w", encoding="utf-8") as f:
+        json.dump(asdict(config), f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
 def fine_tune_ar_nfa(
     *,
     model: ARModel,
@@ -106,6 +132,7 @@ def fine_tune_ar_nfa(
     beta1: float,
     beta2: float,
     device: torch.device,
+    description: str,
 ) -> None:
     train_set = maker.train_set
     if len(train_set) == 0:
@@ -135,12 +162,14 @@ def fine_tune_ar_nfa(
             target_images = batch["target_rendering"].to(device)
             content_images = batch["content_rendering"].to(device)
             style_images = batch["style_renderings"].to(device)
+            descriptions = [description] * target_images.shape[0]
 
             optimizer.zero_grad(set_to_none=True)
             output = model(
                 content_images,
                 style_images,
                 target_images=target_images,
+                descriptions=descriptions,
             )
             loss, _ = compute_ar_loss(output, target_images, weights=loss_weights)
             loss.backward()
@@ -207,7 +236,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dataset-path",
         type=Path,
         default=None,
-        help="Optional Google Fonts repo path for Noto reference glyphs",
+        help="Google Fonts repo path used for metadata and reference glyph lookup",
     )
     parser.add_argument(
         "--reference-family",
@@ -275,7 +304,9 @@ def main() -> None:
         raise FileNotFoundError(
             f"Upscaler checkpoint not found: {args.upscaler_model_path}"
         )
-    if args.dataset_path is not None and not args.dataset_path.exists():
+    if args.dataset_path is None:
+        raise ValueError("--dataset-path is required for Google Fonts metadata lookup")
+    if not args.dataset_path.exists():
         raise FileNotFoundError(
             f"Google Fonts repo path not found: {args.dataset_path}"
         )
@@ -285,17 +316,26 @@ def main() -> None:
     device = _pick_device()
     print(f"Using device: {device}")
 
+    google_fonts = GoogleFonts(args.dataset_path)
+    matched_google_font = find_google_font_by_basename(google_fonts, args.font_path)
+    font_description = matched_google_font.description_with_tags_and_display()
+
     reference_font = _choose_reference_font(args.dataset_path, args.reference_family)
-    font = StandaloneFont(args.font_path, reference=reference_font)
+    font = StandaloneFont(matched_google_font.path, reference=reference_font)
 
     # Load GTok and adapt only its decoder path on Latin Core glyphs.
-    gtok = GtokModel(GtokConfig(image_size=args.image_size)).to(device)
+    gtok_config = _load_gtok_config_from_sidecar(
+        args.gtok_model_path,
+        image_size=args.image_size,
+    )
+    gtok = GtokModel(gtok_config).to(device)
     gtok.load(str(args.gtok_model_path), device=device)
     if args.gtok_epochs > 0:
         fine_tune_gtok_decoder_only(
             model=gtok,
             font=font,
             image_size=args.image_size,
+            description=font_description,
             config=GtokFineTuneConfig(
                 epochs=args.gtok_epochs,
                 batch_size=args.gtok_batch_size,
@@ -313,6 +353,7 @@ def main() -> None:
                 args.output_dir / f"{args.font_path.stem}_gtok_decoder_finetuned.pth"
             )
         gtok.save(str(finetuned_gtok_path))
+        _save_gtok_config_sidecar(finetuned_gtok_path, gtok_config)
         print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
 
     # Load AR, restore GTok weights into it, then run NFA.
@@ -346,6 +387,7 @@ def main() -> None:
         beta1=args.nfa_beta1,
         beta2=args.nfa_beta2,
         device=device,
+        description=font_description,
     )
 
     finetuned_ar_path = args.finetuned_ar_path
@@ -397,6 +439,7 @@ def main() -> None:
         generated = ar_model.generate(
             content_images=content_images,
             style_reference_images=style_images,
+            descriptions=[font_description],
         )
         generated_128 = generated.reconstructed_images.squeeze(0).detach().cpu().numpy()
 

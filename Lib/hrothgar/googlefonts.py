@@ -252,6 +252,37 @@ class StandaloneFont(Font):
         return self._reference
 
 
+def find_google_font_by_basename(
+    google_fonts: GoogleFonts,
+    font_path: Union[str, Path],
+) -> GoogleFont:
+    """Find exactly one ``GoogleFont`` by matching font filename basename.
+
+    Args:
+        google_fonts: Loaded Google Fonts repository object.
+        font_path: Font path whose basename will be matched.
+
+    Returns:
+        The uniquely matched ``GoogleFont``.
+
+    Raises:
+        ValueError: If no matches are found or multiple matches exist.
+    """
+    basename = Path(font_path).name
+    matches = [font for font in google_fonts.fonts if font.path.name == basename]
+    if not matches:
+        raise ValueError(
+            f"Could not find a Google Font whose basename matches {basename}."
+        )
+    if len(matches) > 1:
+        families = sorted({font.family for font in matches})
+        raise ValueError(
+            "Multiple Google Fonts match basename "
+            f"{basename}: {families}. Please provide a uniquely identifying file."
+        )
+    return matches[0]
+
+
 def centile_to_text(score: int) -> str:
     if score < 20:
         return "not at all"
