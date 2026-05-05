@@ -51,7 +51,7 @@ class ARVisualTrainingLoop(TrainingLoop):
     def post_init(self, train_args):
         config = ARModelConfig(image_size=train_args.image_size)
         gtok, _gtok_config = load_gtok_model(
-            train_args.gtok_model_path,
+            Path(train_args.gtok_model_path),
             device=self.device,
         )
         model = ARModel(config, gtok_model=gtok).to(self.device)
