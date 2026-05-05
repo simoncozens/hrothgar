@@ -209,7 +209,8 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 - [ ] **NFA (Novel Font Adaptation)**
   - [x] Add LoRA adapters to Transformer decoder layers (implemented in `ARModel` with decoder-layer injection and LoRA-only checkpoint support)
   - [x] Add NFA fine-tuning loop scaffold (single-font dataset maker + training loop in `Lib/hrothgar/ar/nfa.py`)
-  - [x] Add end-to-end single-font generation orchestrator (`generate.py`) that fine-tunes GTok + AR(NFA), generates 128px glyphs, and upscales to 512px
+  - [x] Add end-to-end single-font generation orchestrator (`generate.py`) that adapts GTok and AR(NFA), generates 128px glyphs, and upscales to 512px
+  - [x] Move GTok adaptation into `Lib/hrothgar/gtok/finetune.py` and restrict it to decoder-only updates on Latin Core glyphs so AR token semantics remain stable
   - [ ] Fine-tune on N target font glyphs (paper uses 128; try 256/512 with our data)
   - [ ] 10 epochs, lr 2e-5
   - [ ] Measure: Time per font, quality improvement vs. number of adaptation glyphs
