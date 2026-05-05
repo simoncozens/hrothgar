@@ -36,8 +36,6 @@ from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
 from hrothgar.ar.nfa import NFADatasetMaker
 from hrothgar.googlefonts import (
     GoogleFont,
-    GoogleFonts,
-    StandaloneFont,
     find_google_font_by_basename,
 )
 from hrothgar.gtok import GtokFineTuneConfig, fine_tune_gtok_decoder_only
@@ -129,7 +127,7 @@ def fine_tune_ar_nfa(
 
 def _build_generation_inputs(
     *,
-    font: StandaloneFont,
+    font: GoogleFont,
     target_char: int,
     style_glyph_count: int,
     image_size: int,
@@ -268,7 +266,7 @@ def main() -> None:
     font_description = matched_google_font.description_with_tags_and_display()
 
     # Load GTok and adapt only its decoder path on Latin Core glyphs.
-    gtok, _gtok_config = load_gtok_model(args.gtok_model_path, device)
+    gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
     if args.gtok_epochs > 0:
         fine_tune_gtok_decoder_only(
             model=gtok,
@@ -292,7 +290,7 @@ def main() -> None:
                 args.output_dir / f"{args.font_path.stem}_gtok_decoder_finetuned.pth"
             )
         gtok.save(str(finetuned_gtok_path))
-        _save_gtok_config_sidecar(finetuned_gtok_path, gtok_config)
+        gtok_config.save_sidecar(finetuned_gtok_path)
         print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
 
     # Load AR, restore GTok weights into it, then run NFA.
@@ -310,7 +308,7 @@ def main() -> None:
     )
 
     nfa_maker = NFADatasetMaker(
-        font=font,
+        font=matched_google_font,
         batch_size=args.nfa_batch_size,
         image_size=args.image_size,
         style_glyph_count=args.style_glyph_count,
@@ -346,10 +344,10 @@ def main() -> None:
     # Missing target glyphs in the adapted font are expected in this workflow.
     # We only require that at least one content source can render the target
     # character (selected reference font or the target font itself).
-    reference_for_target = font.reference_font() or font
+    reference_for_target = matched_google_font.reference_font() or matched_google_font
     if not _font_has_codepoint(
         reference_for_target, target_char
-    ) and not _font_has_codepoint(font, target_char):
+    ) and not _font_has_codepoint(matched_google_font, target_char):
         raise ValueError(
             "Target character "
             f"U+{target_char:04X} is missing in both the target font and the "
@@ -358,7 +356,7 @@ def main() -> None:
             "target character."
         )
 
-    if not _font_has_codepoint(font, target_char):
+    if not _font_has_codepoint(matched_google_font, target_char):
         print(
             "Target character "
             f"U+{target_char:04X} is missing in the target font; using "
@@ -367,7 +365,7 @@ def main() -> None:
 
     ar_model.eval()
     content_images, style_images = _build_generation_inputs(
-        font=font,
+        font=matched_google_font,
         target_char=target_char,
         style_glyph_count=args.style_glyph_count,
         image_size=args.image_size,
