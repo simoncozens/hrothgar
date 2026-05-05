@@ -76,13 +76,13 @@ def _paste_bitmap_onto_canvas(
     canvas[dst_y0_clamped:dst_y1_clamped, dst_x0_clamped:dst_x1_clamped] = 255 - src
 
 
-from matrix_disk_cache import MatrixDiskCache
+# from matrix_disk_cache import MatrixDiskCache
 
 # Initialize the cache with an optional maxsize
-cache = MatrixDiskCache(cache_dir="image_cache")
+# cache = MatrixDiskCache(cache_dir="image_cache")
 
 
-@cache.cache
+# @cache.cache
 def render_gid(
     font_path: str | Path,
     gid: int,
