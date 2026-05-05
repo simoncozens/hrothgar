@@ -34,9 +34,8 @@ from hrothgar.ar.dataset import (
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
 from hrothgar.ar.nfa import NFADatasetMaker
-from hrothgar.dataset import AllGidsDataset
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
-from hrothgar.gtok import GtokLossWeights, compute_gtok_loss
+from hrothgar.gtok import GtokFineTuneConfig, fine_tune_gtok_decoder_only
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 
@@ -95,17 +94,6 @@ def _choose_reference_font(
             f"Could not find '{family_name}' in Google Fonts repo at {dataset_path}"
         )
     return reference
-
-
-def _gtok_collate(batch: list[dict], image_size: int) -> dict[str, torch.Tensor]:
-    renderings = torch.stack(
-        [
-            torch.tensor(item["font"].render_gid(item["gid"], size=image_size))
-            for item in batch
-        ]
-    )
-    gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
-    return {"gid": gids, "rendering": renderings}
 
 
 def fine_tune_ar_nfa(
@@ -203,7 +191,10 @@ def _build_generation_inputs(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Fine-tune AR NFA on one font and generate an upscaled glyph"
+        description=(
+            "Lightly fine-tune GTok + AR NFA on one font and generate an "
+            "upscaled glyph"
+        )
     )
     parser.add_argument("--font-path", type=Path, required=True)
     parser.add_argument("--target-char", type=str, required=True)
@@ -228,10 +219,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--output-size", type=int, default=512)
 
+    parser.add_argument("--gtok-epochs", type=int, default=10)
     parser.add_argument("--nfa-epochs", type=int, default=20)
 
+    parser.add_argument("--gtok-batch-size", type=int, default=16)
     parser.add_argument("--nfa-batch-size", type=int, default=8)
 
+    parser.add_argument("--gtok-learning-rate", type=float, default=1e-5)
     parser.add_argument("--nfa-learning-rate", type=float, default=2e-5)
     parser.add_argument("--nfa-beta1", type=float, default=0.9)
     parser.add_argument("--nfa-beta2", type=float, default=0.95)
@@ -247,6 +241,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/generated"))
+    parser.add_argument(
+        "--finetuned-gtok-path",
+        type=Path,
+        default=None,
+        help="Optional output path for the decoder-only fine-tuned GTok weights",
+    )
     parser.add_argument(
         "--finetuned-ar-path",
         type=Path,
@@ -288,11 +288,32 @@ def main() -> None:
     reference_font = _choose_reference_font(args.dataset_path, args.reference_family)
     font = StandaloneFont(args.font_path, reference=reference_font)
 
-    # Load GTok
+    # Load GTok and adapt only its decoder path on Latin Core glyphs.
     gtok = GtokModel(GtokConfig(image_size=args.image_size)).to(device)
     gtok.load(str(args.gtok_model_path), device=device)
+    if args.gtok_epochs > 0:
+        fine_tune_gtok_decoder_only(
+            model=gtok,
+            font=font,
+            image_size=args.image_size,
+            config=GtokFineTuneConfig(
+                epochs=args.gtok_epochs,
+                batch_size=args.gtok_batch_size,
+                learning_rate=args.gtok_learning_rate,
+            ),
+            device=device,
+        )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    finetuned_gtok_path = args.gtok_model_path
+    if args.gtok_epochs > 0:
+        finetuned_gtok_path = args.finetuned_gtok_path
+        if finetuned_gtok_path is None:
+            finetuned_gtok_path = (
+                args.output_dir / f"{args.font_path.stem}_gtok_decoder_finetuned.pth"
+            )
+        gtok.save(str(finetuned_gtok_path))
+        print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
 
     # Load AR, restore GTok weights into it, then run NFA.
     ar_model = ARModel(ARModelConfig(image_size=args.image_size), gtok_model=gtok).to(
@@ -386,7 +407,7 @@ def main() -> None:
             high_res_size=args.output_size,
             use_gtok_encoder=True,
             use_gtok_vit_features=True,
-            gtok_model_path=str(args.gtok_model_path),
+            gtok_model_path=str(finetuned_gtok_path),
         )
     ).to(device)
     upscaler.load(str(args.upscaler_model_path), device=device)
