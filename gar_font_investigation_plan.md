@@ -135,6 +135,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Codebook utilization statistics (dead code ratio)
   - Linear probing: can frozen features predict font style and character identity?
   - Robust reconstruction under local noise
+  - [x] Added optional Flan-T5 text conditioning path in G-Tok and threaded dataset descriptions into tokenizer training.
 
 - [x] **Key decision: resolution**
   - Initial 64×64 runs train stably and validate the architecture direction
