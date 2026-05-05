@@ -18,15 +18,15 @@ three PNG files to the output directory:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from hrothgar.googlefonts import GoogleFonts, find_google_font_by_basename
-from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.googlefonts import find_google_font_by_basename
+from hrothgar.gtok.model import load_model
+from hrothgar.utils import pick_device
 
 
 def _parse_char(value: str) -> int:
@@ -38,35 +38,6 @@ def _parse_char(value: str) -> int:
             "--char must be a single Unicode character or a U+XXXX codepoint"
         )
     return ord(value)
-
-
-def _pick_device() -> torch.device:
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
-
-
-def _load_model(model_path: Path, device: torch.device) -> tuple[GtokModel, GtokConfig]:
-    """Load GtokModel from weights and its sidecar config JSON.
-
-    Raises ``FileNotFoundError`` if either the weights or the sidecar are missing.
-    """
-    config_path = model_path.with_suffix(".conf.json")
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"Sidecar config not found: {config_path}\n"
-            "Run GTok training first so the .conf.json is written alongside the .pth."
-        )
-    with config_path.open("r", encoding="utf-8") as fh:
-        config_dict = json.load(fh)
-    config = GtokConfig(**config_dict)
-
-    model = GtokModel(config).to(device)
-    model.load(str(model_path), device=device)
-    model.eval()
-    return model, config
 
 
 def _chw_to_hwc(arr: np.ndarray) -> np.ndarray:
@@ -139,12 +110,11 @@ def main() -> None:
     device = _pick_device()
     print(f"Using device: {device}")
 
-    model, config = _load_model(args.model_path, device)
+    model, config = load_model(args.model_path, device)
     image_size = config.image_size
     print(f"Loaded G-Tok model (image_size={image_size})")
 
-    google_fonts = GoogleFonts(args.dataset_path)
-    font = find_google_font_by_basename(google_fonts, args.font)
+    font = find_google_font_by_basename(args.dataset_path, args.font)
     description = font.description_with_tags_and_display()
 
     if args.gid is not None:

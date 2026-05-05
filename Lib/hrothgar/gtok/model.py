@@ -13,6 +13,8 @@ References:
   - LlamaGen tokenizer: https://github.com/FoundationVision/LlamaGen
 """
 
+import json
+from pathlib import Path
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
@@ -75,6 +77,15 @@ class GtokConfig:
                 f"(got vit_hidden_dim={self.vit_hidden_dim}, vit_num_heads={self.vit_num_heads})"
             )
         assert self.cnn_channel_multipliers is not None
+
+    def save_sidecar(self, model_path: Path) -> None:
+        from dataclasses import asdict
+
+        config_path = Path(str(model_path).replace(".pth", ".conf.json"))
+        with config_path.open("w", encoding="utf-8") as f:
+            json.dump(asdict(self), f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"Saved GTok config to {config_path}")
 
 
 class FrozenFlanT5Conditioner(nn.Module):
@@ -775,3 +786,24 @@ class GtokModel(SaveLoadModel):
         quantized, loss_info = self.encode(images, descriptions=descriptions)
         reconstructed = self.decode(quantized, descriptions=descriptions)
         return reconstructed, loss_info
+
+
+def load_model(model_path: Path, device: torch.device) -> tuple[GtokModel, GtokConfig]:
+    """Load GtokModel from weights and its sidecar config JSON.
+
+    Raises ``FileNotFoundError`` if either the weights or the sidecar are missing.
+    """
+    config_path = model_path.with_suffix(".conf.json")
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Sidecar config not found: {config_path}\n"
+            "Run GTok training first so the .conf.json is written alongside the .pth."
+        )
+    with config_path.open("r", encoding="utf-8") as fh:
+        config_dict = json.load(fh)
+    config = GtokConfig(**config_dict)
+
+    model = GtokModel(config).to(device)
+    model.load(str(model_path), device=device)
+    model.eval()
+    return model, config
