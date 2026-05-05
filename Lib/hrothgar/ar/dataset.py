@@ -204,7 +204,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             style_chars.append(sanitized_style_chars)
             style_renderings.append(torch.stack(rendered_styles))
-            descriptions.append(font.description_with_tags())
+            descriptions.append(font.description_with_tags_and_display())
 
         return {
             "char": chars,

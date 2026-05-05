@@ -288,6 +288,26 @@ class TestGtokModel:
             vq_loss is not None or not model.training
         ), "VQ loss should be computed in training"
 
+    def test_forward_accepts_descriptions_without_text_conditioner(self):
+        """Descriptions should be accepted even when text conditioning is disabled."""
+        config = GtokConfig(
+            vit_num_layers=2,
+            vit_hidden_dim=128,
+            vit_mlp_dim=512,
+            vit_num_heads=4,
+            text_conditioning_model_name=None,
+        )
+        model = GtokModel(config)
+        model.eval()
+
+        images = torch.randn(2, 3, 128, 128)
+        descriptions = ["display serif", "humanist sans"]
+
+        with torch.no_grad():
+            reconstructed, _ = model(images, descriptions=descriptions)
+
+        assert reconstructed.shape == images.shape
+
     def test_encode_decode_roundtrip(self):
         """Test encode-decode roundtrip."""
         config = GtokConfig(vit_num_layers=2, vit_hidden_dim=128, vit_num_heads=4)
