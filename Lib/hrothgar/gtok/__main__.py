@@ -2,8 +2,8 @@
 
 Usage::
 
-    python -m hrothgar.gtok path/to/font.ttf --char A --model-path models/gtok_model.pth
-    python -m hrothgar.gtok path/to/font.ttf --gid 5   --model-path models/gtok_model.pth
+    python -m hrothgar.gtok path/to/font.ttf --dataset-path path/to/google/fonts --char A --model-path models/gtok_model.pth
+    python -m hrothgar.gtok path/to/font.ttf --dataset-path path/to/google/fonts --gid 5   --model-path models/gtok_model.pth
 
 Loads the model config from the sidecar JSON (``<model_path>.conf.json``),
 constructs the G-Tok model, loads its weights, renders the requested glyph
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from hrothgar.googlefonts import StandaloneFont
+from hrothgar.googlefonts import GoogleFonts, find_google_font_by_basename
 from hrothgar.gtok.model import GtokConfig, GtokModel
 
 
@@ -88,6 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("font", type=Path, help="Path to a font file (.ttf / .otf)")
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        required=True,
+        help="Path to a Google Fonts repository used for metadata lookup",
+    )
 
     glyph_group = parser.add_mutually_exclusive_group(required=True)
     glyph_group.add_argument(
@@ -123,6 +129,10 @@ def main() -> None:
 
     if not args.font.exists():
         raise FileNotFoundError(f"Font file not found: {args.font}")
+    if not args.dataset_path.exists():
+        raise FileNotFoundError(
+            f"Google Fonts repo path not found: {args.dataset_path}"
+        )
     if not args.model_path.exists():
         raise FileNotFoundError(f"G-Tok model file not found: {args.model_path}")
 
@@ -133,7 +143,9 @@ def main() -> None:
     image_size = config.image_size
     print(f"Loaded G-Tok model (image_size={image_size})")
 
-    font = StandaloneFont(args.font)
+    google_fonts = GoogleFonts(args.dataset_path)
+    font = find_google_font_by_basename(google_fonts, args.font)
+    description = font.description_with_tags_and_display()
 
     if args.gid is not None:
         label = f"gid_{args.gid}"
@@ -152,7 +164,7 @@ def main() -> None:
     )
 
     with torch.no_grad():
-        reconstructed_tensor, _ = model(input_tensor)
+        reconstructed_tensor, _ = model(input_tensor, descriptions=[description])
 
     reconstructed = reconstructed_tensor.squeeze(0).detach().cpu().numpy()
     diff = np.abs(rendered - reconstructed) * 4.0  # amplify ×4 for visibility

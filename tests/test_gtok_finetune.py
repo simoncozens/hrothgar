@@ -45,7 +45,9 @@ def test_configure_decoder_only_finetuning_leaves_some_parameters_trainable() ->
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
     )
     frozen_parameter_count = sum(
-        parameter.numel() for parameter in model.parameters() if not parameter.requires_grad
+        parameter.numel()
+        for parameter in model.parameters()
+        if not parameter.requires_grad
     )
 
     assert trainable_parameter_count > 0

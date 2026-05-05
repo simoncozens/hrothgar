@@ -733,24 +733,47 @@ class ARModel(SaveLoadModel):
         self,
         conditioning_tokens: torch.Tensor,
         target_token_indices: torch.Tensor,
+        descriptions: Optional[List[str]] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
             target_token_indices
         )
         logits = self.token_decoder(decoder_input_tokens, conditioning_tokens)
-        soft_token_embeddings, reconstructed_images = self.soft_decode(logits)
+        soft_token_embeddings, reconstructed_images = self.soft_decode(
+            logits,
+            descriptions=descriptions,
+        )
         return logits, soft_token_embeddings, reconstructed_images
 
     def target_token_indices_from_images(
-        self, target_images: torch.Tensor
+        self,
+        target_images: torch.Tensor,
+        descriptions: Optional[List[str]] = None,
     ) -> torch.Tensor:
         """Encode target glyph images into G-Tok codebook indices."""
+        batch_size = target_images.shape[0]
+
         cnn_out = self.gtok.cnn_encoder(target_images)
-        batch_size, channels, height, width = cnn_out.shape
+        _batch_size, channels, height, width = cnn_out.shape
         cnn_tokens = cnn_out.permute(0, 2, 3, 1).reshape(
-            batch_size, height * width, channels
+            batch_size,
+            height * width,
+            channels,
         )
         vit_tokens = self.gtok.vit_encoder(cnn_tokens)[:, 1:, :]
+
+        text_embeddings = self.gtok._description_embeddings(
+            descriptions,
+            batch_size=batch_size,
+            device=target_images.device,
+        )
+        vit_tokens = self.gtok._apply_feature_affine(
+            vit_tokens,
+            text_embeddings,
+            self.gtok.encoder_text_projection,
+            self.gtok.encoder_text_affine,
+        )
+
         quantizer_inputs = self.gtok.vit_encoder_to_quantizer(vit_tokens)
         quantizer_inputs = quantizer_inputs.reshape(
             batch_size,
@@ -758,6 +781,7 @@ class ARModel(SaveLoadModel):
             self.token_grid_width,
             self.codebook_dim,
         ).permute(0, 3, 1, 2)
+
         _quantized, _loss_info, indices_info = self.gtok.quantizer(quantizer_inputs)
         token_indices = indices_info[2].reshape(batch_size, self.sequence_length)
         return token_indices
@@ -769,11 +793,18 @@ class ARModel(SaveLoadModel):
             codebook = F.normalize(codebook, p=2, dim=-1)
         return codebook
 
-    def soft_decode(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def soft_decode(
+        self,
+        logits: torch.Tensor,
+        descriptions: Optional[List[str]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Project token logits onto the G-Tok codebook and decode to images."""
         probabilities = torch.softmax(logits, dim=-1)
         soft_token_embeddings = torch.matmul(probabilities, self.codebook_embeddings())
-        reconstructed_images = self.gtok.decode(soft_token_embeddings)
+        reconstructed_images = self.gtok.decode(
+            soft_token_embeddings,
+            descriptions=descriptions,
+        )
         return soft_token_embeddings, reconstructed_images
 
     def forward(
@@ -783,6 +814,7 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
+        descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Run teacher-forced AR decoding for visual pretraining.
 
@@ -802,12 +834,14 @@ class ARModel(SaveLoadModel):
                 )
             with torch.no_grad():
                 target_token_indices = self.target_token_indices_from_images(
-                    target_images
+                    target_images,
+                    descriptions=descriptions,
                 )
         logits, soft_token_embeddings, reconstructed_images = (
             self._decode_with_teacher_forcing(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=target_token_indices,
+                descriptions=descriptions,
             )
         )
 
@@ -828,6 +862,7 @@ class ARModel(SaveLoadModel):
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
         run_decoder: bool = False,
+        descriptions: Optional[List[str]] = None,
     ) -> ARAdaptationOutput:
         """Forward path for visual-language adaptation mode.
 
@@ -874,12 +909,14 @@ class ARModel(SaveLoadModel):
                     )
                 with torch.no_grad():
                     target_token_indices = self.target_token_indices_from_images(
-                        target_images
+                        target_images,
+                        descriptions=descriptions,
                     )
             logits, soft_token_embeddings, reconstructed_images = (
                 self._decode_with_teacher_forcing(
                     conditioning_tokens=multimodal_conditioning_tokens,
                     target_token_indices=target_token_indices,
+                    descriptions=descriptions,
                 )
             )
 
@@ -899,6 +936,7 @@ class ARModel(SaveLoadModel):
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
+        descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Greedily decode a full token sequence and reconstruct the glyph image."""
         conditioning_tokens = self.aggregate_conditioning(
@@ -927,7 +965,10 @@ class ARModel(SaveLoadModel):
             ),
             conditioning_tokens,
         )
-        soft_token_embeddings, reconstructed_images = self.soft_decode(logits)
+        soft_token_embeddings, reconstructed_images = self.soft_decode(
+            logits,
+            descriptions=descriptions,
+        )
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
