@@ -983,6 +983,7 @@ class ARModel(SaveLoadModel):
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
         text_embeddings: torch.Tensor,
+        descriptions: Optional[list[str]] = None,
     ) -> ARAdaptationOutput:
         """Greedy generation path that uses multimodal conditioning tokens."""
         content_tokens = self.encode_content(content_images)
@@ -1032,6 +1033,7 @@ class ARModel(SaveLoadModel):
             self._decode_with_teacher_forcing(
                 conditioning_tokens=multimodal_conditioning_tokens,
                 target_token_indices=predicted_token_indices_tensor,
+                descriptions=descriptions,
             )
         )
 

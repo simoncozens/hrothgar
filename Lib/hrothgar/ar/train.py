@@ -625,6 +625,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                 content_images=val_content_images,
                 style_reference_images=val_style_images,
                 text_embeddings=val_description_embeddings,
+                descriptions=val_batch.get("description"),
             )
 
         preview_count = min(8, val_target_images.shape[0])
