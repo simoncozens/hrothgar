@@ -65,6 +65,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
+            class_balanced=train_args.class_balanced,
         )
 
         self.optimizer = torch.optim.AdamW(
@@ -363,6 +364,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
+            class_balanced=train_args.class_balanced,
         )
 
         trainable_parameters = [p for p in model.parameters() if p.requires_grad]
@@ -686,6 +688,11 @@ if __name__ == "__main__":
         type=int,
         default=32,
         help="Batch size (paper default: 32)",
+    )
+    parser.add_argument(
+        "--class-balanced",
+        action="store_true",
+        help="Enable batch-level class-balanced sampling for AR train loader",
     )
     parser.add_argument(
         "--style-glyph-count",
