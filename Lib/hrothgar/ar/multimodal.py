@@ -22,7 +22,6 @@ from typing import Sequence
 import torch
 import torch.nn as nn
 
-
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -219,9 +218,12 @@ class TextStyleAdapter(nn.Module):
             ]
         )
         self.style_out = nn.Linear(config.adapter_hidden_dim, config.style_token_dim)
-        self.output_norm = nn.LayerNorm(config.style_token_dim, eps=1e-6)
 
-        # Zero init starts the adapter as a near-identity mapping.
+        # Zero-initialise the output projection so the adapter starts as a true
+        # identity (output == input) rather than LayerNorm(input).  This is
+        # critical: the frozen aggregator and AR decoder were trained on raw
+        # style-encoder outputs; any scale change at initialisation would shift
+        # their input distribution and break autoregressive generation.
         nn.init.zeros_(self.style_out.weight)
         nn.init.zeros_(self.style_out.bias)
 
@@ -260,4 +262,4 @@ class TextStyleAdapter(nn.Module):
             style_hidden = block(style_hidden, text_hidden)
 
         delta = self.style_out(style_hidden)
-        return self.output_norm(residual + delta)
+        return residual + delta
