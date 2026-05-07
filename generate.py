@@ -33,6 +33,12 @@ from hrothgar.ar.dataset import (
 )
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
+from hrothgar.ar.multimodal import (
+    HashedDescriptionEncoder,
+    HashedDescriptionEncoderConfig,
+    TextStyleAdapter,
+    TextStyleAdapterConfig,
+)
 from hrothgar.ar.nfa import NFADatasetMaker
 from hrothgar.googlefonts import (
     GoogleFont,
@@ -64,6 +70,11 @@ def _to_image(image_chw: np.ndarray) -> Image.Image:
     image_hwc = np.transpose(np.clip(image_chw, 0.0, 1.0), (1, 2, 0))
     image_u8 = (image_hwc * 255.0).round().astype(np.uint8)
     return Image.fromarray(image_u8)
+
+
+def _checkpoint_contains_prefix(path: Path, prefix: str) -> bool:
+    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    return any(key.startswith(prefix) for key in state_dict)
 
 
 def fine_tune_ar_nfa(
@@ -231,6 +242,48 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also save the raw 128x128 generated bitmap",
     )
+    parser.add_argument(
+        "--text-hash-vocab-size",
+        type=int,
+        default=4096,
+        help="Vocabulary bucket count for hashed multimodal description encoder",
+    )
+    parser.add_argument(
+        "--text-embedding-dim",
+        type=int,
+        default=512,
+        help="Embedding dimension for multimodal description tokens",
+    )
+    parser.add_argument(
+        "--text-max-tokens",
+        type=int,
+        default=64,
+        help="Maximum tokens retained from each multimodal description",
+    )
+    parser.add_argument(
+        "--adapter-hidden-dim",
+        type=int,
+        default=256,
+        help="Hidden dimension for multimodal text-style adapter",
+    )
+    parser.add_argument(
+        "--adapter-layers",
+        type=int,
+        default=6,
+        help="Number of cross-attention layers in multimodal adapter",
+    )
+    parser.add_argument(
+        "--adapter-heads",
+        type=int,
+        default=8,
+        help="Attention heads per multimodal adapter layer",
+    )
+    parser.add_argument(
+        "--adapter-dropout",
+        type=float,
+        default=0.1,
+        help="Dropout used in multimodal adapter layers",
+    )
     return parser
 
 
@@ -294,12 +347,48 @@ def main() -> None:
         print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
 
     # Load AR, restore GTok weights into it, then run NFA.
-    ar_model = ARModel(ARModelConfig(image_size=args.image_size), gtok_model=gtok).to(
-        device
+    ar_config = ARModelConfig(image_size=args.image_size)
+    checkpoint_has_language_adapter = _checkpoint_contains_prefix(
+        args.ar_model_path,
+        "language_adapter.",
     )
+    language_adapter = None
+    if checkpoint_has_language_adapter:
+        print(
+            "Detected language_adapter.* weights in AR checkpoint; "
+            "enabling multimodal AR adapter in generate.py"
+        )
+        language_adapter = TextStyleAdapter(
+            TextStyleAdapterConfig(
+                style_token_dim=ar_config.encoder_feature_dim,
+                text_embedding_dim=args.text_embedding_dim,
+                adapter_hidden_dim=args.adapter_hidden_dim,
+                num_layers=args.adapter_layers,
+                num_heads=args.adapter_heads,
+                dropout=args.adapter_dropout,
+            )
+        )
+
+    ar_model = ARModel(
+        ar_config,
+        gtok_model=gtok,
+        language_adapter=language_adapter,
+    ).to(device)
     ar_model.load(str(args.ar_model_path), device=device)
     ar_model.gtok.load_state_dict(gtok.state_dict())
     ar_model.freeze_gtok()
+
+    text_encoder = None
+    if ar_model.language_adapter is not None:
+        text_encoder = HashedDescriptionEncoder(
+            HashedDescriptionEncoderConfig(
+                vocab_size=args.text_hash_vocab_size,
+                embedding_dim=args.text_embedding_dim,
+                max_tokens=args.text_max_tokens,
+            )
+        ).to(device)
+        text_encoder.eval()
+
     ar_model.enable_nfa_mode(
         LoRAConfig(
             rank=args.lora_rank,
@@ -373,11 +462,20 @@ def main() -> None:
         device=device,
     )
     with torch.no_grad():
-        generated = ar_model.generate(
-            content_images=content_images,
-            style_reference_images=style_images,
-            descriptions=[font_description],
-        )
+        if ar_model.language_adapter is not None and text_encoder is not None:
+            description_embeddings = text_encoder([font_description]).to(device)
+            generated = ar_model.generate_adaptation(
+                content_images=content_images,
+                style_reference_images=style_images,
+                text_embeddings=description_embeddings,
+                descriptions=[font_description],
+            )
+        else:
+            generated = ar_model.generate(
+                content_images=content_images,
+                style_reference_images=style_images,
+                descriptions=[font_description],
+            )
         generated_128 = generated.reconstructed_images.squeeze(0).detach().cpu().numpy()
 
     # Upscale 128x128 -> 512x512.
