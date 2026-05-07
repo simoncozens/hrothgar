@@ -309,9 +309,8 @@ class ARMultimodalTrainingLoop(TrainingLoop):
 
     def post_init(self, train_args):
         config = ARModelConfig(image_size=train_args.image_size)
-        gtok = _load_gtok_from_args(
-            train_args,
-            image_size=config.image_size,
+        gtok, _gtok_config = load_gtok_model(
+            Path(train_args.gtok_model_path),
             device=self.device,
         )
         model = ARModel(config, gtok_model=gtok).to(self.device)
