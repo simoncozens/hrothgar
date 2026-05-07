@@ -1046,6 +1046,96 @@ class ARModel(SaveLoadModel):
             target_token_indices=predicted_token_indices_tensor,
         )
 
+    def load(self, path: str, device: torch.device) -> None:
+        """Load AR model weights from a checkpoint, handling G-Tok and adapter gracefully.
+
+        ``gtok.*`` keys are always stripped from the checkpoint before loading
+        because G-Tok is loaded and managed independently; the embedded copy
+        saved in the AR checkpoint may have a different architecture.
+
+        ``language_adapter.*`` keys are loaded only if a language adapter has
+        already been registered via ``set_language_adapter``.  If the checkpoint
+        contains adapter keys but no adapter is registered, a warning is printed
+        and those keys are skipped — this is the expected behaviour when a stage-1
+        visual-only generate pipeline encounters a multimodal checkpoint.  If the
+        adapter keys are absent but an adapter is registered, the adapter keeps its
+        default (zero-init) weights and a warning is printed.
+
+        Adapter keys are always loaded with ``strict=False`` to tolerate schema
+        changes between checkpoint versions (e.g. the removal of ``output_norm``).
+        Core AR keys are loaded with validated non-strict logic so we can
+        intentionally ignore ``gtok.*`` keys while still failing on any missing
+        or unexpected non-GTok/non-adapter parameters.
+        """
+        state_dict = torch.load(path, map_location=device, weights_only=True)
+
+        # Separate the keys into three groups.
+        gtok_keys = {k: v for k, v in state_dict.items() if k.startswith("gtok.")}
+        adapter_keys = {
+            k.removeprefix("language_adapter."): v
+            for k, v in state_dict.items()
+            if k.startswith("language_adapter.")
+        }
+        core_keys = {
+            k: v
+            for k, v in state_dict.items()
+            if not k.startswith("gtok.") and not k.startswith("language_adapter.")
+        }
+
+        if gtok_keys:
+            print(
+                f"ARModel.load: skipping {len(gtok_keys)} gtok.* keys "
+                "(G-Tok is loaded separately)"
+            )
+
+        if adapter_keys and self.language_adapter is None:
+            print(
+                f"ARModel.load: checkpoint contains {len(adapter_keys)} language_adapter.* "
+                "keys but no adapter is registered — skipping adapter weights"
+            )
+        elif not adapter_keys and self.language_adapter is not None:
+            print(
+                "ARModel.load: no language_adapter.* keys in checkpoint — "
+                "adapter will keep its default initialisation"
+            )
+        elif adapter_keys and self.language_adapter is not None:
+            missing, unexpected = self.language_adapter.load_state_dict(
+                adapter_keys, strict=False
+            )
+            if unexpected:
+                print(
+                    f"ARModel.load: ignored {len(unexpected)} unexpected adapter "
+                    f"key(s): {unexpected}"
+                )
+            if missing:
+                print(
+                    f"ARModel.load: {len(missing)} adapter key(s) absent in checkpoint "
+                    f"(kept at default init): {missing}"
+                )
+
+        incompatible = self.load_state_dict(core_keys, strict=False)
+
+        allowed_missing_prefixes = ["gtok."]
+        if self.language_adapter is not None:
+            allowed_missing_prefixes.append("language_adapter.")
+
+        disallowed_missing = [
+            key
+            for key in incompatible.missing_keys
+            if not any(key.startswith(prefix) for prefix in allowed_missing_prefixes)
+        ]
+
+        if incompatible.unexpected_keys or disallowed_missing:
+            details = []
+            if incompatible.unexpected_keys:
+                details.append(f"unexpected keys: {incompatible.unexpected_keys}")
+            if disallowed_missing:
+                details.append(f"missing keys: {disallowed_missing}")
+            raise RuntimeError(
+                "ARModel.load failed due to checkpoint/schema mismatch in core AR weights: "
+                + "; ".join(details)
+            )
+
     def parameter_counts(self) -> Dict[str, int]:
         """Return parameter counts for the main AR components."""
         return {
