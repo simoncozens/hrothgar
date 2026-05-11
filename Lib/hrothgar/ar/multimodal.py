@@ -219,13 +219,14 @@ class TextStyleAdapter(nn.Module):
         )
         self.style_out = nn.Linear(config.adapter_hidden_dim, config.style_token_dim)
 
-        # Zero-initialise the output projection so the adapter starts as a true
-        # identity (output == input) rather than LayerNorm(input).  This is
-        # critical: the frozen aggregator and AR decoder were trained on raw
-        # style-encoder outputs; any scale change at initialisation would shift
-        # their input distribution and break autoregressive generation.
-        nn.init.zeros_(self.style_out.weight)
-        nn.init.zeros_(self.style_out.bias)
+        # Initialize with small scale to enable gradient flow while minimizing
+        # disruption to the frozen AR model. Zero-initialization would create a
+        # gradient vanishing problem: at initialization, the adapter output is
+        # identical to the visual input, resulting in zero alignment loss and
+        # zero gradients everywhere. Using small-scale normal initialization
+        # (std ~1/sqrt(dim)) ensures non-zero loss gradient from the first step.
+        nn.init.normal_(self.style_out.weight, mean=0.0, std=1.0 / (config.adapter_hidden_dim ** 0.5))
+        nn.init.normal_(self.style_out.bias, mean=0.0, std=1.0 / (config.adapter_hidden_dim ** 0.5))
 
     def forward(
         self, style_tokens: torch.Tensor, text_embeddings: torch.Tensor
