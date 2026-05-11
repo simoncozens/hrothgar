@@ -1,3 +1,4 @@
+outputs/
 *.txt
 *finetuned*pth
 *.png
