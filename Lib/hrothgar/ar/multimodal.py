@@ -225,8 +225,12 @@ class TextStyleAdapter(nn.Module):
         # identical to the visual input, resulting in zero alignment loss and
         # zero gradients everywhere. Using small-scale normal initialization
         # (std ~1/sqrt(dim)) ensures non-zero loss gradient from the first step.
-        nn.init.normal_(self.style_out.weight, mean=0.0, std=1.0 / (config.adapter_hidden_dim ** 0.5))
-        nn.init.normal_(self.style_out.bias, mean=0.0, std=1.0 / (config.adapter_hidden_dim ** 0.5))
+        nn.init.normal_(
+            self.style_out.weight, mean=0.0, std=1.0 / (config.adapter_hidden_dim**0.5)
+        )
+        nn.init.normal_(
+            self.style_out.bias, mean=0.0, std=1.0 / (config.adapter_hidden_dim**0.5)
+        )
 
     def forward(
         self, style_tokens: torch.Tensor, text_embeddings: torch.Tensor

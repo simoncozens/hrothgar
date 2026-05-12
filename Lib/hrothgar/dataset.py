@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Callable, Optional, Set
 
 import uharfbuzz as hb
@@ -37,6 +38,7 @@ class DatasetMaker:
         target_codepoints: Optional[Set[int]] = None,
         canary_size: Optional[int] = None,
         image_size: int = 128,
+        split_seed: int = 1234,
     ):
         self.target_codepoints = set(target_codepoints) if target_codepoints else None
         having_filter: Optional[Set[int]] = None
@@ -52,18 +54,56 @@ class DatasetMaker:
         self.googlefonts = GoogleFonts(repo_url, having=having_filter)
         self.batch_size = batch_size
         self.image_size = image_size
+        self.split_seed = split_seed
 
         # Test chars are a random split from GF Latin Core.
-        _, self.test_latincore_chars = train_test_split(LATIN_CORE)
+        _, self.test_latincore_chars = train_test_split(
+            LATIN_CORE,
+            random_state=self.split_seed,
+        )
 
         if canary_size is not None:
             fonts = self.googlefonts.fonts[:canary_size]
         else:
             fonts = self.googlefonts.fonts
 
-        self.train_fonts, self.test_fonts = train_test_split(fonts)
+        self.train_fonts, self.test_fonts = self._split_fonts_by_family(
+            fonts,
+            split_seed=self.split_seed,
+        )
         # print("Train fonts:", len(self.train_fonts))
         # print("Test fonts:", len(self.test_fonts))
+
+    @staticmethod
+    def _split_fonts_by_family(fonts, *, split_seed: int):
+        """Split fonts into train/test by family to avoid cross-style leakage."""
+        if len(fonts) < 2:
+            return list(fonts), []
+
+        family_to_fonts = defaultdict(list)
+        for font in fonts:
+            family_to_fonts[font.family].append(font)
+
+        families = sorted(family_to_fonts.keys())
+        if len(families) < 2:
+            # If only one family is available, keep current behaviour and avoid empty train.
+            return list(fonts), []
+
+        train_families, test_families = train_test_split(
+            families,
+            random_state=split_seed,
+        )
+
+        train_family_set = set(train_families)
+        test_family_set = set(test_families)
+
+        train_fonts = [
+            font for family in train_family_set for font in family_to_fonts[family]
+        ]
+        test_fonts = [
+            font for family in test_family_set for font in family_to_fonts[family]
+        ]
+        return train_fonts, test_fonts
 
     def train_set(self):
         return Dataset(
@@ -96,7 +136,7 @@ class DatasetMaker:
         return DataLoader(
             self.test_set(),
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             drop_last=True,
             collate_fn=self.collate_fn,
         )

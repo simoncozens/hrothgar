@@ -65,7 +65,9 @@ class ARVisualTrainingLoop(TrainingLoop):
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
+            target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
+            split_seed=train_args.split_seed,
         )
 
         self.optimizer = torch.optim.AdamW(
@@ -364,7 +366,9 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
+            target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
+            split_seed=train_args.split_seed,
         )
 
         trainable_parameters = [p for p in model.parameters() if p.requires_grad]
@@ -709,15 +713,28 @@ if __name__ == "__main__":
         "--target-characters",
         type=_parse_codepoint,
         help=(
-            "Optional string of target characters to emit in train/test datasets. "
-            "When set, fonts are filtered to contain them and emitted chars are restricted to this set."
+            "Optional string of extra target characters to add to the train/test "
+            "datasets when present in a font. These characters are oversampled in "
+            "the training set instead of restricting the dataset to only them."
         ),
+    )
+    parser.add_argument(
+        "--target-character-oversample-factor",
+        type=int,
+        default=8,
+        help="Oversampling factor applied to --target-characters in the training set",
     )
     parser.add_argument(
         "--target-steps",
         type=int,
         default=600_000,
         help="Training iterations (paper: 600k for small set, 1M for large set)",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=1234,
+        help="Seed for deterministic train/test font and character splits",
     )
     parser.add_argument(
         "--learning-rate",
