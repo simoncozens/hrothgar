@@ -4,12 +4,14 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import numpy as np
 import torch
 
 
 def torch_setup() -> torch.device:
     """Set random seeds and configure torch for reproducibility and performance."""
     random.seed(1234)
+    np.random.seed(1234)
     torch.manual_seed(1234)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(1234)

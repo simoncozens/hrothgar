@@ -90,7 +90,7 @@ class GoogleFonts:
     def __init__(self, repo: str | Path, having: Optional[Set[int]] = None):
         self.repo_path = Path(repo)
         self.fonts = []
-        for font_path in self.repo_path.glob("ofl/*/*.ttf"):
+        for font_path in sorted(self.repo_path.glob("ofl/*/*.ttf")):
             try:
                 font = GoogleFont(font_path, self)
                 GoogleFonts.families_by_name[font.family] = font

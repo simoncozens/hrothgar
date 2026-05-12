@@ -12,7 +12,7 @@ from typing import Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from hrothgar.dataset import DatasetMaker, LATIN_CORE
+from hrothgar.dataset import Dataset, DatasetMaker, LATIN_CORE
 from torch.utils.data import BatchSampler, DataLoader
 
 
@@ -112,6 +112,30 @@ def _sample_style_codepoints(
     return selected
 
 
+class _OversampledTargetDataset(Dataset):
+    """Dataset that duplicates configured target codepoints in item order."""
+
+    def __init__(
+        self,
+        fonts,
+        *,
+        codepoint_filter_fn,
+        oversampled_codepoints: Optional[Set[int]] = None,
+        oversample_factor: int = 1,
+    ):
+        super().__init__(fonts, codepoint_filter_fn=codepoint_filter_fn)
+        if not oversampled_codepoints or oversample_factor <= 1:
+            return
+
+        oversampled_items = [
+            item for item in self.order if item[1] in oversampled_codepoints
+        ]
+        if not oversampled_items:
+            return
+
+        self.order.extend(oversampled_items * (oversample_factor - 1))
+
+
 class ARPhase1DatasetMaker(DatasetMaker):
     """Dataset maker for AR phase-1 visual pretraining.
 
@@ -130,6 +154,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
         style_glyph_count: int = 8,
         common_style_codepoints: Optional[Sequence[int]] = None,
         class_balanced: bool = False,
+        split_seed: int = 1234,
+        target_codepoint_oversample_factor: int = 8,
     ) -> None:
         target_codepoint_set = set(target_codepoints) if target_codepoints else None
         if common_style_codepoints and style_glyph_count < len(common_style_codepoints):
@@ -138,17 +164,48 @@ class ARPhase1DatasetMaker(DatasetMaker):
             repo_url=repo_url,
             batch_size=batch_size,
             having=having,
-            target_codepoints=target_codepoint_set,
+            target_codepoints=None,
             canary_size=canary_size,
             image_size=image_size,
+            split_seed=split_seed,
         )
         if style_glyph_count <= 0:
             raise ValueError(
                 f"style_glyph_count must be positive, got {style_glyph_count}"
             )
+        if target_codepoint_oversample_factor <= 0:
+            raise ValueError(
+                "target_codepoint_oversample_factor must be positive, got "
+                f"{target_codepoint_oversample_factor}"
+            )
         self.style_glyph_count = style_glyph_count
         self.common_style_codepoints = common_style_codepoints
         self.class_balanced = class_balanced
+        self.extra_target_codepoints = target_codepoint_set
+        self.target_codepoint_oversample_factor = target_codepoint_oversample_factor
+
+    def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        chars = super().train_codepoint_filter(font_codepoints)
+        if self.extra_target_codepoints is None:
+            return chars
+        return set(chars) | (set(font_codepoints) & self.extra_target_codepoints)
+
+    def test_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        chars = super().test_codepoint_filter(font_codepoints)
+        if self.extra_target_codepoints is None:
+            return chars
+        return set(chars) | (set(font_codepoints) & self.extra_target_codepoints)
+
+    def train_set(self):
+        return _OversampledTargetDataset(
+            self.train_fonts,
+            codepoint_filter_fn=self.train_codepoint_filter,
+            oversampled_codepoints=self.extra_target_codepoints,
+            oversample_factor=self.target_codepoint_oversample_factor,
+        )
+
+    def test_set(self):
+        return Dataset(self.test_fonts, codepoint_filter_fn=self.test_codepoint_filter)
 
     def train_loader(self):
         dataset = self.train_set()

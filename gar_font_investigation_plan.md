@@ -107,6 +107,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Implement data loading: font image pairs, text descriptions, style tags
   - Set up evaluation metrics (RMSE, SSIM, LPIPS, FID)
   - Logging and checkpointing (wandb/tensorboard)
+  - [x] Fixed split reproducibility and leakage: seeded train/test splits, stable font enumeration order, and family-grouped split (all styles from one family now stay in a single partition)
 
 - [X] **Baseline reproduction**
   - Download LlamaGen tokenizer code as CNN backbone reference

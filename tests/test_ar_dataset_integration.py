@@ -91,21 +91,34 @@ def test_model_inputs_are_not_blank() -> None:
     assert _all_images_have_visible_content(style_renderings)
 
 
-def test_target_codepoints_restrict_emitted_chars() -> None:
-    """When target_codepoints is set, train/test chars are restricted to that set."""
+def test_target_codepoints_are_added_and_oversampled() -> None:
+    """Target codepoints are added to training targets and duplicated there."""
     target_codepoints = [0x41]  # Latin capital A
+    baseline_maker = ARPhase1DatasetMaker(
+        REPOSITORY_PATH,
+        batch_size=8,
+    )
     maker = ARPhase1DatasetMaker(
         REPOSITORY_PATH,
         batch_size=8,
         target_codepoints=target_codepoints,
+        target_codepoint_oversample_factor=4,
     )
 
+    baseline_train_set = baseline_maker.train_set()
     train_set = maker.train_set()
     test_set = maker.test_set()
+    assert len(baseline_train_set) > 0
     assert len(train_set) > 0
     assert len(test_set) > 0
 
-    emitted_train_chars = {char for _font, char in train_set.order}
+    emitted_train_chars = [char for _font, char in train_set.order]
     emitted_test_chars = {char for _font, char in test_set.order}
-    assert emitted_train_chars <= set(target_codepoints)
-    assert emitted_test_chars <= set(target_codepoints)
+    baseline_train_chars = [char for _font, char in baseline_train_set.order]
+
+    assert set(target_codepoints) <= set(emitted_train_chars)
+    assert set(target_codepoints) <= emitted_test_chars
+    assert any(char not in set(target_codepoints) for char in emitted_train_chars)
+    assert emitted_train_chars.count(target_codepoints[0]) > baseline_train_chars.count(
+        target_codepoints[0]
+    )
