@@ -671,6 +671,11 @@ if __name__ == "__main__":
         help="If nonzero, use this many train batches and run a short canary loop",
     )
     parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow training with uncommitted changes in the git repository (not recommended)",
+    )
+    parser.add_argument(
         "--dataset-path",
         type=str,
         default=os.environ.get("GOOGLE_FONTS_REPO"),
