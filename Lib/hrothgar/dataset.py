@@ -1,6 +1,7 @@
 from collections import defaultdict
 from typing import Callable, Optional, Set
 
+import torch
 import uharfbuzz as hb
 from glyphsets import GlyphSet
 from sklearn.model_selection import train_test_split
@@ -55,6 +56,11 @@ class DatasetMaker:
         self.batch_size = batch_size
         self.image_size = image_size
         self.split_seed = split_seed
+        # Keep data-order randomization reproducible without forcing fixed batches.
+        self._train_loader_generator = torch.Generator()
+        self._train_loader_generator.manual_seed(self.split_seed + 1)
+        self._test_loader_generator = torch.Generator()
+        self._test_loader_generator.manual_seed(self.split_seed + 2)
 
         # Test chars are a random split from GF Latin Core.
         _, self.test_latincore_chars = train_test_split(
@@ -128,6 +134,7 @@ class DatasetMaker:
             self.train_set(),
             batch_size=self.batch_size,
             shuffle=True,
+            generator=self._train_loader_generator,
             drop_last=True,
             collate_fn=self.collate_fn,
         )
@@ -136,7 +143,8 @@ class DatasetMaker:
         return DataLoader(
             self.test_set(),
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=True,
+            generator=self._test_loader_generator,
             drop_last=True,
             collate_fn=self.collate_fn,
         )
