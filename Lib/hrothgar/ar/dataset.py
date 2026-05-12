@@ -80,8 +80,8 @@ def _sample_style_codepoints(
             and cp in font.codepoints
             and _has_non_empty_glyph(font, cp)
         ]
+        random.shuffle(selected)
 
-    if common_style_codepoints is not None:
         # If the caller pinned style chars, never leak arbitrary codepoints in.
         if len(selected) >= style_glyph_count:
             return selected[:style_glyph_count]
