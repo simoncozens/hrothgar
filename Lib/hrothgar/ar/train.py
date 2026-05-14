@@ -249,7 +249,9 @@ class ARVisualTrainingLoop(TrainingLoop):
                     )
                 recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
                 val_metrics["ssim"].append(self.ssim(recon_clamped, val_target_images))
-                val_metrics["lpips"].append(self.lpips(recon_clamped, val_target_images))
+                val_metrics["lpips"].append(
+                    self.lpips(recon_clamped, val_target_images)
+                )
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
@@ -612,9 +614,15 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                     )
                 val_metrics["alignment_l2"].append(loss_info["alignment_l2"])
                 if self.run_decoder:
-                    recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
-                    val_metrics["ssim"].append(self.ssim(recon_clamped, val_target_images))
-                    val_metrics["lpips"].append(self.lpips(recon_clamped, val_target_images))
+                    recon_clamped = torch.clamp(
+                        val_output.reconstructed_images, 0.0, 1.0
+                    )
+                    val_metrics["ssim"].append(
+                        self.ssim(recon_clamped, val_target_images)
+                    )
+                    val_metrics["lpips"].append(
+                        self.lpips(recon_clamped, val_target_images)
+                    )
 
             avg_alignment = torch.mean(torch.stack(val_metrics["alignment_l2"]))
             self.write_scalar("Validation/AlignmentL2", avg_alignment)
@@ -650,7 +658,9 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                         )
                     fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
                     fr_metrics["ssim"].append(self.ssim(fr_clamped, val_target_images))
-                    fr_metrics["lpips"].append(self.lpips(fr_clamped, val_target_images))
+                    fr_metrics["lpips"].append(
+                        self.lpips(fr_clamped, val_target_images)
+                    )
 
                 fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
                 fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))

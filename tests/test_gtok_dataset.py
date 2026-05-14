@@ -1,6 +1,11 @@
 import os
+from collections import Counter
 
-from hrothgar.gtok.dataset import GTokDatasetMaker
+from hrothgar.gtok.dataset import (
+    GTOK_CLASS_BUCKET_OVERSAMPLING,
+    GTokAxisDataset,
+    GTokDatasetMaker,
+)
 from hrothgar.dataset import LATIN_CORE
 
 if "GOOGLE_FONTS_REPO" not in os.environ:
@@ -56,3 +61,32 @@ def test_dataset_contains_axis_positions():
     train = maker.train_set()
     assert train.order
     assert any(axis == [] for _font, _char, axis in train.order)
+
+
+def test_display_bucket_is_oversampled_2x():
+    class DummyFont:
+        def __init__(self, classification: str):
+            self._classification = classification
+            self.codepoints = {ord("A")}
+
+        def classification(self) -> str:
+            return self._classification
+
+        def sample_axis_positions(self, splits: int = 3):
+            _ = splits
+            return [[]]
+
+    fonts = [DummyFont("DISPLAY"), DummyFont("SERIF")]
+    dataset = GTokAxisDataset(
+        fonts,
+        codepoint_filter_fn=lambda cps: cps,
+        axis_splits=1,
+        max_axis_positions_per_font=1,
+        class_bucket_oversampling=GTOK_CLASS_BUCKET_OVERSAMPLING,
+    )
+
+    class_counts = Counter(
+        font.classification() for font, _char, _axis in dataset.order
+    )
+    assert class_counts["DISPLAY"] == 2
+    assert class_counts["SERIF"] == 1
