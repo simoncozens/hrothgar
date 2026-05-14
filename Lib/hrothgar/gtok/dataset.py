@@ -20,6 +20,25 @@ from torch.utils.data import (
 
 from hrothgar.dataset import DatasetMaker, LATIN_CORE
 
+# Dataset-level oversampling policy for underperforming style buckets.
+# Keep this in source (not CLI args) so training setup is reproducible from code.
+GTOK_CLASS_BUCKET_OVERSAMPLING: dict[str, int] = {
+    "DISPLAY": 2,
+    "DISPLAY_HANDWRITING": 2,
+}
+
+
+def _classification_oversample_factor(
+    classification: str,
+    class_bucket_oversampling: dict[str, int] | None,
+) -> int:
+    """Return the configured multiplicative factor for a class bucket."""
+    if not class_bucket_oversampling:
+        return 1
+    key = (classification or "UNKNOWN").upper().replace("/", "_")
+    factor = class_bucket_oversampling.get(key, 1)
+    return max(1, int(factor))
+
 
 def _limit_axis_positions(
     positions: Sequence[Sequence[float]], max_positions: int
@@ -52,6 +71,7 @@ class GTokAxisDataset(TorchDataset):
         codepoint_filter_fn,
         axis_splits: int,
         max_axis_positions_per_font: int,
+        class_bucket_oversampling: dict[str, int] | None = None,
     ):
         self.order = []
         for font in fonts:
@@ -60,9 +80,13 @@ class GTokAxisDataset(TorchDataset):
             axis_positions = _limit_axis_positions(
                 axis_positions, max_axis_positions_per_font
             )
+            oversample_factor = _classification_oversample_factor(
+                font.classification(), class_bucket_oversampling
+            )
             for char in chars:
                 for axis_position in axis_positions:
-                    self.order.append((font, char, axis_position))
+                    for _ in range(oversample_factor):
+                        self.order.append((font, char, axis_position))
 
     def __len__(self):
         return len(self.order)
@@ -206,6 +230,7 @@ class GTokDatasetMaker(DatasetMaker):
             codepoint_filter_fn=self.train_codepoint_filter,
             axis_splits=self.axis_splits,
             max_axis_positions_per_font=self.max_axis_positions_per_font,
+            class_bucket_oversampling=GTOK_CLASS_BUCKET_OVERSAMPLING,
         )
 
     def train_loader(self):
@@ -236,6 +261,7 @@ class GTokDatasetMaker(DatasetMaker):
             codepoint_filter_fn=self.test_codepoint_filter,
             axis_splits=self.axis_splits,
             max_axis_positions_per_font=self.max_axis_positions_per_font,
+            class_bucket_oversampling=None,
         )
 
     def collate_fn(self, batch):
