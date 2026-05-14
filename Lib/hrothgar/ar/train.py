@@ -247,17 +247,44 @@ class ARVisualTrainingLoop(TrainingLoop):
                         target_images=val_target_images,
                         descriptions=val_descriptions,
                     )
-                val_metrics["ssim"].append(
-                    self.ssim(val_output.reconstructed_images, val_target_images)
-                )
-                val_metrics["lpips"].append(
-                    self.lpips(val_output.reconstructed_images, val_target_images)
-                )
+                recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
+                val_metrics["ssim"].append(self.ssim(recon_clamped, val_target_images))
+                val_metrics["lpips"].append(self.lpips(recon_clamped, val_target_images))
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
-            self.write_scalar("Validation/SSIM", avg_ssim)
-            self.write_scalar("Validation/LPIPS", avg_lpips)
+            self.write_scalar("Validation/TeacherForced_SSIM", avg_ssim)
+            self.write_scalar("Validation/TeacherForced_LPIPS", avg_lpips)
+
+            # Free-running validation: generate without teacher forcing.
+            # Expensive, so run on a small subset of batches.
+            fr_batches = max(1, self.validation_batches // 10)
+            fr_metrics = {"ssim": [], "lpips": []}
+            for val_batch in tqdm.tqdm(
+                itertools.islice(self.test_loader, fr_batches),
+                desc="Free-running validation",
+                total=fr_batches,
+            ):
+                val_target_images = val_batch["target_rendering"].to(self.device)
+                val_content_images = val_batch["content_rendering"].to(self.device)
+                val_style_images = val_batch["style_renderings"].to(self.device)
+                val_descriptions = val_batch.get("description")
+
+                with self._autocast_context():
+                    fr_output = self.model.generate(
+                        content_images=val_content_images,
+                        style_reference_images=val_style_images,
+                        descriptions=val_descriptions,
+                    )
+                fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
+                fr_metrics["ssim"].append(self.ssim(fr_clamped, val_target_images))
+                fr_metrics["lpips"].append(self.lpips(fr_clamped, val_target_images))
+
+            fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
+            fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
+            self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
+            self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
+
             self.checkpoint_if_best(avg_ssim)
             self.visualize()
 
@@ -585,12 +612,9 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                     )
                 val_metrics["alignment_l2"].append(loss_info["alignment_l2"])
                 if self.run_decoder:
-                    val_metrics["ssim"].append(
-                        self.ssim(val_output.reconstructed_images, val_target_images)
-                    )
-                    val_metrics["lpips"].append(
-                        self.lpips(val_output.reconstructed_images, val_target_images)
-                    )
+                    recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
+                    val_metrics["ssim"].append(self.ssim(recon_clamped, val_target_images))
+                    val_metrics["lpips"].append(self.lpips(recon_clamped, val_target_images))
 
             avg_alignment = torch.mean(torch.stack(val_metrics["alignment_l2"]))
             self.write_scalar("Validation/AlignmentL2", avg_alignment)
@@ -598,8 +622,40 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             if self.run_decoder:
                 avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
                 avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
-                self.write_scalar("Validation/SSIM", avg_ssim)
-                self.write_scalar("Validation/LPIPS", avg_lpips)
+                self.write_scalar("Validation/TeacherForced_SSIM", avg_ssim)
+                self.write_scalar("Validation/TeacherForced_LPIPS", avg_lpips)
+
+                # Free-running validation: generate without teacher forcing.
+                # Expensive, so run on a small subset of batches.
+                fr_batches = max(1, self.validation_batches // 10)
+                fr_metrics = {"ssim": [], "lpips": []}
+                for val_batch in tqdm.tqdm(
+                    itertools.islice(self.test_loader, fr_batches),
+                    desc="Free-running validation",
+                    total=fr_batches,
+                ):
+                    val_target_images = val_batch["target_rendering"].to(self.device)
+                    val_content_images = val_batch["content_rendering"].to(self.device)
+                    val_style_images = val_batch["style_renderings"].to(self.device)
+                    val_description_embeddings = self._description_embeddings(
+                        val_batch["description"]
+                    )
+
+                    with self._autocast_context():
+                        fr_output = self.model.generate_adaptation(
+                            content_images=val_content_images,
+                            style_reference_images=val_style_images,
+                            text_embeddings=val_description_embeddings,
+                            descriptions=val_batch.get("description"),
+                        )
+                    fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
+                    fr_metrics["ssim"].append(self.ssim(fr_clamped, val_target_images))
+                    fr_metrics["lpips"].append(self.lpips(fr_clamped, val_target_images))
+
+                fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
+                fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
+                self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
+                self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
 
             self.checkpoint_if_best(avg_alignment)
             if self.run_decoder:
