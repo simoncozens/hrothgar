@@ -515,10 +515,20 @@ class ARModel(SaveLoadModel):
         self.codebook_size = self.gtok.config.quantizer_codebook_size
         self.codebook_dim = self.gtok.config.quantizer_code_dim
 
+        # Match AR encoder pyramid depth to the loaded G-Tok tokenizer so
+        # spatial grids always align (for example 16x16 vs 8x8 token grids).
+        # This is derived from the GTok config sidecar loaded with the model.
+        gtok_ch_mult = self.gtok.config.cnn_channel_multipliers
+        if gtok_ch_mult is None:
+            raise ValueError(
+                "Loaded G-Tok model has no cnn_channel_multipliers in config"
+            )
+        encoder_ch_mult = tuple(gtok_ch_mult)
+
         self.content_encoder = CNNEncoder(
             in_channels=3,
             ch=config.content_encoder_base_channels,
-            ch_mult=config.content_encoder_channel_multipliers,
+            ch_mult=encoder_ch_mult,
             num_res_blocks=config.content_encoder_num_residual_blocks,
             z_channels=config.encoder_feature_dim,
             dropout=0.0,
@@ -526,7 +536,7 @@ class ARModel(SaveLoadModel):
         self.style_encoder = CNNEncoder(
             in_channels=3,
             ch=config.style_encoder_base_channels,
-            ch_mult=config.style_encoder_channel_multipliers,
+            ch_mult=encoder_ch_mult,
             num_res_blocks=config.style_encoder_num_residual_blocks,
             z_channels=config.encoder_feature_dim,
             dropout=0.0,
