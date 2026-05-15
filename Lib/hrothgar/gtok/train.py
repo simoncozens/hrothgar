@@ -60,7 +60,7 @@ class GtokTrainingLoop(TrainingLoop):
             gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
                 train_args.quantizer_entropy_loss_ratio
             )
-        if train_args.text_conditioning_model_name is not None:
+        if train_args.text_conditioning_model_name.lower() != "none":
             gtok_config_kwargs["text_conditioning_model_name"] = (
                 train_args.text_conditioning_model_name
             )
