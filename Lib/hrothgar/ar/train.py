@@ -88,10 +88,30 @@ class ARVisualTrainingLoop(TrainingLoop):
         self.validation_batches = train_args.validation_batches
         self.grad_accum_steps = train_args.grad_accum_steps
         self.canary_batches = train_args.canary
+        self.scheduled_sampling_start_step = train_args.scheduled_sampling_start_step
+        self.scheduled_sampling_end_step = train_args.scheduled_sampling_end_step
+        self.scheduled_sampling_end_probability = (
+            train_args.scheduled_sampling_end_probability
+        )
 
         if self.grad_accum_steps <= 0:
             raise ValueError(
                 f"grad_accum_steps must be positive, got {self.grad_accum_steps}"
+            )
+
+        if self.scheduled_sampling_start_step < 0:
+            raise ValueError(
+                "scheduled_sampling_start_step must be non-negative, got "
+                f"{self.scheduled_sampling_start_step}"
+            )
+        if self.scheduled_sampling_end_step < self.scheduled_sampling_start_step:
+            raise ValueError(
+                "scheduled_sampling_end_step must be >= scheduled_sampling_start_step"
+            )
+        if not 0.0 <= self.scheduled_sampling_end_probability <= 1.0:
+            raise ValueError(
+                "scheduled_sampling_end_probability must be in [0, 1], got "
+                f"{self.scheduled_sampling_end_probability}"
             )
 
         self.use_amp = train_args.precision in {"bf16", "fp16"}
@@ -132,22 +152,44 @@ class ARVisualTrainingLoop(TrainingLoop):
             return nullcontext()
         return torch.autocast(device_type="cuda", dtype=self.amp_dtype)
 
+    def _scheduled_sampling_probability(self) -> float:
+        """Linear warmup/ramp schedule for scheduled sampling in visual AR stage."""
+        if self.scheduled_sampling_end_probability <= 0.0:
+            return 0.0
+        if self.global_step < self.scheduled_sampling_start_step:
+            return 0.0
+        if self.scheduled_sampling_end_step == self.scheduled_sampling_start_step:
+            return self.scheduled_sampling_end_probability
+
+        ramp_progress = (
+            (self.global_step - self.scheduled_sampling_start_step)
+            / (self.scheduled_sampling_end_step - self.scheduled_sampling_start_step)
+        )
+        ramp_progress = min(1.0, max(0.0, ramp_progress))
+        return self.scheduled_sampling_end_probability * ramp_progress
+
     def train_step(self, batch):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
         style_reference_images = batch["style_renderings"].to(self.device)
         descriptions = batch.get("description")
+        scheduled_sampling_probability = self._scheduled_sampling_probability()
 
         model_output = self.model(
             content_images,
             style_reference_images,
             target_images=target_images,
+            scheduled_sampling_probability=scheduled_sampling_probability,
             descriptions=descriptions,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
             target_images,
             weights=self.loss_weights,
+        )
+        loss_info["scheduled_sampling_probability"] = torch.tensor(
+            scheduled_sampling_probability,
+            device=target_images.device,
         )
         return loss, loss_info
 
@@ -248,9 +290,10 @@ class ARVisualTrainingLoop(TrainingLoop):
                         descriptions=val_descriptions,
                     )
                 recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
-                val_metrics["ssim"].append(self.ssim(recon_clamped, val_target_images))
+                target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
+                val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
                 val_metrics["lpips"].append(
-                    self.lpips(recon_clamped, val_target_images)
+                    self.lpips(recon_clamped, target_clamped)
                 )
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
@@ -279,15 +322,16 @@ class ARVisualTrainingLoop(TrainingLoop):
                         descriptions=val_descriptions,
                     )
                 fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
-                fr_metrics["ssim"].append(self.ssim(fr_clamped, val_target_images))
-                fr_metrics["lpips"].append(self.lpips(fr_clamped, val_target_images))
+                fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
+                fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
+                fr_metrics["lpips"].append(self.lpips(fr_clamped, fr_target_clamped))
 
             fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
             fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
             self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
             self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
 
-            self.checkpoint_if_best(avg_ssim)
+            self.checkpoint_if_best(fr_ssim)
             self.visualize()
 
         self.model.train()
@@ -617,11 +661,12 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                     recon_clamped = torch.clamp(
                         val_output.reconstructed_images, 0.0, 1.0
                     )
+                    target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
                     val_metrics["ssim"].append(
-                        self.ssim(recon_clamped, val_target_images)
+                        self.ssim(recon_clamped, target_clamped)
                     )
                     val_metrics["lpips"].append(
-                        self.lpips(recon_clamped, val_target_images)
+                        self.lpips(recon_clamped, target_clamped)
                     )
 
             avg_alignment = torch.mean(torch.stack(val_metrics["alignment_l2"]))
@@ -657,9 +702,10 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                             descriptions=val_batch.get("description"),
                         )
                     fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
-                    fr_metrics["ssim"].append(self.ssim(fr_clamped, val_target_images))
+                    fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
+                    fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
                     fr_metrics["lpips"].append(
-                        self.lpips(fr_clamped, val_target_images)
+                        self.lpips(fr_clamped, fr_target_clamped)
                     )
 
                 fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
@@ -800,6 +846,33 @@ if __name__ == "__main__":
         type=int,
         default=600_000,
         help="Training iterations (paper: 600k for small set, 1M for large set)",
+    )
+    parser.add_argument(
+        "--scheduled-sampling-start-step",
+        type=int,
+        default=50_000,
+        help=(
+            "Global step to start scheduled sampling in visual mode. "
+            "Before this step, pure teacher forcing is used."
+        ),
+    )
+    parser.add_argument(
+        "--scheduled-sampling-end-step",
+        type=int,
+        default=250_000,
+        help=(
+            "Global step where scheduled sampling reaches its final probability "
+            "in visual mode."
+        ),
+    )
+    parser.add_argument(
+        "--scheduled-sampling-end-probability",
+        type=float,
+        default=0.3,
+        help=(
+            "Final probability of replacing teacher previous-tokens with model "
+            "predictions in visual mode."
+        ),
     )
     parser.add_argument(
         "--split-seed",

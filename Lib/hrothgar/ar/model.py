@@ -755,6 +755,68 @@ class ARModel(SaveLoadModel):
         )
         return logits, soft_token_embeddings, reconstructed_images
 
+    def _decode_with_scheduled_sampling(
+        self,
+        conditioning_tokens: torch.Tensor,
+        target_token_indices: torch.Tensor,
+        scheduled_sampling_probability: float,
+        descriptions: Optional[List[str]] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Decode with mixed teacher/predicted previous tokens.
+
+        Uses a parallel scheduled-sampling approximation: first obtain token
+        predictions from a teacher-forced pass, then replace each previous-token
+        input with that predicted token with probability ``p``.
+        """
+        if scheduled_sampling_probability <= 0.0:
+            return self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=target_token_indices,
+                descriptions=descriptions,
+            )
+
+        p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
+        teacher_inputs = self.token_decoder.prepare_teacher_forcing_inputs(
+            target_token_indices
+        )
+
+        # Generate a detached prediction stream used only to construct mixed
+        # decoder inputs, while gradients flow through the final decode pass.
+        with torch.no_grad():
+            teacher_logits = self.token_decoder(teacher_inputs, conditioning_tokens)
+            teacher_predictions = torch.argmax(teacher_logits, dim=-1)
+
+        previous_ground_truth = target_token_indices[:, :-1]
+        previous_predictions = teacher_predictions[:, :-1]
+        use_prediction_mask = (
+            torch.rand(
+                previous_ground_truth.shape,
+                device=target_token_indices.device,
+            )
+            < p
+        )
+        mixed_previous_tokens = torch.where(
+            use_prediction_mask,
+            previous_predictions,
+            previous_ground_truth,
+        )
+
+        batch_size = target_token_indices.shape[0]
+        bos_column = torch.full(
+            (batch_size, 1),
+            fill_value=self.token_decoder.bos_token_id,
+            device=target_token_indices.device,
+            dtype=target_token_indices.dtype,
+        )
+        mixed_decoder_inputs = torch.cat([bos_column, mixed_previous_tokens], dim=1)
+
+        logits = self.token_decoder(mixed_decoder_inputs, conditioning_tokens)
+        soft_token_embeddings, reconstructed_images = self.soft_decode(
+            logits,
+            descriptions=descriptions,
+        )
+        return logits, soft_token_embeddings, reconstructed_images
+
     def target_token_indices_from_images(
         self,
         target_images: torch.Tensor,
@@ -824,6 +886,7 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
+        scheduled_sampling_probability: float = 0.0,
         descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Run teacher-forced AR decoding for visual pretraining.
@@ -848,9 +911,10 @@ class ARModel(SaveLoadModel):
                     descriptions=descriptions,
                 )
         logits, soft_token_embeddings, reconstructed_images = (
-            self._decode_with_teacher_forcing(
+            self._decode_with_scheduled_sampling(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=target_token_indices,
+                scheduled_sampling_probability=scheduled_sampling_probability,
                 descriptions=descriptions,
             )
         )
