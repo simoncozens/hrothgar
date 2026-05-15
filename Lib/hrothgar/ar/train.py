@@ -161,9 +161,8 @@ class ARVisualTrainingLoop(TrainingLoop):
         if self.scheduled_sampling_end_step == self.scheduled_sampling_start_step:
             return self.scheduled_sampling_end_probability
 
-        ramp_progress = (
-            (self.global_step - self.scheduled_sampling_start_step)
-            / (self.scheduled_sampling_end_step - self.scheduled_sampling_start_step)
+        ramp_progress = (self.global_step - self.scheduled_sampling_start_step) / (
+            self.scheduled_sampling_end_step - self.scheduled_sampling_start_step
         )
         ramp_progress = min(1.0, max(0.0, ramp_progress))
         return self.scheduled_sampling_end_probability * ramp_progress
@@ -292,9 +291,7 @@ class ARVisualTrainingLoop(TrainingLoop):
                 recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
                 target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
                 val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
-                val_metrics["lpips"].append(
-                    self.lpips(recon_clamped, target_clamped)
-                )
+                val_metrics["lpips"].append(self.lpips(recon_clamped, target_clamped))
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
@@ -662,9 +659,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                         val_output.reconstructed_images, 0.0, 1.0
                     )
                     target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
-                    val_metrics["ssim"].append(
-                        self.ssim(recon_clamped, target_clamped)
-                    )
+                    val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
                     val_metrics["lpips"].append(
                         self.lpips(recon_clamped, target_clamped)
                     )
