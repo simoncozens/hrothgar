@@ -270,7 +270,9 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
         if not train_args.dataset_path:
             raise ValueError("--dataset-path is required for glyph adaptation")
 
-        gtok, gtok_config = load_model(Path(train_args.gtok_model_path), device=self.device)
+        gtok, gtok_config = load_model(
+            Path(train_args.gtok_model_path), device=self.device
+        )
 
         model = ARModel(config, gtok_model=gtok).to(self.device)
         model.load(train_args.base_model_path, device=self.device)
@@ -436,6 +438,16 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
                 self.post_train_epoch()
                 self.epoch += 1
                 self.validation()
+
+            # For very short runs (or conservative validation cadence), ensure
+            # a usable LoRA artifact exists even if no "best" checkpoint fired.
+            if not Path(self.lora_model_path).exists():
+                lora_state = self.model.token_decoder.get_lora_state_dict()
+                torch.save(lora_state, self.lora_model_path)
+                print(
+                    "  No validation-best LoRA checkpoint was written during training; "
+                    f"saved final LoRA to {self.lora_model_path}"
+                )
         finally:
             self.writer.close()
 

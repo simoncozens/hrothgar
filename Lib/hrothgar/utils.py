@@ -111,7 +111,7 @@ class TrainingLoop:
             return False
         return self.global_step >= self.target_steps
 
-    def checkpoint_if_best(self, validation_returned: torch.Tensor):
+    def checkpoint_if_best(self, validation_returned: torch.Tensor) -> bool:
         is_best = False
         if self.validation_direction == "higher":
             is_best = validation_returned > self.validation_metric
@@ -120,6 +120,7 @@ class TrainingLoop:
         if is_best:
             self.validation_metric = validation_returned.item()
             self.model.save(self.model_path)
+        return bool(is_best)
 
     def post_train_step(self):
         pass
