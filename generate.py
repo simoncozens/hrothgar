@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Sequence
 
 import numpy as np
@@ -39,6 +40,7 @@ from hrothgar.ar.multimodal import (
     TextStyleAdapter,
     TextStyleAdapterConfig,
 )
+from hrothgar.ar.ga import ARGlyphAdaptationTrainingLoop, glyph_lora_model_path
 from hrothgar.ar.nfa import NFADatasetMaker
 from hrothgar.googlefonts import (
     GoogleFont,
@@ -206,6 +208,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gtok-epochs", type=int, default=10)
     parser.add_argument("--nfa-epochs", type=int, default=20)
 
+    parser.add_argument("--ga-target-steps", type=int, default=5000)
+    parser.add_argument("--ga-batch-size", type=int, default=32)
+    parser.add_argument("--ga-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--ga-beta1", type=float, default=0.9)
+    parser.add_argument("--ga-beta2", type=float, default=0.95)
+    parser.add_argument("--ga-validation-every", type=int, default=500)
+    parser.add_argument("--ga-validation-batches", type=int, default=20)
+    parser.add_argument(
+        "--ga-max-fonts",
+        type=int,
+        default=None,
+        help="Optional cap on number of fonts used by glyph adaptation",
+    )
+
     parser.add_argument("--gtok-batch-size", type=int, default=16)
     parser.add_argument("--nfa-batch-size", type=int, default=8)
 
@@ -346,6 +362,51 @@ def main() -> None:
         gtok_config.save_sidecar(finetuned_gtok_path)
         print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
 
+    # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
+    glyph_lora_path = glyph_lora_model_path(args.ar_model_path, target_char)
+    if glyph_lora_path.exists():
+        print(f"Found existing glyph LoRA checkpoint: {glyph_lora_path}")
+    else:
+        print(
+            "Glyph LoRA checkpoint not found; running glyph adaptation to create: "
+            f"{glyph_lora_path}"
+        )
+        ga_model_path = glyph_lora_path.with_name(f"{glyph_lora_path.stem}.full.pth")
+        ga_args = SimpleNamespace(
+            allow_dirty=True,
+            tag=f"GA-{args.font_path.stem}-U{target_char:04X}",
+            model_path=str(ga_model_path),
+            base_model_path=str(args.ar_model_path),
+            gtok_model_path=str(finetuned_gtok_path),
+            dataset_path=str(args.dataset_path),
+            target_codepoint=target_char,
+            batch_size=args.ga_batch_size,
+            image_size=args.image_size,
+            style_glyph_count=args.style_glyph_count,
+            style_characters=style_codepoints,
+            split_seed=1234,
+            max_fonts=args.ga_max_fonts,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_steps=args.ga_target_steps,
+            learning_rate=args.ga_learning_rate,
+            beta1=args.ga_beta1,
+            beta2=args.ga_beta2,
+            precision="bf16" if device.type == "cuda" else "fp32",
+            grad_accum_steps=1,
+            validation_every=args.ga_validation_every,
+            validation_batches=args.ga_validation_batches,
+            lora_model_path=str(glyph_lora_path),
+        )
+        ga_loop = ARGlyphAdaptationTrainingLoop(ga_args)
+        ga_loop.train()
+        if not glyph_lora_path.exists():
+            raise RuntimeError(
+                "Glyph adaptation completed but LoRA checkpoint was not found at "
+                f"{glyph_lora_path}"
+            )
+        print(f"Saved glyph LoRA checkpoint: {glyph_lora_path}")
+
     # Load AR, restore GTok weights into it, then run NFA.
     ar_config = ARModelConfig(image_size=args.image_size)
     checkpoint_has_language_adapter = _checkpoint_contains_prefix(
@@ -394,6 +455,15 @@ def main() -> None:
             rank=args.lora_rank,
             alpha=args.lora_alpha,
         )
+    )
+
+    # Load glyph LoRA sequentially: pre-load it before NFA fine-tuning.
+    # This ensures both glyph and style adaptations are active during generation.
+    print(f"Loading glyph LoRA from {glyph_lora_path} into decoder...")
+    glyph_lora_state = torch.load(glyph_lora_path, map_location=device)
+    ar_model.token_decoder.load_lora_state_dict(glyph_lora_state)
+    print(
+        "Glyph LoRA loaded; NFA fine-tuning will now modify on top of glyph adaptation"
     )
 
     nfa_maker = NFADatasetMaker(
