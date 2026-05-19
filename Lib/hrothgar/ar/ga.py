@@ -45,7 +45,7 @@ from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.llamagen_lpips import LPIPS
-from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.gtok.model import load_model
 from hrothgar.utils import TrainingLoop
 
 
@@ -270,8 +270,7 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
         if not train_args.dataset_path:
             raise ValueError("--dataset-path is required for glyph adaptation")
 
-        gtok = GtokModel(GtokConfig())
-        gtok.load(train_args.gtok_model_path, device=self.device)
+        gtok, gtok_config = load_model(Path(train_args.gtok_model_path), device=self.device)
 
         model = ARModel(config, gtok_model=gtok).to(self.device)
         model.load(train_args.base_model_path, device=self.device)
