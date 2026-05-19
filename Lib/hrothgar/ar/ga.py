@@ -465,8 +465,12 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
                     )
                 recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
                 target_clamped = torch.clamp(val_target, 0.0, 1.0)
-                val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
-                val_metrics["lpips"].append(self.lpips(recon_clamped, target_clamped))
+                val_metrics["ssim"].append(
+                    self.ssim(recon_clamped, target_clamped).mean()
+                )
+                val_metrics["lpips"].append(
+                    self.lpips(recon_clamped, target_clamped).mean()
+                )
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
