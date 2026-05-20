@@ -192,6 +192,94 @@ class LoRALinear(nn.Module):
         return self.base(x) + (x @ self.lora_A.T @ self.lora_B.T) * self.scaling
 
 
+class ComposedLoRALinear(nn.Module):
+    """Linear layer with two stacked LoRA adapters: a frozen glyph adapter and a trainable font adapter.
+
+    At forward time the effective weight update is the sum of both deltas::
+
+        ΔW = scale_g * (B_g @ A_g) + scale_f * (B_f @ A_f)
+
+    The glyph adapter (subscript ``_glyph``) is loaded from a pre-trained GA
+    checkpoint and kept frozen throughout NFA.  The font adapter (subscript
+    ``_font``) is zero-initialised and trained during NFA.
+
+    Both adapters share the same rank and alpha (from *lora_config*).  The
+    glyph tensors are copied from *glyph_lora_A* / *glyph_lora_B* and
+    registered as non-trainable ``nn.Parameter`` so they travel with the
+    module on ``.to(device)`` calls and appear in ``state_dict``.
+    """
+
+    def __init__(
+        self,
+        base_linear: nn.Linear,
+        glyph_lora_A: torch.Tensor,
+        glyph_lora_B: torch.Tensor,
+        glyph_scaling: float,
+        font_rank: int,
+        font_alpha: float,
+    ) -> None:
+        super().__init__()
+        self.base = base_linear
+        for param in self.base.parameters():
+            param.requires_grad = False
+
+        device = base_linear.weight.device
+        dtype = base_linear.weight.dtype
+
+        # Frozen glyph adapter — non-trainable parameters so they are saved in
+        # state_dict and moved with .to() without extra bookkeeping.
+        self.lora_A_glyph = nn.Parameter(
+            glyph_lora_A.to(device=device, dtype=dtype), requires_grad=False
+        )
+        self.lora_B_glyph = nn.Parameter(
+            glyph_lora_B.to(device=device, dtype=dtype), requires_grad=False
+        )
+        self.scaling_glyph = glyph_scaling
+
+        # Trainable font adapter — zero-initialised so NFA starts from the
+        # glyph prior with no additional delta.
+        self.lora_A_font = nn.Parameter(
+            torch.empty(font_rank, base_linear.in_features, device=device, dtype=dtype)
+        )
+        self.lora_B_font = nn.Parameter(
+            torch.zeros(base_linear.out_features, font_rank, device=device, dtype=dtype)
+        )
+        self.scaling_font = font_alpha / font_rank
+        nn.init.kaiming_uniform_(self.lora_A_font, a=math.sqrt(5))
+
+    @property
+    def in_features(self) -> int:
+        """Input feature dimension, delegated to the base layer."""
+        return self.base.in_features
+
+    @property
+    def out_features(self) -> int:
+        """Output feature dimension, delegated to the base layer."""
+        return self.base.out_features
+
+    @property
+    def weight(self) -> torch.Tensor:
+        """Merged weight matrix including both adapter deltas.
+
+        Required by ``nn.MultiheadAttention``'s ``out_proj`` access pattern.
+        """
+        return (
+            self.base.weight
+            + (self.lora_B_glyph @ self.lora_A_glyph) * self.scaling_glyph
+            + (self.lora_B_font @ self.lora_A_font) * self.scaling_font
+        )
+
+    @property
+    def bias(self) -> Optional[torch.Tensor]:
+        """Bias delegated to the base layer (may be None)."""
+        return self.base.bias
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        glyph_delta = (x @ self.lora_A_glyph.T @ self.lora_B_glyph.T) * self.scaling_glyph
+        font_delta = (x @ self.lora_A_font.T @ self.lora_B_font.T) * self.scaling_font
+        return self.base(x) + glyph_delta + font_delta
+
+
 class ContentStyleAttentionLayer(nn.Module):
     """FsFont-style cross-attention layer for content-style fusion.
 
@@ -378,6 +466,7 @@ class AutoregressiveTokenDecoder(nn.Module):
         self.output_projection = nn.Linear(hidden_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
         self._lora_injected: bool = False
+        self._composed_lora: bool = False
 
     def _causal_mask(self, sequence_length: int, device: torch.device) -> torch.Tensor:
         mask = torch.zeros(sequence_length, sequence_length, device=device)
@@ -470,22 +559,105 @@ class AutoregressiveTokenDecoder(nn.Module):
         )
         self._lora_injected = True
 
-    def get_lora_state_dict(self) -> Dict[str, torch.Tensor]:
-        """Return a state dict containing only the LoRA parameters.
+    def inject_composed_lora(
+        self,
+        glyph_state_dict: Dict[str, torch.Tensor],
+        lora_config: LoRAConfig,
+    ) -> None:
+        """Inject two-adapter composed LoRA: frozen glyph prior + trainable font adapter.
 
-        Useful for saving a compact per-font adaptation checkpoint.
+        Each linear target in the decoder is replaced with a ``ComposedLoRALinear``
+        that holds both adapters.  The glyph adapter weights are loaded from
+        *glyph_state_dict* (the output of a previous GA run) and kept frozen.
+        The font adapter is zero-initialised and trained during NFA.
+
+        The glyph LoRA scaling is derived from *lora_config* (``alpha / rank``),
+        so GA and NFA must use the same rank and alpha.  The glyph rank is
+        cross-checked against the tensor shapes in *glyph_state_dict* and a
+        ``ValueError`` is raised if they do not match.
+
+        May only be called once per decoder instance (same as ``inject_lora``).
         """
+        if self._lora_injected:
+            raise RuntimeError(
+                "LoRA has already been injected into this decoder.  "
+                "Create a fresh model before injecting again."
+            )
+
+        def _make_composed(linear: nn.Linear, key_prefix: str) -> ComposedLoRALinear:
+            a_key = f"{key_prefix}.lora_A"
+            b_key = f"{key_prefix}.lora_B"
+            if a_key not in glyph_state_dict or b_key not in glyph_state_dict:
+                raise ValueError(
+                    f"Glyph LoRA state dict is missing keys '{a_key}' and/or "
+                    f"'{b_key}'.  Ensure the state dict was produced by "
+                    "inject_lora() with matching layer targets."
+                )
+            glyph_A = glyph_state_dict[a_key]
+            glyph_B = glyph_state_dict[b_key]
+            inferred_rank = glyph_A.shape[0]
+            if inferred_rank != lora_config.rank:
+                raise ValueError(
+                    f"Glyph LoRA rank ({inferred_rank}) does not match "
+                    f"lora_config.rank ({lora_config.rank}).  GA and NFA must "
+                    "use the same --lora-rank."
+                )
+            scaling = lora_config.alpha / lora_config.rank
+            return ComposedLoRALinear(
+                linear,
+                glyph_lora_A=glyph_A,
+                glyph_lora_B=glyph_B,
+                glyph_scaling=scaling,
+                font_rank=lora_config.rank,
+                font_alpha=lora_config.alpha,
+            )
+
+        for i, layer in enumerate(self.layers):
+            prefix = f"layers.{i}"
+            layer.mlp[0] = _make_composed(layer.mlp[0], f"{prefix}.mlp.0")
+            layer.mlp[3] = _make_composed(layer.mlp[3], f"{prefix}.mlp.3")
+            layer.self_attention.out_proj = _make_composed(
+                layer.self_attention.out_proj,
+                f"{prefix}.self_attention.out_proj",
+            )
+            layer.cross_attention.out_proj = _make_composed(
+                layer.cross_attention.out_proj,
+                f"{prefix}.cross_attention.out_proj",
+            )
+        self.output_projection = _make_composed(
+            self.output_projection, "output_projection"
+        )
+        self._lora_injected = True
+        self._composed_lora = True
+
+    def get_lora_state_dict(self) -> Dict[str, torch.Tensor]:
+        """Return a state dict containing only the trainable LoRA parameters.
+
+        In single-adapter mode this returns all ``lora_A`` / ``lora_B`` keys.
+        In composed mode (two adapters) only the trainable *font* adapter keys
+        (``lora_A_font`` / ``lora_B_font``) are returned; the frozen glyph
+        adapter is omitted because it is stored in a separate GA checkpoint.
+        """
+        if self._composed_lora:
+            return {
+                k: v
+                for k, v in self.state_dict().items()
+                if "lora_A_font" in k or "lora_B_font" in k
+            }
         return {k: v for k, v in self.state_dict().items() if "lora_" in k}
 
     def load_lora_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> None:
         """Load LoRA parameters from a previously saved adaptation checkpoint.
 
         The decoder must already have LoRA injected before calling this.
+        Works for both single-adapter and composed-adapter modes; in the latter
+        case *state_dict* should contain only the font adapter keys as returned
+        by ``get_lora_state_dict()`` in composed mode.
         """
         if not self._lora_injected:
             raise RuntimeError(
                 "LoRA must be injected before loading a LoRA state dict.  "
-                "Call inject_lora() first."
+                "Call inject_lora() or inject_composed_lora() first."
             )
         self.load_state_dict(state_dict, strict=False)
 
@@ -633,8 +805,46 @@ class ARModel(SaveLoadModel):
 
     @property
     def is_nfa_mode(self) -> bool:
-        """True once ``enable_nfa_mode`` has been called."""
+        """True once ``enable_nfa_mode`` or ``enable_composed_nfa_mode`` has been called."""
         return self._nfa_mode
+
+    def enable_composed_nfa_mode(
+        self,
+        glyph_lora_state: Dict[str, torch.Tensor],
+        lora_config: LoRAConfig,
+    ) -> None:
+        """Switch to composed NFA mode with a frozen glyph prior.
+
+        Differs from ``enable_nfa_mode`` in that the decoder receives *two*
+        stacked LoRA adapters:
+
+        1. A **frozen glyph adapter** loaded from *glyph_lora_state* (output of
+           a GA run).  This encodes structural priors for the target glyph.
+        2. A **trainable font adapter** initialised to zero.  NFA fine-tuning
+           updates only this adapter, so the glyph prior is preserved.
+
+        At generation time the effective weight update is the sum of both
+        adapter deltas (weighted by their shared ``alpha / rank`` scaling).
+
+        GA and NFA must use the same ``--lora-rank`` and ``--lora-alpha``; a
+        ``ValueError`` is raised if the glyph state dict's tensor shapes imply
+        a different rank.
+
+        May only be called once per model instance.
+        """
+        if self._nfa_mode:
+            raise RuntimeError(
+                "Model is already in NFA mode.  "
+                "Create a fresh model instance to re-apply NFA."
+            )
+        # Freeze everything including G-Tok.
+        for param in self.parameters():
+            param.requires_grad = False
+        # Inject composed LoRA — glyph adapter frozen, font adapter trainable.
+        self.token_decoder.inject_composed_lora(glyph_lora_state, lora_config)
+        # Ensure G-Tok stays in eval mode regardless of outer train() calls.
+        self.freeze_gtok()
+        self._nfa_mode = True
 
     def trainable_parameters(self) -> list[torch.nn.Parameter]:
         """Return a list of parameters that currently require gradients.

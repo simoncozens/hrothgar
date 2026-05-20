@@ -343,7 +343,7 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
             )
 
         self.num_epochs = (self.target_steps // max(len(self.train_loader), 1)) + 1
-        self.validation_direction = "higher"
+        self.validation_direction = "lower"
 
         if train_args.lora_model_path is None:
             self.lora_model_path = str(
@@ -488,7 +488,7 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
             self.write_scalar("Validation/SSIM", avg_ssim)
             self.write_scalar("Validation/LPIPS", avg_lpips)
-            is_best = self.checkpoint_if_best(avg_ssim)
+            is_best = self.checkpoint_if_best(avg_lpips)
             if is_best:
                 lora_state = self.model.token_decoder.get_lora_state_dict()
                 torch.save(lora_state, self.lora_model_path)
