@@ -84,7 +84,9 @@ class UpscalerDatasetMaker(DatasetMaker):
             self.train_fonts = [
                 font for font in self.train_fonts if self._is_clean_font(font)
             ]
-            self.test_fonts = [font for font in self.test_fonts if self._is_clean_font(font)]
+            self.test_fonts = [
+                font for font in self.test_fonts if self._is_clean_font(font)
+            ]
 
             if not self.train_fonts:
                 raise ValueError(
@@ -134,7 +136,9 @@ class UpscalerDatasetMaker(DatasetMaker):
             dtype=high_res.dtype,
             device=high_res.device,
         )
-        mixed = high_res * (1.0 - edge_mask * blur_mix) + blurred * (edge_mask * blur_mix)
+        mixed = high_res * (1.0 - edge_mask * blur_mix) + blurred * (
+            edge_mask * blur_mix
+        )
 
         noise = torch.randn_like(high_res) * self.outline_noise_std
         corrupted = mixed + noise * edge_mask
@@ -164,9 +168,9 @@ class UpscalerDatasetMaker(DatasetMaker):
         )
 
         if self.style_conformance_mode and self.low_res_noise_std > 0.0:
-            low_res = (low_res + torch.randn_like(low_res) * self.low_res_noise_std).clamp(
-                0.0, 1.0
-            )
+            low_res = (
+                low_res + torch.randn_like(low_res) * self.low_res_noise_std
+            ).clamp(0.0, 1.0)
 
         return {
             "gid": gids,
