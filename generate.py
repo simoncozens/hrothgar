@@ -114,6 +114,7 @@ def fine_tune_ar_nfa(
     model.train()
     model.gtok.eval()
     for epoch in range(epochs):
+        maker.set_style_schedule_epoch(epoch)
         running_loss = 0.0
         for batch in tqdm(loader, desc=f"NFA epoch {epoch + 1}/{epochs}"):
             target_images = batch["target_rendering"].to(device)
@@ -238,6 +239,24 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Optional fixed style character string (e.g. adhesionADHESION)",
+    )
+    parser.add_argument(
+        "--style-warmup-epochs",
+        type=int,
+        default=0,
+        help="Epochs to use only --style-characters before widening the style pool",
+    )
+    parser.add_argument(
+        "--style-extra-per-epoch",
+        type=int,
+        default=0,
+        help="Additional font glyphs to add to the style pool after each warm-up epoch",
+    )
+    parser.add_argument(
+        "--style-schedule-seed",
+        type=int,
+        default=1234,
+        help="Seed for the deterministic order of extra style glyphs",
     )
 
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/generated"))
@@ -468,6 +487,9 @@ def main() -> None:
         image_size=args.image_size,
         style_glyph_count=args.style_glyph_count,
         common_style_codepoints=style_codepoints,
+        style_warmup_epochs=args.style_warmup_epochs,
+        style_extra_per_epoch=args.style_extra_per_epoch,
+        style_schedule_seed=args.style_schedule_seed,
         target_codepoints=None,
     )
     fine_tune_ar_nfa(
