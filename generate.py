@@ -450,20 +450,16 @@ def main() -> None:
         ).to(device)
         text_encoder.eval()
 
-    ar_model.enable_nfa_mode(
-        LoRAConfig(
-            rank=args.lora_rank,
-            alpha=args.lora_alpha,
-        )
-    )
+    lora_config = LoRAConfig(rank=args.lora_rank, alpha=args.lora_alpha)
 
-    # Load glyph LoRA sequentially: pre-load it before NFA fine-tuning.
-    # This ensures both glyph and style adaptations are active during generation.
-    print(f"Loading glyph LoRA from {glyph_lora_path} into decoder...")
+    # Enable composed NFA mode: the glyph LoRA (GA output) is loaded as a
+    # frozen adapter, and a fresh trainable font adapter is injected on top.
+    # NFA only updates the font adapter, preserving the glyph structural prior.
+    print(f"Loading glyph LoRA from {glyph_lora_path} for composed NFA mode...")
     glyph_lora_state = torch.load(glyph_lora_path, map_location=device)
-    ar_model.token_decoder.load_lora_state_dict(glyph_lora_state)
+    ar_model.enable_composed_nfa_mode(glyph_lora_state, lora_config)
     print(
-        "Glyph LoRA loaded; NFA fine-tuning will now modify on top of glyph adaptation"
+        "Composed NFA mode enabled: glyph adapter frozen, font adapter trainable"
     )
 
     nfa_maker = NFADatasetMaker(
