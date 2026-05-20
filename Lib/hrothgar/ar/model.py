@@ -235,6 +235,7 @@ class ComposedLoRALinear(nn.Module):
             glyph_lora_B.to(device=device, dtype=dtype), requires_grad=False
         )
         self.scaling_glyph = glyph_scaling
+        self.glyph_weight = 1.0
 
         # Trainable font adapter — zero-initialised so NFA starts from the
         # glyph prior with no additional delta.
@@ -245,7 +246,17 @@ class ComposedLoRALinear(nn.Module):
             torch.zeros(base_linear.out_features, font_rank, device=device, dtype=dtype)
         )
         self.scaling_font = font_alpha / font_rank
+        self.font_weight = 1.0
         nn.init.kaiming_uniform_(self.lora_A_font, a=math.sqrt(5))
+
+    def set_adapter_weights(self, glyph_weight: float, font_weight: float) -> None:
+        """Set scalar multipliers for glyph and font adapter deltas."""
+        if glyph_weight < 0.0:
+            raise ValueError(f"glyph_weight must be non-negative, got {glyph_weight}")
+        if font_weight < 0.0:
+            raise ValueError(f"font_weight must be non-negative, got {font_weight}")
+        self.glyph_weight = float(glyph_weight)
+        self.font_weight = float(font_weight)
 
     @property
     def in_features(self) -> int:
@@ -265,8 +276,12 @@ class ComposedLoRALinear(nn.Module):
         """
         return (
             self.base.weight
-            + (self.lora_B_glyph @ self.lora_A_glyph) * self.scaling_glyph
-            + (self.lora_B_font @ self.lora_A_font) * self.scaling_font
+            + (self.lora_B_glyph @ self.lora_A_glyph)
+            * self.scaling_glyph
+            * self.glyph_weight
+            + (self.lora_B_font @ self.lora_A_font)
+            * self.scaling_font
+            * self.font_weight
         )
 
     @property
@@ -275,8 +290,12 @@ class ComposedLoRALinear(nn.Module):
         return self.base.bias
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        glyph_delta = (x @ self.lora_A_glyph.T @ self.lora_B_glyph.T) * self.scaling_glyph
-        font_delta = (x @ self.lora_A_font.T @ self.lora_B_font.T) * self.scaling_font
+        glyph_delta = (
+            x @ self.lora_A_glyph.T @ self.lora_B_glyph.T
+        ) * self.scaling_glyph * self.glyph_weight
+        font_delta = (
+            x @ self.lora_A_font.T @ self.lora_B_font.T
+        ) * self.scaling_font * self.font_weight
         return self.base(x) + glyph_delta + font_delta
 
 
@@ -661,6 +680,25 @@ class AutoregressiveTokenDecoder(nn.Module):
             )
         self.load_state_dict(state_dict, strict=False)
 
+    def set_composed_lora_weights(
+        self,
+        glyph_weight: float,
+        font_weight: float,
+    ) -> None:
+        """Set adapter multipliers on all composed LoRA layers.
+
+        Raises ``RuntimeError`` if the decoder is not in composed LoRA mode.
+        """
+        if not self._composed_lora:
+            raise RuntimeError(
+                "Decoder is not in composed LoRA mode.  "
+                "Call inject_composed_lora() first."
+            )
+
+        for module in self.modules():
+            if isinstance(module, ComposedLoRALinear):
+                module.set_adapter_weights(glyph_weight, font_weight)
+
 
 class ARModel(SaveLoadModel):
     """GAR-Font autoregressive generator model definition."""
@@ -845,6 +883,14 @@ class ARModel(SaveLoadModel):
         # Ensure G-Tok stays in eval mode regardless of outer train() calls.
         self.freeze_gtok()
         self._nfa_mode = True
+
+    def set_composed_lora_weights(
+        self,
+        glyph_weight: float,
+        font_weight: float,
+    ) -> None:
+        """Set glyph/font adapter multipliers for composed LoRA mode."""
+        self.token_decoder.set_composed_lora_weights(glyph_weight, font_weight)
 
     def trainable_parameters(self) -> list[torch.nn.Parameter]:
         """Return a list of parameters that currently require gradients.

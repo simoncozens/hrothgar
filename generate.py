@@ -88,6 +88,9 @@ def fine_tune_ar_nfa(
     learning_rate: float,
     beta1: float,
     beta2: float,
+    composed_glyph_weight: float,
+    composed_font_weight_final: float,
+    composed_font_ramp_epochs: int,
     device: torch.device,
     description: str,
 ) -> None:
@@ -113,8 +116,22 @@ def fine_tune_ar_nfa(
     print(f"AR NFA fine-tuning on {len(train_set)} samples for {epochs} epochs")
     model.train()
     model.gtok.eval()
+
+    def _font_weight_for_epoch(epoch_index: int) -> float:
+        if composed_font_ramp_epochs <= 0:
+            return composed_font_weight_final
+        if composed_font_ramp_epochs == 1:
+            return composed_font_weight_final
+        progress = min(
+            max(epoch_index, 0) / float(composed_font_ramp_epochs - 1),
+            1.0,
+        )
+        return composed_font_weight_final * progress
+
     for epoch in range(epochs):
         maker.set_style_schedule_epoch(epoch)
+        font_weight = _font_weight_for_epoch(epoch)
+        model.set_composed_lora_weights(composed_glyph_weight, font_weight)
         running_loss = 0.0
         for batch in tqdm(loader, desc=f"NFA epoch {epoch + 1}/{epochs}"):
             target_images = batch["target_rendering"].to(device)
@@ -136,7 +153,11 @@ def fine_tune_ar_nfa(
             running_loss += float(loss.detach().cpu())
 
         avg_loss = running_loss / max(len(loader), 1)
-        print(f"  NFA epoch {epoch + 1}: avg loss={avg_loss:.5f}")
+        print(
+            "  NFA epoch "
+            f"{epoch + 1}: avg loss={avg_loss:.5f}, "
+            f"glyph_w={composed_glyph_weight:.3f}, font_w={font_weight:.3f}"
+        )
 
 
 def _build_generation_inputs(
@@ -232,6 +253,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--nfa-beta2", type=float, default=0.95)
     parser.add_argument("--lora-rank", type=int, default=16)
     parser.add_argument("--lora-alpha", type=float, default=16.0)
+    parser.add_argument(
+        "--composed-glyph-weight",
+        type=float,
+        default=0.75,
+        help="Multiplier for frozen glyph LoRA delta during composed NFA",
+    )
+    parser.add_argument(
+        "--composed-font-weight-final",
+        type=float,
+        default=1.0,
+        help="Final multiplier for trainable font LoRA delta during composed NFA",
+    )
+    parser.add_argument(
+        "--composed-font-ramp-epochs",
+        type=int,
+        default=10,
+        help="Epochs to ramp font LoRA multiplier from 0 to final value",
+    )
 
     parser.add_argument("--style-glyph-count", type=int, default=8)
     parser.add_argument(
@@ -325,6 +364,22 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.composed_glyph_weight < 0.0:
+        raise ValueError(
+            "--composed-glyph-weight must be non-negative, got "
+            f"{args.composed_glyph_weight}"
+        )
+    if args.composed_font_weight_final < 0.0:
+        raise ValueError(
+            "--composed-font-weight-final must be non-negative, got "
+            f"{args.composed_font_weight_final}"
+        )
+    if args.composed_font_ramp_epochs < 0:
+        raise ValueError(
+            "--composed-font-ramp-epochs must be non-negative, got "
+            f"{args.composed_font_ramp_epochs}"
+        )
 
     if not args.font_path.exists():
         raise FileNotFoundError(f"Font file not found: {args.font_path}")
@@ -500,6 +555,9 @@ def main() -> None:
         learning_rate=args.nfa_learning_rate,
         beta1=args.nfa_beta1,
         beta2=args.nfa_beta2,
+        composed_glyph_weight=args.composed_glyph_weight,
+        composed_font_weight_final=args.composed_font_weight_final,
+        composed_font_ramp_epochs=args.composed_font_ramp_epochs,
         device=device,
         description=font_description,
     )

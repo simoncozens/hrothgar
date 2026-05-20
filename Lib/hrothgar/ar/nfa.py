@@ -128,6 +128,7 @@ class NFADatasetMaker:
         self.style_warmup_epochs = style_warmup_epochs
         self.style_extra_per_epoch = style_extra_per_epoch
         self.style_schedule_seed = style_schedule_seed
+        self._style_selection_epoch = 0
         self._style_extra_pool = self._build_style_extra_pool(font)
 
         if target_codepoints is not None:
@@ -178,6 +179,8 @@ class NFADatasetMaker:
         epoch until the extra pool is exhausted.
         """
 
+        self._style_selection_epoch = epoch
+
         if epoch < self.style_warmup_epochs:
             active_style_codepoints = list(self._base_style_codepoints)
         else:
@@ -191,6 +194,31 @@ class NFADatasetMaker:
             self.common_style_codepoints = list(dict.fromkeys(active_style_codepoints))
         else:
             self.common_style_codepoints = None
+
+    def _sample_deterministic_common_style_codepoints(self, target_char: int) -> list[int]:
+        """Select style codepoints deterministically from the active shared pool."""
+        if self.common_style_codepoints is None:
+            return [target_char] * self.style_glyph_count
+
+        filtered = [
+            cp
+            for cp in self.common_style_codepoints
+            if cp != target_char
+            and cp in self.font.codepoints
+            and _has_non_empty_glyph(self.font, cp)
+        ]
+        if not filtered:
+            return [target_char] * self.style_glyph_count
+
+        # Deterministic but not static: cycle through the active pool by
+        # target codepoint and epoch to avoid one fixed subset every time.
+        offset = (target_char + self._style_selection_epoch) % len(filtered)
+        ordered = filtered[offset:] + filtered[:offset]
+
+        if len(ordered) >= self.style_glyph_count:
+            return ordered[: self.style_glyph_count]
+        repeats = (self.style_glyph_count + len(ordered) - 1) // len(ordered)
+        return (ordered * repeats)[: self.style_glyph_count]
 
     def collate_fn(self, batch: list) -> dict:
         """Collate a list of ``{"font", "char"}`` items into model-ready tensors.
@@ -227,12 +255,17 @@ class NFADatasetMaker:
                 content_render = font.render(char, size=self.image_size)
             content_renderings.append(torch.tensor(content_render))
 
-            sampled_style_chars = _sample_style_codepoints(
-                font=font,
-                target_char=char,
-                style_glyph_count=self.style_glyph_count,
-                common_style_codepoints=self.common_style_codepoints,
-            )
+            if self.common_style_codepoints is not None:
+                sampled_style_chars = self._sample_deterministic_common_style_codepoints(
+                    char
+                )
+            else:
+                sampled_style_chars = _sample_style_codepoints(
+                    font=font,
+                    target_char=char,
+                    style_glyph_count=self.style_glyph_count,
+                    common_style_codepoints=None,
+                )
             rendered_styles = []
             sanitized_style_chars = []
             for cp in sampled_style_chars:
