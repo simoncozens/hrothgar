@@ -31,7 +31,7 @@ def _edge_map(images: torch.Tensor) -> torch.Tensor:
 def compute_upscaler_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
-    edge_weight: float = 0.2,
+    edge_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Combine pixel BCE with edge-aware L1 penalty."""
     bce = F.binary_cross_entropy(predictions, targets)
@@ -86,12 +86,15 @@ class UpscalerTrainingLoop(TrainingLoop):
         self.validation_batches = train_args.validation_batches
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
         self.validation_direction = "higher"
+        self.edge_weight = train_args.edge_weight
 
     def train_step(self, batch):
         low_res = batch["low_res"].to(self.device)
         high_res = batch["high_res"].to(self.device)
         predictions = self.model(low_res)
-        return compute_upscaler_loss(predictions, high_res)
+        return compute_upscaler_loss(
+            predictions, high_res, edge_weight=self.edge_weight
+        )
 
     def post_train_step(self):
         if self.global_step % self.validation_every != 0:
@@ -285,6 +288,12 @@ if __name__ == "__main__":
         type=float,
         default=0.01,
         help="Additional Gaussian noise stddev applied after downsampling in conformance mode",
+    )
+    parser.add_argument(
+        "--edge-weight",
+        type=float,
+        default=1.0,
+        help="Relative weight of the edge-aware loss term compared to pixel BCE",
     )
 
     args = parser.parse_args()
