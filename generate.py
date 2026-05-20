@@ -409,32 +409,42 @@ def main() -> None:
     font_description = matched_google_font.description_with_tags_and_display()
 
     # Load GTok and adapt only its decoder path on Latin Core glyphs.
-    gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
-    if args.gtok_epochs > 0:
-        fine_tune_gtok_decoder_only(
-            model=gtok,
-            font=matched_google_font,
-            image_size=args.image_size,
-            description=font_description,
-            config=GtokFineTuneConfig(
-                epochs=args.gtok_epochs,
-                batch_size=args.gtok_batch_size,
-                learning_rate=args.gtok_learning_rate,
-            ),
-            device=device,
-        )
-
     args.output_dir.mkdir(parents=True, exist_ok=True)
     finetuned_gtok_path = args.gtok_model_path
+
     if args.gtok_epochs > 0:
-        finetuned_gtok_path = args.finetuned_gtok_path
-        if finetuned_gtok_path is None:
+        # Determine the output path for the fine-tuned checkpoint.
+        if args.finetuned_gtok_path is not None:
+            finetuned_gtok_path = args.finetuned_gtok_path
+        else:
             finetuned_gtok_path = (
                 args.output_dir / f"{args.font_path.stem}_gtok_decoder_finetuned.pth"
             )
-        gtok.save(str(finetuned_gtok_path))
-        gtok_config.save_sidecar(finetuned_gtok_path)
-        print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
+
+        # Check if fine-tuned checkpoint already exists.
+        if Path(finetuned_gtok_path).exists():
+            print(f"Found fine-tuned GTok checkpoint: {finetuned_gtok_path}")
+            gtok, gtok_config = load_gtok_model(str(finetuned_gtok_path), device)
+        else:
+            print("Fine-tuned GTok checkpoint not found; training...")
+            gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
+            fine_tune_gtok_decoder_only(
+                model=gtok,
+                font=matched_google_font,
+                image_size=args.image_size,
+                description=font_description,
+                config=GtokFineTuneConfig(
+                    epochs=args.gtok_epochs,
+                    batch_size=args.gtok_batch_size,
+                    learning_rate=args.gtok_learning_rate,
+                ),
+                device=device,
+            )
+            gtok.save(str(finetuned_gtok_path))
+            gtok_config.save_sidecar(finetuned_gtok_path)
+            print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
+    else:
+        gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
 
     # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
     glyph_lora_path = glyph_lora_model_path(args.ar_model_path, target_char)
