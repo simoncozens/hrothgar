@@ -195,7 +195,9 @@ class NFADatasetMaker:
         else:
             self.common_style_codepoints = None
 
-    def _sample_deterministic_common_style_codepoints(self, target_char: int) -> list[int]:
+    def _sample_deterministic_common_style_codepoints(
+        self, target_char: int
+    ) -> list[int]:
         """Select style codepoints deterministically from the active shared pool."""
         if self.common_style_codepoints is None:
             return [target_char] * self.style_glyph_count
@@ -256,8 +258,8 @@ class NFADatasetMaker:
             content_renderings.append(torch.tensor(content_render))
 
             if self.common_style_codepoints is not None:
-                sampled_style_chars = self._sample_deterministic_common_style_codepoints(
-                    char
+                sampled_style_chars = (
+                    self._sample_deterministic_common_style_codepoints(char)
                 )
             else:
                 sampled_style_chars = _sample_style_codepoints(
