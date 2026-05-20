@@ -424,10 +424,10 @@ def main() -> None:
         # Check if fine-tuned checkpoint already exists.
         if Path(finetuned_gtok_path).exists():
             print(f"Found fine-tuned GTok checkpoint: {finetuned_gtok_path}")
-            gtok, gtok_config = load_gtok_model(str(finetuned_gtok_path), device)
+            gtok, gtok_config = load_gtok_model(Path(finetuned_gtok_path), device)
         else:
             print("Fine-tuned GTok checkpoint not found; training...")
-            gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
+            gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
             fine_tune_gtok_decoder_only(
                 model=gtok,
                 font=matched_google_font,
@@ -444,7 +444,7 @@ def main() -> None:
             gtok_config.save_sidecar(finetuned_gtok_path)
             print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
     else:
-        gtok, gtok_config = load_gtok_model(args.gtok_model_path, device)
+        gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
 
     # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
     glyph_lora_path = glyph_lora_model_path(args.ar_model_path, target_char)
@@ -542,9 +542,7 @@ def main() -> None:
     print(f"Loading glyph LoRA from {glyph_lora_path} for composed NFA mode...")
     glyph_lora_state = torch.load(glyph_lora_path, map_location=device)
     ar_model.enable_composed_nfa_mode(glyph_lora_state, lora_config)
-    print(
-        "Composed NFA mode enabled: glyph adapter frozen, font adapter trainable"
-    )
+    print("Composed NFA mode enabled: glyph adapter frozen, font adapter trainable")
 
     nfa_maker = NFADatasetMaker(
         font=matched_google_font,

@@ -291,11 +291,15 @@ class ComposedLoRALinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         glyph_delta = (
-            x @ self.lora_A_glyph.T @ self.lora_B_glyph.T
-        ) * self.scaling_glyph * self.glyph_weight
+            (x @ self.lora_A_glyph.T @ self.lora_B_glyph.T)
+            * self.scaling_glyph
+            * self.glyph_weight
+        )
         font_delta = (
-            x @ self.lora_A_font.T @ self.lora_B_font.T
-        ) * self.scaling_font * self.font_weight
+            (x @ self.lora_A_font.T @ self.lora_B_font.T)
+            * self.scaling_font
+            * self.font_weight
+        )
         return self.base(x) + glyph_delta + font_delta
 
 
