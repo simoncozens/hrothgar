@@ -648,7 +648,13 @@ def main() -> None:
     with torch.no_grad():
         low_res_tensor = torch.tensor(generated_128, dtype=torch.float32, device=device)
         low_res_tensor = low_res_tensor.unsqueeze(0)
-        upscaled_512 = upscaler(low_res_tensor).squeeze(0).detach().cpu().numpy()
+        upscaled_512 = (
+            upscaler(low_res_tensor, descriptions=[font_description])
+            .squeeze(0)
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
     codepoint_label = f"U+{target_char:04X}"
     output_512_path = (

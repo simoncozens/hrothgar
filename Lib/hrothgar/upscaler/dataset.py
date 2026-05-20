@@ -11,7 +11,6 @@ from typing import Optional, Set
 
 import torch
 import torch.nn.functional as F
-
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
 
 
@@ -101,10 +100,10 @@ class UpscalerDatasetMaker(DatasetMaker):
                     "--clean-font-only"
                 )
 
-    def train_set(self):
+    def train_set(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return AllGidsDataset(self.train_fonts)
 
-    def test_set(self):
+    def test_set(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return AllGidsDataset(self.test_fonts)
 
     def _is_clean_font(self, font: object) -> bool:
@@ -112,7 +111,10 @@ class UpscalerDatasetMaker(DatasetMaker):
         if display_score_fn is None or not callable(display_score_fn):
             return True
 
-        score = float(display_score_fn())
+        display_score = display_score_fn()
+        if not isinstance(display_score, (int, float)):
+            return True
+        score = float(display_score)
         return score <= self.clean_font_display_score_threshold
 
     def _edge_magnitude(self, images: torch.Tensor) -> torch.Tensor:
@@ -176,6 +178,7 @@ class UpscalerDatasetMaker(DatasetMaker):
             "gid": gids,
             "low_res": low_res,
             "high_res": high_res,
+            "description": [item["font"].description_with_tags_and_display() for item in batch],
         }
 
 

@@ -70,9 +70,9 @@ class UpscalerTrainingLoop(TrainingLoop):
             outline_noise_edge_threshold=train_args.outline_noise_edge_threshold,
             low_res_noise_std=train_args.low_res_noise_std,
         )
+
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
-
         self.optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=train_args.learning_rate,
@@ -91,7 +91,8 @@ class UpscalerTrainingLoop(TrainingLoop):
     def train_step(self, batch):
         low_res = batch["low_res"].to(self.device)
         high_res = batch["high_res"].to(self.device)
-        predictions = self.model(low_res)
+        descriptions = batch.get("description")
+        predictions = self.model(low_res, descriptions=descriptions)
         return compute_upscaler_loss(
             predictions, high_res, edge_weight=self.edge_weight
         )
@@ -110,7 +111,9 @@ class UpscalerTrainingLoop(TrainingLoop):
             ):
                 low_res = val_batch["low_res"].to(self.device)
                 high_res = val_batch["high_res"].to(self.device)
-                pred = self.model(low_res)
+                pred = self.model(
+                    low_res, descriptions=val_batch.get("description")
+                )
                 val_ssim.append(self.ssim(pred, high_res))
 
             avg_ssim = torch.mean(torch.stack(val_ssim))
@@ -124,7 +127,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         val_batch = next(iter(self.test_loader))
         low_res = val_batch["low_res"].to(self.device)
         high_res = val_batch["high_res"].to(self.device)
-        pred = self.model(low_res)
+        pred = self.model(low_res, descriptions=val_batch.get("description"))
 
         preview_count = min(8, low_res.shape[0])
         bicubic = F.interpolate(
@@ -247,12 +250,6 @@ if __name__ == "__main__":
         help="Path to pretrained GTok weights (optional)",
     )
     parser.add_argument(
-        "--model-path",
-        type=str,
-        default="models/upscaler_model.pth",
-        help="Path to save SR model weights",
-    )
-    parser.add_argument(
         "--style-conformance-mode",
         action="store_true",
         help=(
@@ -294,6 +291,12 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="Relative weight of the edge-aware loss term compared to pixel BCE",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="models/upscaler_model.pth",
+        help="Path to save SR model weights",
     )
 
     args = parser.parse_args()
