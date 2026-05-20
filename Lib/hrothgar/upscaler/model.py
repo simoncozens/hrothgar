@@ -11,12 +11,16 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from hrothgar.ar.multimodal import (
+    HashedDescriptionEncoder,
+    HashedDescriptionEncoderConfig,
+)
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.utils import SaveLoadModel
 
@@ -31,6 +35,8 @@ class UpscalerConfig:
     num_residual_blocks: int = 8
     use_gtok_encoder: bool = True
     use_gtok_vit_features: bool = True
+    use_description_conditioning: bool = True
+    description_fallback_embedding_dim: int = 512
     gtok_model_path: Optional[str] = "models/gtok_model.pth"
 
     def __post_init__(self) -> None:
@@ -87,6 +93,7 @@ class UpscalerModel(SaveLoadModel):
         self.config = config
         self.use_gtok_encoder = config.use_gtok_encoder
         self.use_gtok_vit_features = config.use_gtok_vit_features
+        self.use_description_conditioning = config.use_description_conditioning
 
         self.input_projection = nn.Conv2d(3, config.base_channels, 3, 1, 1)
 
@@ -117,6 +124,8 @@ class UpscalerModel(SaveLoadModel):
 
         self.gtok: Optional[GtokModel] = None
         self.gtok_feature_adapter: Optional[nn.Module] = None
+        self.description_encoder: Optional[HashedDescriptionEncoder] = None
+        self.description_feature_adapter: Optional[nn.Module] = None
         self._init_gtok_conditioning()
 
     def _init_gtok_conditioning(self) -> None:
@@ -144,6 +153,23 @@ class UpscalerModel(SaveLoadModel):
                 self.config.base_channels, self.config.base_channels, kernel_size=1
             ),
         )
+
+        if self.use_description_conditioning:
+            self.description_encoder = HashedDescriptionEncoder(
+                HashedDescriptionEncoderConfig(
+                    embedding_dim=self.config.description_fallback_embedding_dim,
+                )
+            )
+            description_embedding_dim = (
+                self.gtok.text_conditioner.output_dim
+                if self.gtok.text_conditioner is not None
+                else self.config.description_fallback_embedding_dim
+            )
+            self.description_feature_adapter = nn.Sequential(
+                nn.Linear(description_embedding_dim, self.config.base_channels),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.config.base_channels, self.config.base_channels * 2),
+            )
 
     def _load_gtok_config(self) -> GtokConfig:
         if not self.config.gtok_model_path:
@@ -197,12 +223,53 @@ class UpscalerModel(SaveLoadModel):
             align_corners=False,
         )
 
-    def forward(self, low_res: torch.Tensor) -> torch.Tensor:
+    def _description_embedding(
+        self, descriptions: Optional[Sequence[str]], device: torch.device
+    ) -> Optional[torch.Tensor]:
+        if not self.use_description_conditioning or descriptions is None:
+            return None
+        if self.gtok is not None and self.gtok.text_conditioner is not None:
+            return self.gtok._description_embeddings(
+                list(descriptions),
+                batch_size=len(descriptions),
+                device=device,
+            )
+        if self.description_encoder is None:
+            return None
+
+        token_embeddings = self.description_encoder(list(descriptions)).to(device)
+        return token_embeddings.mean(dim=1)
+
+    def _apply_description_conditioning(
+        self,
+        x: torch.Tensor,
+        descriptions: Optional[Sequence[str]],
+    ) -> torch.Tensor:
+        if self.description_feature_adapter is None:
+            return x
+
+        description_embedding = self._description_embedding(descriptions, x.device)
+        if description_embedding is None:
+            return x
+
+        gamma_beta = self.description_feature_adapter(description_embedding)
+        gamma, beta = torch.chunk(gamma_beta, chunks=2, dim=-1)
+        gamma = gamma.unsqueeze(-1).unsqueeze(-1)
+        beta = beta.unsqueeze(-1).unsqueeze(-1)
+        return x * (1.0 + gamma) + beta
+
+    def forward(
+        self,
+        low_res: torch.Tensor,
+        descriptions: Optional[Sequence[str]] = None,
+    ) -> torch.Tensor:
         x = self.input_projection(low_res)
 
         gtok_features = self._extract_gtok_feature_map(low_res)
         if gtok_features is not None:
             x = x + gtok_features
+
+        x = self._apply_description_conditioning(x, descriptions)
 
         residual = self.body_projection(self.residual_body(x))
         x = x + residual

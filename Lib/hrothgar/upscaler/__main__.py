@@ -128,6 +128,7 @@ def main() -> None:
 
     font = StandaloneFont(args.font)
     low_res, high_res, label = _render_pair(font, char=char, gid=gid)
+    description = font.description_with_tags_and_display()
 
     device = pick_device()
     print(f"Using device: {device}")
@@ -147,7 +148,13 @@ def main() -> None:
         low_res, dtype=torch.float32, device=device
     ).unsqueeze(0)
     with torch.no_grad():
-        upscaled = model(low_res_tensor).squeeze(0).detach().cpu().numpy()
+        upscaled = (
+            model(low_res_tensor, descriptions=[description])
+            .squeeze(0)
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
     stem = f"{args.font.stem}_{label}"
     low_path = args.output_dir / f"{stem}_128.png"
