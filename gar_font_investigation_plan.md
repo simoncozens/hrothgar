@@ -238,6 +238,9 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Train a supervised 2x/4x upscaler on Latin core glyph pairs from Google Fonts
   - Use aligned pairs: render high-resolution glyphs, then downsample for low-resolution input
   - Baseline loss: BCE/L1 reconstruction + edge-aware term (Sobel/Canny-weighted)
+  - [x] Added optional conformance-data mode in `Lib/hrothgar/upscaler/dataset.py`: synthetic edge-localized corruption on low-res inputs while retaining clean high-res targets.
+  - [x] Added optional clean-font filtering using Google Fonts display score threshold to exclude rough/display-heavy families during initial cleanup-focused training.
+  - [x] Exposed training controls in `Lib/hrothgar/upscaler/train.py` (`--style-conformance-mode`, `--clean-font-only`, noise/threshold knobs).
 
 - [ ] **Glyph-aware conditioning experiments**
   - Condition the upscaler on frozen G-Tok encoder features (CNN only vs. CNN+ViT)

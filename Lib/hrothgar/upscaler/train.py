@@ -63,6 +63,12 @@ class UpscalerTrainingLoop(TrainingLoop):
             batch_size=train_args.batch_size,
             low_res_size=config.low_res_size,
             high_res_size=config.high_res_size,
+            style_conformance_mode=train_args.style_conformance_mode,
+            clean_font_only=train_args.clean_font_only,
+            clean_font_display_score_threshold=train_args.clean_font_display_score_threshold,
+            outline_noise_std=train_args.outline_noise_std,
+            outline_noise_edge_threshold=train_args.outline_noise_edge_threshold,
+            low_res_noise_std=train_args.low_res_noise_std,
         )
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
@@ -242,6 +248,43 @@ if __name__ == "__main__":
         type=str,
         default="models/upscaler_model.pth",
         help="Path to save SR model weights",
+    )
+    parser.add_argument(
+        "--style-conformance-mode",
+        action="store_true",
+        help=(
+            "Corrupt low-res inputs with synthetic outline noise while keeping clean "
+            "high-res targets, to train cleanup/conformance behavior"
+        ),
+    )
+    parser.add_argument(
+        "--clean-font-only",
+        action="store_true",
+        help="Filter out high-display fonts during SR training",
+    )
+    parser.add_argument(
+        "--clean-font-display-score-threshold",
+        type=float,
+        default=45.0,
+        help="Maximum display score to keep when --clean-font-only is set",
+    )
+    parser.add_argument(
+        "--outline-noise-std",
+        type=float,
+        default=0.08,
+        help="Stddev of edge-localized noise used in conformance mode",
+    )
+    parser.add_argument(
+        "--outline-noise-edge-threshold",
+        type=float,
+        default=0.12,
+        help="Normalized edge threshold (0-1) used to place outline noise",
+    )
+    parser.add_argument(
+        "--low-res-noise-std",
+        type=float,
+        default=0.01,
+        help="Additional Gaussian noise stddev applied after downsampling in conformance mode",
     )
 
     args = parser.parse_args()
