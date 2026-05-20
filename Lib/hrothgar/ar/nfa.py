@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import random
 from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -99,13 +100,35 @@ class NFADatasetMaker:
         image_size: int = 128,
         style_glyph_count: int = 8,
         common_style_codepoints: Optional[Sequence[int]] = None,
+        style_warmup_epochs: int = 0,
+        style_extra_per_epoch: int = 0,
+        style_schedule_seed: int = 1234,
         target_codepoints: Optional[Sequence[int]] = None,
     ) -> None:
         self.font = font
         self.batch_size = batch_size
         self.image_size = image_size
         self.style_glyph_count = style_glyph_count
-        self.common_style_codepoints = common_style_codepoints
+        if style_warmup_epochs < 0:
+            raise ValueError(
+                f"style_warmup_epochs must be non-negative, got {style_warmup_epochs}"
+            )
+        if style_extra_per_epoch < 0:
+            raise ValueError(
+                f"style_extra_per_epoch must be non-negative, got {style_extra_per_epoch}"
+            )
+        self._base_style_codepoints = (
+            list(dict.fromkeys(common_style_codepoints))
+            if common_style_codepoints is not None
+            else []
+        )
+        self.common_style_codepoints = (
+            list(self._base_style_codepoints) if self._base_style_codepoints else None
+        )
+        self.style_warmup_epochs = style_warmup_epochs
+        self.style_extra_per_epoch = style_extra_per_epoch
+        self.style_schedule_seed = style_schedule_seed
+        self._style_extra_pool = self._build_style_extra_pool(font)
 
         if target_codepoints is not None:
             candidate_codepoints = [
@@ -133,6 +156,41 @@ class NFADatasetMaker:
         )
         self.train_set = NFAGlyphDataset(font, train_cps)
         self.val_set = NFAGlyphDataset(font, val_cps)
+
+    def _build_style_extra_pool(self, font) -> list[int]:
+        excluded = set(self._base_style_codepoints)
+        extra_candidates = [
+            cp
+            for cp in font.codepoints
+            if cp in LATIN_CORE
+            and cp not in excluded
+            and _has_non_empty_glyph(font, cp)
+        ]
+        rng = random.Random(self.style_schedule_seed)
+        rng.shuffle(extra_candidates)
+        return extra_candidates
+
+    def set_style_schedule_epoch(self, epoch: int) -> None:
+        """Update the shared style-character pool for a given epoch.
+
+        The base ``--style-characters`` set is used for the warm-up phase.
+        After that, the pool grows by ``style_extra_per_epoch`` glyphs each
+        epoch until the extra pool is exhausted.
+        """
+
+        if epoch < self.style_warmup_epochs:
+            active_style_codepoints = list(self._base_style_codepoints)
+        else:
+            extra_epochs = epoch - self.style_warmup_epochs + 1
+            extra_count = extra_epochs * self.style_extra_per_epoch
+            active_style_codepoints = list(self._base_style_codepoints) + list(
+                self._style_extra_pool[:extra_count]
+            )
+
+        if active_style_codepoints:
+            self.common_style_codepoints = list(dict.fromkeys(active_style_codepoints))
+        else:
+            self.common_style_codepoints = None
 
     def collate_fn(self, batch: list) -> dict:
         """Collate a list of ``{"font", "char"}`` items into model-ready tensors.
@@ -268,15 +326,15 @@ class ARNFATrainingLoop(TrainingLoop):
         )
 
         common_style_cps = train_args.style_characters
-        if train_args.style_glyph_count < len(common_style_cps or []):
-            train_args.style_glyph_count = len(common_style_cps)
-
         maker = NFADatasetMaker(
             font=font,
             batch_size=train_args.batch_size,
             image_size=config.image_size,
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=common_style_cps,
+            style_warmup_epochs=train_args.style_warmup_epochs,
+            style_extra_per_epoch=train_args.style_extra_per_epoch,
+            style_schedule_seed=train_args.style_schedule_seed,
             target_codepoints=train_args.target_characters,
         )
 
@@ -291,6 +349,7 @@ class ARNFATrainingLoop(TrainingLoop):
         self.loss_weights = ARLossWeights()
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
+        self.maker = maker
 
         self.model = model
         self.target_steps = train_args.target_steps
@@ -364,6 +423,7 @@ class ARNFATrainingLoop(TrainingLoop):
                     epoch=self.epoch,
                     num_epochs=self.num_epochs,
                 )
+                self.maker.set_style_schedule_epoch(self.epoch)
                 self.model.train()
                 # G-Tok must always stay in eval.
                 self.model.gtok.eval()
@@ -605,6 +665,24 @@ if __name__ == "__main__":
         "--style-characters",
         type=_parse_codepoint,
         help="Optional fixed style character string (e.g. 'adhesionADHESION')",
+    )
+    parser.add_argument(
+        "--style-warmup-epochs",
+        type=int,
+        default=0,
+        help="Epochs to use only --style-characters before widening the style pool",
+    )
+    parser.add_argument(
+        "--style-extra-per-epoch",
+        type=int,
+        default=0,
+        help="Additional font glyphs to add to the style pool after each warm-up epoch",
+    )
+    parser.add_argument(
+        "--style-schedule-seed",
+        type=int,
+        default=1234,
+        help="Seed for the deterministic order of extra style glyphs",
     )
     parser.add_argument(
         "--target-characters",
