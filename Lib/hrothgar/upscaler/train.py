@@ -14,6 +14,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import TrainingLoop
+from hrothgar.eagle_loss import EagleLoss
 
 
 def _edge_map(images: torch.Tensor) -> torch.Tensor:
@@ -28,25 +29,44 @@ def _edge_map(images: torch.Tensor) -> torch.Tensor:
     return magnitude
 
 
+def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:
+    """Convert NaN/Inf to finite values and clamp to BCE's expected range."""
+    return torch.nan_to_num(tensor, nan=nan_fill, posinf=1.0, neginf=0.0).clamp(
+        0.0, 1.0
+    )
+
+
 def compute_upscaler_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
+    eagle_loss: EagleLoss,
     edge_weight: float = 1.0,
+    eagle_loss_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Combine pixel BCE with edge-aware L1 penalty."""
+    predictions = _sanitize_for_bce(predictions, nan_fill=0.5)
+    targets = _sanitize_for_bce(targets, nan_fill=0.0)
+
     bce = F.binary_cross_entropy(predictions, targets)
     pred_edges = _edge_map(predictions)
     target_edges = _edge_map(targets)
     edge_l1 = F.l1_loss(pred_edges, target_edges)
+    eagle_contribution = eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
 
-    loss = bce + edge_weight * edge_l1
-    return loss, {"bce": bce, "edge_l1": edge_l1, "loss": loss}
+    loss = bce + edge_weight * edge_l1 + eagle_loss_weight * eagle_contribution
+    return loss, {
+        "bce": bce,
+        "edge_l1": edge_l1,
+        "eagle": eagle_contribution,
+        "loss": loss,
+    }
 
 
 class UpscalerTrainingLoop(TrainingLoop):
     """Training loop for the glyph SR prototype."""
 
     def post_init(self, train_args):
+        self.eagle_loss = EagleLoss(patch_size=8).to(self.device)
         config = UpscalerConfig(
             low_res_size=train_args.low_res_size,
             high_res_size=train_args.high_res_size,
@@ -94,7 +114,11 @@ class UpscalerTrainingLoop(TrainingLoop):
         descriptions = batch.get("description")
         predictions = self.model(low_res, descriptions=descriptions)
         return compute_upscaler_loss(
-            predictions, high_res, edge_weight=self.edge_weight
+            predictions,
+            high_res,
+            edge_weight=self.edge_weight,
+            eagle_loss=self.eagle_loss,
+            eagle_loss_weight=0.0,
         )
 
     def post_train_step(self):
@@ -111,9 +135,7 @@ class UpscalerTrainingLoop(TrainingLoop):
             ):
                 low_res = val_batch["low_res"].to(self.device)
                 high_res = val_batch["high_res"].to(self.device)
-                pred = self.model(
-                    low_res, descriptions=val_batch.get("description")
-                )
+                pred = self.model(low_res, descriptions=val_batch.get("description"))
                 val_ssim.append(self.ssim(pred, high_res))
 
             avg_ssim = torch.mean(torch.stack(val_ssim))
@@ -284,7 +306,7 @@ if __name__ == "__main__":
         "--low-res-noise-std",
         type=float,
         default=0.01,
-        help="Additional Gaussian noise stddev applied after downsampling in conformance mode",
+        help="Per-pixel replacement probability applied after downsampling in conformance mode",
     )
     parser.add_argument(
         "--edge-weight",

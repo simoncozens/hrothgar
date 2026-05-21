@@ -56,9 +56,10 @@ class UpscalerDatasetMaker(DatasetMaker):
                 "outline_noise_edge_threshold must be in [0, 1] "
                 f"(got {outline_noise_edge_threshold})"
             )
-        if low_res_noise_std < 0.0:
+        if not (0.0 <= low_res_noise_std <= 1.0):
             raise ValueError(
-                f"low_res_noise_std must be non-negative (got {low_res_noise_std})"
+                "low_res_noise_std must be in [0, 1] when interpreted as "
+                f"replacement probability (got {low_res_noise_std})"
             )
 
         self.low_res_size = low_res_size
@@ -146,6 +147,23 @@ class UpscalerDatasetMaker(DatasetMaker):
         corrupted = mixed + noise * edge_mask
         return corrupted.clamp(0.0, 1.0)
 
+    def _inject_monochrome_low_res_noise(self, low_res: torch.Tensor) -> torch.Tensor:
+        replace_mask = (
+            torch.rand(
+                (low_res.shape[0], 1, low_res.shape[2], low_res.shape[3]),
+                dtype=low_res.dtype,
+                device=low_res.device,
+            )
+            < self.low_res_noise_std
+        )
+        replacement_gray = torch.rand(
+            (low_res.shape[0], 1, low_res.shape[2], low_res.shape[3]),
+            dtype=low_res.dtype,
+            device=low_res.device,
+        )
+        replacement = replacement_gray.expand_as(low_res)
+        return torch.where(replace_mask.expand_as(low_res), replacement, low_res)
+
     def collate_fn(self, batch):
         gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
         high_res = torch.stack(
@@ -170,15 +188,15 @@ class UpscalerDatasetMaker(DatasetMaker):
         )
 
         if self.style_conformance_mode and self.low_res_noise_std > 0.0:
-            low_res = (
-                low_res + torch.randn_like(low_res) * self.low_res_noise_std
-            ).clamp(0.0, 1.0)
+            low_res = self._inject_monochrome_low_res_noise(low_res)
 
         return {
             "gid": gids,
             "low_res": low_res,
             "high_res": high_res,
-            "description": [item["font"].description_with_tags_and_display() for item in batch],
+            "description": [
+                item["font"].description_with_tags_and_display() for item in batch
+            ],
         }
 
 

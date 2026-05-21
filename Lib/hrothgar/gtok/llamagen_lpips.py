@@ -7,7 +7,9 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 from torchvision import models
+from torchvision.models import VGG16_Weights
 from collections import namedtuple
+from typing import Optional, cast
 
 URL_MAP = {"vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"}
 
@@ -51,7 +53,7 @@ class LPIPS(nn.Module):
         super().__init__()
         self.scaling_layer = ScalingLayer()
         self.chns = [64, 128, 256, 512, 512]  # vg16 features
-        self.net = vgg16(pretrained=True, requires_grad=False)
+        self.net = vgg16(weights=VGG16_Weights.IMAGENET1K_V1, requires_grad=False)
         self.lin0 = NetLinLayer(self.chns[0], use_dropout=use_dropout)
         self.lin1 = NetLinLayer(self.chns[1], use_dropout=use_dropout)
         self.lin2 = NetLinLayer(self.chns[2], use_dropout=use_dropout)
@@ -137,9 +139,19 @@ class NetLinLayer(nn.Module):
 
 
 class vgg16(torch.nn.Module):
-    def __init__(self, requires_grad=False, pretrained=True):
+    def __init__(
+        self,
+        requires_grad=False,
+        pretrained=True,
+        weights: Optional[VGG16_Weights] = None,
+    ):
         super(vgg16, self).__init__()
-        vgg_pretrained_features = models.vgg16(pretrained=pretrained).features
+        # Keep pretrained for compatibility but prefer explicit weights.
+        if weights is None:
+            weights = VGG16_Weights.IMAGENET1K_V1 if pretrained else None
+        vgg_pretrained_features = cast(
+            nn.Sequential, models.vgg16(weights=weights).features
+        )
         self.slice1 = torch.nn.Sequential()
         self.slice2 = torch.nn.Sequential()
         self.slice3 = torch.nn.Sequential()
