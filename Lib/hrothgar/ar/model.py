@@ -1022,11 +1022,14 @@ class ARModel(SaveLoadModel):
         scheduled_sampling_probability: float,
         descriptions: Optional[List[str]] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Decode with mixed teacher/predicted previous tokens.
+        """Decode with on-policy scheduled sampling.
 
-        Uses a parallel scheduled-sampling approximation: first obtain token
-        predictions from a teacher-forced pass, then replace each previous-token
-        input with that predicted token with probability ``p``.
+        The model rolls forward token by token. At each step it computes the
+        next-token distribution from the currently selected prefix, then uses
+        either the model sample or the ground-truth token as the next prefix
+        token with probability ``p``. This keeps the sampled prefixes aligned
+        with the model's own rollout distribution instead of reusing a single
+        teacher-forced prediction stream.
         """
         if scheduled_sampling_probability <= 0.0:
             return self._decode_with_teacher_forcing(
@@ -1036,41 +1039,44 @@ class ARModel(SaveLoadModel):
             )
 
         p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
-        teacher_inputs = self.token_decoder.prepare_teacher_forcing_inputs(
-            target_token_indices
-        )
-
-        # Generate a detached prediction stream used only to construct mixed
-        # decoder inputs, while gradients flow through the final decode pass.
-        with torch.no_grad():
-            teacher_logits = self.token_decoder(teacher_inputs, conditioning_tokens)
-            teacher_predictions = torch.argmax(teacher_logits, dim=-1)
-
-        previous_ground_truth = target_token_indices[:, :-1]
-        previous_predictions = teacher_predictions[:, :-1]
-        use_prediction_mask = (
-            torch.rand(
-                previous_ground_truth.shape,
-                device=target_token_indices.device,
-            )
-            < p
-        )
-        mixed_previous_tokens = torch.where(
-            use_prediction_mask,
-            previous_predictions,
-            previous_ground_truth,
-        )
-
-        batch_size = target_token_indices.shape[0]
-        bos_column = torch.full(
+        batch_size, sequence_length = target_token_indices.shape
+        decoder_inputs = torch.full(
             (batch_size, 1),
             fill_value=self.token_decoder.bos_token_id,
             device=target_token_indices.device,
             dtype=target_token_indices.dtype,
         )
-        mixed_decoder_inputs = torch.cat([bos_column, mixed_previous_tokens], dim=1)
 
-        logits = self.token_decoder(mixed_decoder_inputs, conditioning_tokens)
+        logits_per_step: list[torch.Tensor] = []
+        for step_index in range(sequence_length):
+            step_logits = self.token_decoder(decoder_inputs, conditioning_tokens)[
+                :, -1, :
+            ]
+            logits_per_step.append(step_logits)
+
+            if step_index == sequence_length - 1:
+                continue
+
+            use_model_token = torch.rand(
+                batch_size, device=target_token_indices.device
+            ) < p
+            if bool(use_model_token.any()):
+                with torch.no_grad():
+                    probabilities = torch.softmax(step_logits.detach().float(), dim=-1)
+                    sampled_tokens = torch.multinomial(
+                        probabilities, num_samples=1
+                    ).squeeze(-1)
+                next_token = torch.where(
+                    use_model_token,
+                    sampled_tokens,
+                    target_token_indices[:, step_index],
+                )
+            else:
+                next_token = target_token_indices[:, step_index]
+
+            decoder_inputs = torch.cat([decoder_inputs, next_token.unsqueeze(1)], dim=1)
+
+        logits = torch.stack(logits_per_step, dim=1)
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
             descriptions=descriptions,

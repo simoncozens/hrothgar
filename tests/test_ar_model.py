@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import pytest
+from typing import List
 
 from hrothgar.ar.model import (
     ARModel,
@@ -95,6 +96,87 @@ def test_ar_model_generate_shape() -> None:
     assert output.reconstructed_images.shape == content_images.shape
     assert output.target_token_indices is not None
     assert output.target_token_indices.shape == (1, model.sequence_length)
+
+
+class _FakeTokenDecoder(nn.Module):
+    def __init__(self, vocab_size: int, sequence_length: int) -> None:
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.sequence_length = sequence_length
+        self.bos_token_id = vocab_size
+        self.seen_prefixes: List[torch.Tensor] = []
+
+    def forward(
+        self,
+        input_token_indices: torch.Tensor,
+        conditioning_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        del conditioning_tokens
+        self.seen_prefixes.append(input_token_indices.detach().cpu())
+        batch_size, prefix_length = input_token_indices.shape
+        logits = torch.zeros(
+            batch_size,
+            prefix_length,
+            self.vocab_size,
+            dtype=torch.float32,
+            device=input_token_indices.device,
+        )
+        next_token = (input_token_indices[:, -1] + 1) % self.vocab_size
+        logits[:, -1, :].fill_(-10.0)
+        logits.scatter_(2, next_token.view(batch_size, 1, 1), 10.0)
+        return logits
+
+    def prepare_teacher_forcing_inputs(
+        self, target_token_indices: torch.Tensor
+    ) -> torch.Tensor:
+        bos_column = torch.full(
+            (target_token_indices.shape[0], 1),
+            fill_value=self.bos_token_id,
+            dtype=target_token_indices.dtype,
+            device=target_token_indices.device,
+        )
+        return torch.cat([bos_column, target_token_indices[:, :-1]], dim=1)
+
+
+def test_scheduled_sampling_rolls_forward_on_policy() -> None:
+    model = make_test_models()
+    fake_decoder = _FakeTokenDecoder(model.codebook_size, model.sequence_length)
+    model.token_decoder = fake_decoder
+
+    def _soft_decode(logits: torch.Tensor, descriptions=None):
+        del descriptions
+        reconstructed = torch.zeros(
+            logits.shape[0], 3, 64, 64, dtype=torch.float32, device=logits.device
+        )
+        embeddings = torch.zeros(
+            logits.shape[0],
+            logits.shape[1],
+            model.codebook_dim,
+            dtype=torch.float32,
+            device=logits.device,
+        )
+        return embeddings, reconstructed
+
+    model.soft_decode = _soft_decode  # type: ignore[assignment]
+    model.eval()
+
+    content_images = torch.randn(1, 3, 64, 64)
+    style_reference_images = torch.randn(1, 2, 3, 64, 64)
+    target_token_indices = torch.zeros(1, model.sequence_length, dtype=torch.long)
+
+    with torch.no_grad():
+        output = model(
+            content_images,
+            style_reference_images,
+            target_token_indices=target_token_indices,
+            scheduled_sampling_probability=1.0,
+        )
+
+    assert output.logits.shape == (1, model.sequence_length, model.codebook_size)
+    assert len(fake_decoder.seen_prefixes) == model.sequence_length
+    assert fake_decoder.seen_prefixes[0].shape[1] == 1
+    assert fake_decoder.seen_prefixes[1].shape[1] == 2
+    assert fake_decoder.seen_prefixes[-1].shape[1] == model.sequence_length
 
 
 class DummyLanguageAdapter(nn.Module):

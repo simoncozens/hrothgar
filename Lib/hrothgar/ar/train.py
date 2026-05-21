@@ -129,7 +129,7 @@ class ARVisualTrainingLoop(TrainingLoop):
 
         # GradScaler is needed for fp16, but not for bf16.
         self.scaler = torch.cuda.amp.GradScaler(
-            enabled=self.use_amp and self.amp_dtype == torch.float16
+            "cuda", enabled=self.use_amp and self.amp_dtype == torch.float16
         )
 
         if self.canary_batches != 0:
@@ -327,6 +327,10 @@ class ARVisualTrainingLoop(TrainingLoop):
             fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
             self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
             self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
+            lpips_gap = fr_lpips - avg_lpips
+            lpips_gap_ratio = lpips_gap / torch.clamp(avg_lpips, min=1e-8)
+            self.write_scalar("Validation/LPIPS_Gap_Absolute", lpips_gap)
+            self.write_scalar("Validation/LPIPS_Gap_Relative", lpips_gap_ratio)
 
             self.checkpoint_if_best(fr_ssim)
             self.visualize()

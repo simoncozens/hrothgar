@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Eagle_Loss(nn.Module):
+class EagleLoss(nn.Module):
     """
     Eagle_Loss is a custom loss function designed for image reconstruction tasks, with an emphasis on preserving
     textures and edges in the reconstructed images. It operates by analyzing the variance of image gradients within
@@ -28,7 +28,7 @@ class Eagle_Loss(nn.Module):
     """
 
     def __init__(self, patch_size, cpu=False, cutoff=0.5):
-        super(Eagle_Loss, self).__init__()
+        super(EagleLoss, self).__init__()
         self.patch_size = patch_size
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not cpu else "cpu"
