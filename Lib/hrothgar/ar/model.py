@@ -1026,14 +1026,19 @@ class ARModel(SaveLoadModel):
 
         Uses a two-phase approach to keep activation memory equivalent to
         teacher forcing (O(sequence_length)) rather than the O(sequence_length²)
-        cost of a fully differentiable sequential rollout:
+        cost of a fully differentiable sequential rollout.
+
+        To keep wall-clock training practical, this method also uses a
+        batch-level stochastic gate: with probability ``p`` it runs the
+        on-policy rollout path; otherwise it falls back to teacher forcing.
+        This uses ``p`` as the mixture weight between fast teacher-forced
+        updates and slower on-policy updates.
 
         **Phase 1 — on-policy rollout (no gradient):** Roll the model forward
-        autoregressively under ``torch.no_grad``.  At each step the next prefix
-        token is chosen as a model sample (with probability ``p``) or the
-        ground-truth token (with probability ``1-p``).  Because no computation
-        graph is retained, all activations are freed immediately; memory usage
-        is proportional to one forward pass at a time regardless of sequence
+        autoregressively under ``torch.no_grad``. At each step the next prefix
+        token is sampled from the model. Because no computation graph is
+        retained, all activations are freed immediately; memory usage is
+        proportional to one forward pass at a time regardless of sequence
         length.
 
         **Phase 2 — single parallel forward pass (with gradient):** The full
@@ -1057,6 +1062,19 @@ class ARModel(SaveLoadModel):
             )
 
         p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
+
+        # Batch-level gate for speed: only run expensive sequential roll-in on
+        # a fraction ``p`` of training steps.
+        do_on_policy_rollout = bool(
+            (torch.rand((), device=target_token_indices.device) < p).item()
+        )
+        if not do_on_policy_rollout:
+            return self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=target_token_indices,
+                descriptions=descriptions,
+            )
+
         batch_size, sequence_length = target_token_indices.shape
 
         # Phase 1: autoregressive rollout under no_grad to build the mixed
@@ -1073,21 +1091,8 @@ class ARModel(SaveLoadModel):
                 step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
                     :, -1, :
                 ]
-                use_model_token = (
-                    torch.rand(batch_size, device=target_token_indices.device) < p
-                )
-                if bool(use_model_token.any()):
-                    probabilities = torch.softmax(step_logits.float(), dim=-1)
-                    sampled_tokens = torch.multinomial(
-                        probabilities, num_samples=1
-                    ).squeeze(-1)
-                    next_token = torch.where(
-                        use_model_token,
-                        sampled_tokens,
-                        target_token_indices[:, step_index],
-                    )
-                else:
-                    next_token = target_token_indices[:, step_index]
+                probabilities = torch.softmax(step_logits.float(), dim=-1)
+                next_token = torch.multinomial(probabilities, num_samples=1).squeeze(-1)
                 mixed_prefix_tokens.append(next_token)
                 rollout_prefix = torch.cat(
                     [rollout_prefix, next_token.unsqueeze(1)], dim=1
