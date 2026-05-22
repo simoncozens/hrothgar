@@ -128,7 +128,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             )
 
         # GradScaler is needed for fp16, but not for bf16.
-        self.scaler = torch.cuda.amp.GradScaler(
+        self.scaler = torch.amp.GradScaler(
             "cuda", enabled=self.use_amp and self.amp_dtype == torch.float16
         )
 
