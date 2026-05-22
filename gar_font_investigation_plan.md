@@ -144,6 +144,7 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - 64×64 reconstructions are not sufficient for downstream vectorization quality
   - Move G-Tok to 128×128 with an 8x downsampling tokenizer grid, yielding 16×16 = 256 tokens
   - Re-run tokenizer training and validation at 128×128 before adding probing/noise studies
+  - Experimental branch: normalize Latin glyph renderings to fill the raster canvas (1px border, aspect-ratio preserved, centered) so we can re-evaluate whether 64×64 tokenization is sufficient when width metrics are removed from the bitmap itself
 
 ### Phase 2: AR Generator — Visual Only (Weeks 4-8)
 
