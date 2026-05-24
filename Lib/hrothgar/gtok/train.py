@@ -134,7 +134,7 @@ class GtokTrainingLoop(TrainingLoop):
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
         self.model = model
-        self.target_steps = 200_000  # Specified in paper
+        self.target_steps = 500_000  # Specified in paper
         if train_args.canary != 0:
             # Run for ten epochs, i.e. 10 * len(train) steps
             train_loader = list(itertools.islice(self.train_loader, train_args.canary))
