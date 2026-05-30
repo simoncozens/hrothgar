@@ -68,7 +68,9 @@ class ARVisualTrainingLoop(TrainingLoop):
             target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
             split_seed=train_args.split_seed,
+            having=train_args.target_characters,
             canary_size=train_args.limit_dataset_size,
+            target_only=train_args.target_only,
         )
 
         self.optimizer = torch.optim.AdamW(
@@ -1012,6 +1014,16 @@ if __name__ == "__main__":
         help=(
             "If nonzero, limit the dataset to this many fonts for a quick canary "
             "run. Overrides --canary which limits by batches instead."
+        ),
+    )
+    parser.add_argument(
+        "--target-only",
+        action="store_true",
+        help=(
+            "If set, restrict the dataset to only the --target-characters when "
+            "they are present in a font, instead of oversampling them. This is a "
+            "stricter setting to test the model's ability to learn from limited "
+            "examples of target characters."
         ),
     )
 
