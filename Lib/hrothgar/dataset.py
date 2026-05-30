@@ -77,8 +77,8 @@ class DatasetMaker:
             fonts,
             split_seed=self.split_seed,
         )
-        # print("Train fonts:", len(self.train_fonts))
-        # print("Test fonts:", len(self.test_fonts))
+        print("Train fonts:", len(self.train_fonts))
+        print("Test fonts:", len(self.test_fonts))
 
     @staticmethod
     def _split_fonts_by_family(fonts, *, split_seed: int):
