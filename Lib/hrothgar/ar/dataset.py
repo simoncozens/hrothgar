@@ -156,6 +156,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
         class_balanced: bool = False,
         split_seed: int = 1234,
         target_codepoint_oversample_factor: int = 8,
+        target_only: bool = False,
     ) -> None:
         target_codepoint_set = set(target_codepoints) if target_codepoints else None
         if common_style_codepoints and style_glyph_count < len(common_style_codepoints):
@@ -183,14 +184,19 @@ class ARPhase1DatasetMaker(DatasetMaker):
         self.class_balanced = class_balanced
         self.extra_target_codepoints = target_codepoint_set
         self.target_codepoint_oversample_factor = target_codepoint_oversample_factor
+        self.target_only = target_only
 
     def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        if self.target_only:
+            return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().train_codepoint_filter(font_codepoints)
         if self.extra_target_codepoints is None:
             return chars
         return set(chars) | (set(font_codepoints) & self.extra_target_codepoints)
 
     def test_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+        if self.target_only:
+            return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().test_codepoint_filter(font_codepoints)
         if self.extra_target_codepoints is None:
             return chars
