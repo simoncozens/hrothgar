@@ -787,6 +787,8 @@ class ARModel(SaveLoadModel):
         if language_adapter is not None:
             self.set_language_adapter(language_adapter)
 
+        self._gtok_frozen: bool = False
+
         if config.freeze_gtok:
             self.freeze_gtok()
 
@@ -797,6 +799,20 @@ class ARModel(SaveLoadModel):
         self.gtok.eval()
         for parameter in self.gtok.parameters():
             parameter.requires_grad = False
+        self._gtok_frozen = True
+
+    def train(self, mode: bool = True) -> "ARModel":
+        """Set training mode while keeping frozen G-Tok in eval mode.
+
+        PyTorch recursively toggles all submodules when ``train()`` is called.
+        AR training loops call ``model.train()`` every epoch, so without this
+        guard a frozen tokenizer can be switched back to train mode, causing
+        stochastic token targets. When G-Tok is frozen, force it back to eval.
+        """
+        super().train(mode)
+        if self._gtok_frozen:
+            self.gtok.eval()
+        return self
 
     @staticmethod
     def _set_module_trainable(module: nn.Module, trainable: bool) -> None:
