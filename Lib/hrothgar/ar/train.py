@@ -68,6 +68,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
             split_seed=train_args.split_seed,
+            canary_size=train_args.limit_dataset_size,
         )
 
         self.optimizer = torch.optim.AdamW(
@@ -443,6 +444,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
             split_seed=train_args.split_seed,
+            canary_size=train_args.limit_dataset_size,
         )
 
         trainable_parameters = [p for p in model.parameters() if p.requires_grad]
@@ -1002,6 +1004,15 @@ if __name__ == "__main__":
         type=float,
         default=0.1,
         help="Dropout used in multimodal adapter layers",
+    )
+    parser.add_argument(
+        "--limit-dataset-size",
+        type=int,
+        default=None,
+        help=(
+            "If nonzero, limit the dataset to this many fonts for a quick canary "
+            "run. Overrides --canary which limits by batches instead."
+        ),
     )
 
     args = parser.parse_args()
