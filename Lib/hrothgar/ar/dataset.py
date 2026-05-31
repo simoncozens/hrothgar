@@ -12,7 +12,7 @@ from typing import Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from hrothgar.dataset import Dataset, DatasetMaker, LATIN_CORE
+from hrothgar.dataset import Dataset, DatasetMaker, LATIN_KERNEL
 from torch.utils.data import BatchSampler, DataLoader
 
 
@@ -65,8 +65,8 @@ def _sample_style_codepoints(
         for cp in font.codepoints
         if cp != target_char and _has_non_empty_glyph(font, cp)
     ]
-    # Restrict to GF Latin Core
-    available = [cp for cp in available if cp in LATIN_CORE]
+    # Restrict to GF Latin Kernel
+    available = [cp for cp in available if cp in LATIN_KERNEL]
 
     if not available:
         return [target_char] * style_glyph_count

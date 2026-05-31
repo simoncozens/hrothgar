@@ -68,7 +68,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
             split_seed=train_args.split_seed,
-            having=train_args.target_characters,
+            #having=train_args.target_characters,
             canary_size=train_args.limit_dataset_size,
             target_only=train_args.target_only,
         )
