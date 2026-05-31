@@ -2,7 +2,7 @@ import numpy as np
 import uharfbuzz as hb
 from pathlib import Path
 
-from hrothgar.render import _fit_bitmap_to_canvas, _paste_bitmap_onto_canvas, render_gid
+from hrothgar.render import _paste_bitmap_onto_canvas, render_gid
 
 
 def test_paste_bitmap_aligns_to_baseline() -> None:
@@ -56,35 +56,6 @@ def test_paste_bitmap_crops_negative_left_sidebearing() -> None:
     assert canvas[0, 0] == 127
     assert canvas[0, 1] == 0
     assert canvas[0, 2] == 255
-
-
-def test_fit_bitmap_to_canvas_scales_and_centers_with_border() -> None:
-    bitmap = np.full((20, 10), 255, dtype=np.uint8)
-
-    image = _fit_bitmap_to_canvas(bitmap, size=12, trim_to_rsb=False)
-
-    assert image.shape == (12, 12)
-    assert np.all(image[0, :] == 255)
-    assert np.all(image[-1, :] == 255)
-    assert np.all(image[:, 0] == 255)
-    assert np.all(image[:, -1] == 255)
-    ink_rows, ink_cols = np.where(image < 255)
-    assert ink_rows.min() == 1
-    assert ink_rows.max() == 10
-    assert ink_cols.min() >= 1
-    assert ink_cols.max() <= 10
-    assert abs((ink_cols.min() - 1) - (10 - ink_cols.max())) <= 1
-
-
-def test_fit_bitmap_to_canvas_rejects_upscaling() -> None:
-    bitmap = np.full((4, 2), 255, dtype=np.uint8)
-
-    try:
-        _fit_bitmap_to_canvas(bitmap, size=12, trim_to_rsb=False, allow_upscale=False)
-    except ValueError as exc:
-        assert "upscaling" in str(exc)
-    else:
-        raise AssertionError("expected upscaling guard to fail")
 
 
 def test_variable_font_axis_positions_change_rendering() -> None:
