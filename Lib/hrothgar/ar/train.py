@@ -68,7 +68,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             target_codepoint_oversample_factor=train_args.target_character_oversample_factor,
             class_balanced=train_args.class_balanced,
             split_seed=train_args.split_seed,
-            #having=train_args.target_characters,
+            # having=train_args.target_characters,
             canary_size=train_args.limit_dataset_size,
             target_only=train_args.target_only,
         )
@@ -273,7 +273,12 @@ class ARVisualTrainingLoop(TrainingLoop):
 
         self.model.eval()
         with torch.no_grad():
-            val_metrics = {"ssim": [], "lpips": []}
+            val_metrics = {
+                "ssim": [],
+                "lpips": [],
+                "token_accuracy": [],
+                "token_cross_entropy": [],
+            }
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
                 desc="Validation",
@@ -291,20 +296,40 @@ class ARVisualTrainingLoop(TrainingLoop):
                         target_images=val_target_images,
                         descriptions=val_descriptions,
                     )
+                _val_loss, val_loss_info = compute_ar_loss(
+                    val_output,
+                    val_target_images,
+                    weights=self.loss_weights,
+                )
                 recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
                 target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
                 val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
                 val_metrics["lpips"].append(self.lpips(recon_clamped, target_clamped))
+                val_metrics["token_accuracy"].append(val_loss_info["token_accuracy"])
+                val_metrics["token_cross_entropy"].append(
+                    val_loss_info["token_cross_entropy"]
+                )
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
+            avg_token_accuracy = torch.mean(torch.stack(val_metrics["token_accuracy"]))
+            avg_token_cross_entropy = torch.mean(
+                torch.stack(val_metrics["token_cross_entropy"])
+            )
             self.write_scalar("Validation/TeacherForced_SSIM", avg_ssim)
             self.write_scalar("Validation/TeacherForced_LPIPS", avg_lpips)
+            self.write_scalar(
+                "Validation/TeacherForced_TokenAccuracy", avg_token_accuracy
+            )
+            self.write_scalar(
+                "Validation/TeacherForced_TokenCrossEntropy",
+                avg_token_cross_entropy,
+            )
 
             # Free-running validation: generate without teacher forcing.
             # Expensive, so run on a small subset of batches.
             fr_batches = max(1, self.validation_batches // 10)
-            fr_metrics = {"ssim": [], "lpips": []}
+            fr_metrics = {"ssim": [], "lpips": [], "token_accuracy": []}
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, fr_batches),
                 desc="Free-running validation",
@@ -321,19 +346,35 @@ class ARVisualTrainingLoop(TrainingLoop):
                         style_reference_images=val_style_images,
                         descriptions=val_descriptions,
                     )
+                gt_token_indices = self.model.target_token_indices_from_images(
+                    val_target_images,
+                    descriptions=val_descriptions,
+                )
                 fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
                 fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
                 fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
                 fr_metrics["lpips"].append(self.lpips(fr_clamped, fr_target_clamped))
+                fr_metrics["token_accuracy"].append(
+                    (fr_output.target_token_indices == gt_token_indices).float().mean()
+                )
 
             fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
             fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
+            fr_token_accuracy = torch.mean(torch.stack(fr_metrics["token_accuracy"]))
             self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
             self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
-            lpips_gap = fr_lpips - avg_lpips
-            lpips_gap_ratio = lpips_gap / torch.clamp(avg_lpips, min=1e-8)
-            self.write_scalar("Validation/LPIPS_Gap_Absolute", lpips_gap)
-            self.write_scalar("Validation/LPIPS_Gap_Relative", lpips_gap_ratio)
+            self.write_scalar("Validation/FreeRunning_TokenAccuracy", fr_token_accuracy)
+            token_accuracy_gap = avg_token_accuracy - fr_token_accuracy
+            token_accuracy_gap_ratio = token_accuracy_gap / torch.clamp(
+                avg_token_accuracy,
+                min=1e-8,
+            )
+            self.write_scalar(
+                "Validation/TokenAccuracy_Gap_Absolute", token_accuracy_gap
+            )
+            self.write_scalar(
+                "Validation/TokenAccuracy_Gap_Relative", token_accuracy_gap_ratio
+            )
 
             self.checkpoint_if_best(fr_ssim)
             self.visualize()
@@ -634,6 +675,8 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             if self.run_decoder:
                 val_metrics["ssim"] = []
                 val_metrics["lpips"] = []
+                val_metrics["token_accuracy"] = []
+                val_metrics["token_cross_entropy"] = []
 
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
@@ -671,6 +714,14 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                     val_metrics["lpips"].append(
                         self.lpips(recon_clamped, target_clamped)
                     )
+                    if "token_accuracy" in loss_info:
+                        val_metrics["token_accuracy"].append(
+                            loss_info["token_accuracy"]
+                        )
+                    if "token_cross_entropy" in loss_info:
+                        val_metrics["token_cross_entropy"].append(
+                            loss_info["token_cross_entropy"]
+                        )
 
             avg_alignment = torch.mean(torch.stack(val_metrics["alignment_l2"]))
             self.write_scalar("Validation/AlignmentL2", avg_alignment)
@@ -680,11 +731,29 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                 avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
                 self.write_scalar("Validation/TeacherForced_SSIM", avg_ssim)
                 self.write_scalar("Validation/TeacherForced_LPIPS", avg_lpips)
+                if val_metrics["token_accuracy"]:
+                    avg_token_accuracy = torch.mean(
+                        torch.stack(val_metrics["token_accuracy"])
+                    )
+                    self.write_scalar(
+                        "Validation/TeacherForced_TokenAccuracy",
+                        avg_token_accuracy,
+                    )
+                else:
+                    avg_token_accuracy = None
+                if val_metrics["token_cross_entropy"]:
+                    avg_token_cross_entropy = torch.mean(
+                        torch.stack(val_metrics["token_cross_entropy"])
+                    )
+                    self.write_scalar(
+                        "Validation/TeacherForced_TokenCrossEntropy",
+                        avg_token_cross_entropy,
+                    )
 
                 # Free-running validation: generate without teacher forcing.
                 # Expensive, so run on a small subset of batches.
                 fr_batches = max(1, self.validation_batches // 10)
-                fr_metrics = {"ssim": [], "lpips": []}
+                fr_metrics = {"ssim": [], "lpips": [], "token_accuracy": []}
                 for val_batch in tqdm.tqdm(
                     itertools.islice(self.test_loader, fr_batches),
                     desc="Free-running validation",
@@ -704,17 +773,47 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                             text_embeddings=val_description_embeddings,
                             descriptions=val_batch.get("description"),
                         )
+                    gt_token_indices = self.model.target_token_indices_from_images(
+                        val_target_images,
+                        descriptions=val_batch.get("description"),
+                    )
                     fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
                     fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
                     fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
                     fr_metrics["lpips"].append(
                         self.lpips(fr_clamped, fr_target_clamped)
                     )
+                    fr_metrics["token_accuracy"].append(
+                        (fr_output.target_token_indices == gt_token_indices)
+                        .float()
+                        .mean()
+                    )
 
                 fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
                 fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
+                fr_token_accuracy = torch.mean(
+                    torch.stack(fr_metrics["token_accuracy"])
+                )
                 self.write_scalar("Validation/FreeRunning_SSIM", fr_ssim)
                 self.write_scalar("Validation/FreeRunning_LPIPS", fr_lpips)
+                self.write_scalar(
+                    "Validation/FreeRunning_TokenAccuracy",
+                    fr_token_accuracy,
+                )
+                if avg_token_accuracy is not None:
+                    token_accuracy_gap = avg_token_accuracy - fr_token_accuracy
+                    token_accuracy_gap_ratio = token_accuracy_gap / torch.clamp(
+                        avg_token_accuracy,
+                        min=1e-8,
+                    )
+                    self.write_scalar(
+                        "Validation/TokenAccuracy_Gap_Absolute",
+                        token_accuracy_gap,
+                    )
+                    self.write_scalar(
+                        "Validation/TokenAccuracy_Gap_Relative",
+                        token_accuracy_gap_ratio,
+                    )
 
             self.checkpoint_if_best(avg_alignment)
             if self.run_decoder:
