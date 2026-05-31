@@ -114,6 +114,8 @@ class GtokTrainingLoop(TrainingLoop):
                         shuffle=True,
                         drop_last=False,
                         collate_fn=maker.collate_fn,
+                        num_workers=12,
+                        pin_memory=True,
                     )
                     print(
                         "Enabled targeted validation for "
