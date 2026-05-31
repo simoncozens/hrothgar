@@ -223,6 +223,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
                     batch_size=self.batch_size,
                     drop_last=True,
                 ),
+                num_workers=8,
+                pin_memory=True,
                 collate_fn=self.collate_fn,
             )
         return super().train_loader()
