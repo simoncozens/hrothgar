@@ -3,7 +3,7 @@ from typing import Callable, Optional, Set
 
 import torch
 import uharfbuzz as hb
-from glyphsets import GlyphSet
+from glyphsets import GlyphSet, unicodes_per_glyphset
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
@@ -14,7 +14,7 @@ LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
 # Skip combining characters
 LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
 
-LATIN_KERNEL = [x for x in GlyphSet("GF_Latin_Kernel").get_characters() if x != 32]
+LATIN_KERNEL = [x for x in unicodes_per_glyphset("GF_Latin_Kernel") if x != 32]
 # Skip combining characters
 LATIN_KERNEL = [x for x in LATIN_KERNEL if not (0x0300 <= x <= 0x036F)]
 
