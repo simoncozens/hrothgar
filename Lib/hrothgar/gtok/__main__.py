@@ -24,20 +24,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from hrothgar.googlefonts import find_google_font_by_basename
+from blys.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.model import load_model
-from hrothgar.utils import pick_device
-
-
-def _parse_char(value: str) -> int:
-    """Parse a single Unicode character or U+XXXX codepoint string to an int."""
-    if value.startswith(("U+", "u+")):
-        return int(value[2:], 16)
-    if len(value) != 1:
-        raise ValueError(
-            "--char must be a single Unicode character or a U+XXXX codepoint"
-        )
-    return ord(value)
+from blys.utils import pick_device, parse_numeric_codepoint
 
 
 def _chw_to_hwc(arr: np.ndarray) -> np.ndarray:
@@ -122,11 +111,11 @@ def main() -> None:
         print(f"Rendering glyph ID {args.gid}")
         rendered = font.render_gid(args.gid, size=image_size)
     else:
-        char = _parse_char(args.char)
+        char = parse_numeric_codepoint(args.char)
         label = f"cp_{char:04X}"
         codepoint = f"U+{char:04X}"
         print(f"Rendering character {chr(char)!r} ({codepoint})")
-        rendered = font.render(char, size=image_size)
+        rendered = font.render_char(char, size=image_size)
 
     # rendered is (3, H, W) float32
     input_tensor = torch.tensor(rendered, dtype=torch.float32, device=device).unsqueeze(

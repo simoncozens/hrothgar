@@ -22,7 +22,7 @@ from hrothgar.ar.multimodal import (
     HashedDescriptionEncoderConfig,
 )
 from hrothgar.gtok.model import GtokConfig, GtokModel
-from hrothgar.utils import SaveLoadModel
+from blys.utils import SaveLoadModel
 
 
 @dataclass

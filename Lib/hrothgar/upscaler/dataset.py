@@ -11,7 +11,7 @@ from typing import Optional, Set
 
 import torch
 import torch.nn.functional as F
-from hrothgar.dataset import AllGidsDataset, DatasetMaker
+from blys.dataset import AllGidsDataset, DatasetMaker
 
 
 class UpscalerDatasetMaker(DatasetMaker):

@@ -1,51 +1,30 @@
 """Dataset utilities for AR phase-1 visual pretraining.
 
-This module reuses the shared font split logic from ``hrothgar.dataset`` and
+This module reuses the shared font split logic from ``blys.dataset`` and
 provides a collation function tailored to the AR generator inputs.
 """
 
 from __future__ import annotations
 
-import math
 import random
 from typing import Optional, Sequence, Set
 
 import torch
-import uharfbuzz as hb
-from hrothgar.dataset import Dataset, DatasetMaker, LATIN_KERNEL
-from torch.utils.data import BatchSampler, DataLoader
+from blys.googlefonts import GoogleFont
+from blys.font import Font
+from blys.dataset import (
+    Dataset,
+    DatasetMaker,
+    LATIN_KERNEL,
+    ClassBalancedBatchSampler,
+)
+from blys.render import is_blank_rendering
+from torch.utils.data import DataLoader
 
 
-def _has_non_empty_glyph(font, codepoint: int) -> bool:
-    """Return True if the font has a non-empty outline for codepoint."""
-    if not hasattr(font, "hb_face"):
-        # Test doubles and lightweight mocks may not expose HarfBuzz handles.
-        return True
-    hb_font = hb.Font(font.hb_face)  # type: ignore
-    gid = hb_font.get_nominal_glyph(codepoint)
-    extents = hb_font.get_glyph_extents(gid)
-    if extents is None:
-        return False
-    return not all(x == 0 for x in extents)
-
-
-def _font_has_codepoint(font, codepoint: int) -> bool:
-    if hasattr(font, "has_codepoint"):
-        return bool(font.has_codepoint(codepoint))
-    return codepoint in getattr(font, "codepoints", set())
-
-
-def _is_blank_rendering(rendered) -> bool:
-    max_val = float(rendered.max())
-    min_val = float(rendered.min())
-    # Real blank glyph rasters are typically all-white (1.0) and occasionally
-    # all-black (0.0) in this pipeline.
-    return max_val == min_val and (max_val == 1.0 or max_val == 0.0)
-
-
-def _sample_style_codepoints(
+def sample_style_codepoints(
     *,
-    font,
+    font: Font,
     target_char: int,
     style_glyph_count: int,
     common_style_codepoints: Optional[Sequence[int]],
@@ -63,7 +42,7 @@ def _sample_style_codepoints(
     available = [
         cp
         for cp in font.codepoints
-        if cp != target_char and _has_non_empty_glyph(font, cp)
+        if cp != target_char and font.has_non_empty_codepoint(cp)
     ]
     # Restrict to GF Latin Kernel
     available = [cp for cp in available if cp in LATIN_KERNEL]
@@ -78,7 +57,7 @@ def _sample_style_codepoints(
             for cp in common_style_codepoints
             if cp != target_char
             and cp in font.codepoints
-            and _has_non_empty_glyph(font, cp)
+            and font.has_non_empty_codepoint(cp)
         ]
         random.shuffle(selected)
 
@@ -218,7 +197,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
         if self.class_balanced:
             return DataLoader(
                 dataset,
-                batch_sampler=_ClassBalancedBatchSampler(
+                batch_sampler=ClassBalancedBatchSampler(
                     dataset.order,
                     batch_size=self.batch_size,
                     drop_last=True,
@@ -242,7 +221,9 @@ class ARPhase1DatasetMaker(DatasetMaker):
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
         target_renderings = torch.stack(
             [
-                torch.tensor(item["font"].render(item["char"], size=self.image_size))
+                torch.tensor(
+                    item["font"].render_char(item["char"], size=self.image_size)
+                )
                 for item in batch
             ]
         )
@@ -253,23 +234,23 @@ class ARPhase1DatasetMaker(DatasetMaker):
         descriptions = []
 
         for item in batch:
-            font = item["font"]
+            font: GoogleFont = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
 
             # If reference font lacks a usable glyph for this character, fall back
             # to the target font so content conditioning is never blank.
-            if not _font_has_codepoint(
-                reference_font, char
-            ) or not _has_non_empty_glyph(reference_font, char):
+            if not reference_font.has_codepoint(
+                char
+            ) or not reference_font.has_non_empty_codepoint(char):
                 reference_font = font
 
-            content_render = reference_font.render(char, size=self.image_size)
-            if _is_blank_rendering(content_render):
-                content_render = font.render(char, size=self.image_size)
+            content_render = reference_font.render_char(char, size=self.image_size)
+            if is_blank_rendering(content_render):
+                content_render = font.render_char(char, size=self.image_size)
             content_renderings.append(torch.tensor(content_render))
 
-            sampled_style_chars = _sample_style_codepoints(
+            sampled_style_chars = sample_style_codepoints(
                 font=font,
                 target_char=char,
                 style_glyph_count=self.style_glyph_count,
@@ -278,10 +259,10 @@ class ARPhase1DatasetMaker(DatasetMaker):
             rendered_styles = []
             sanitized_style_chars = []
             for cp in sampled_style_chars:
-                style_render = font.render(cp, size=self.image_size)
-                if _is_blank_rendering(style_render):
+                style_render = font.render_char(cp, size=self.image_size)
+                if is_blank_rendering(style_render):
                     cp = char
-                    style_render = font.render(cp, size=self.image_size)
+                    style_render = font.render_char(cp, size=self.image_size)
                 sanitized_style_chars.append(cp)
                 rendered_styles.append(torch.tensor(style_render))
 
@@ -297,76 +278,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
             "style_chars": torch.tensor(style_chars, dtype=torch.long),
             "description": descriptions,
         }
-
-
-class _ClassBalancedBatchSampler(BatchSampler):
-    """Batch sampler that balances font classes within each emitted batch."""
-
-    def __init__(
-        self,
-        order: Sequence[tuple],
-        *,
-        batch_size: int,
-        drop_last: bool,
-    ) -> None:
-        if batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, got {batch_size}")
-        if len(order) == 0:
-            raise ValueError("Cannot build class-balanced sampler for empty dataset")
-
-        self.batch_size = batch_size
-        self.drop_last = drop_last
-        self.dataset_size = len(order)
-
-        class_to_indices: dict[str, list[int]] = {}
-        for idx, (font, _char) in enumerate(order):
-            cls = font.classification()
-            class_to_indices.setdefault(cls, []).append(idx)
-
-        if not class_to_indices:
-            raise ValueError("No classes found for class-balanced sampling")
-
-        self.class_to_indices = class_to_indices
-        self.classes = sorted(class_to_indices.keys())
-
-    def __len__(self) -> int:
-        if self.drop_last:
-            return self.dataset_size // self.batch_size
-        return math.ceil(self.dataset_size / self.batch_size)
-
-    def __iter__(self):
-        num_classes = len(self.classes)
-        num_batches = len(self)
-
-        class_cursor = random.randrange(num_classes)
-
-        for _ in range(num_batches):
-            batch_indices: list[int] = []
-
-            if num_classes <= self.batch_size:
-                base = self.batch_size // num_classes
-                remainder = self.batch_size % num_classes
-                class_order = self.classes[:]
-                random.shuffle(class_order)
-
-                for cls in class_order:
-                    indices = self.class_to_indices[cls]
-                    for _ in range(base):
-                        batch_indices.append(random.choice(indices))
-
-                for cls in class_order[:remainder]:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-            else:
-                selected_classes = [
-                    self.classes[(class_cursor + i) % num_classes]
-                    for i in range(self.batch_size)
-                ]
-                class_cursor = (class_cursor + self.batch_size) % num_classes
-                for cls in selected_classes:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-
-            random.shuffle(batch_indices)
-            yield batch_indices
 
 
 __all__ = ["ARPhase1DatasetMaker"]
