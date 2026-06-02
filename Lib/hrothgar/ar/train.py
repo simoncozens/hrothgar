@@ -1,9 +1,8 @@
 import itertools
-import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 
 import torch
 import torchvision
@@ -26,19 +25,8 @@ from hrothgar.ar.multimodal import (
 )
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import load_model as load_gtok_model
-from hrothgar.utils import TrainingLoop
-
-
-def _parse_codepoint(value: str) -> List[int]:
-    return [ord(c) for c in value]
-
-
-def _parse_int_list(value: str) -> List[int]:
-    """Parse a comma-separated integer list from CLI input."""
-    items = [part.strip() for part in value.split(",") if part.strip()]
-    if not items:
-        raise ValueError("Expected a comma-separated list of integers")
-    return [int(item) for item in items]
+from blys import TrainingLoop
+from blys.utils import parse_codepoint
 
 
 class ARVisualTrainingLoop(TrainingLoop):
@@ -925,12 +913,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--style-characters",
-        type=_parse_codepoint,
+        type=parse_codepoint,
         help=("Optional string of explicit style characters shared across items."),
     )
     parser.add_argument(
         "--target-characters",
-        type=_parse_codepoint,
+        type=parse_codepoint,
         help=(
             "Optional string of extra target characters to add to the train/test "
             "datasets when present in a font. These characters are oversampled in "

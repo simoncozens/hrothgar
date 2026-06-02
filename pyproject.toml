@@ -23,8 +23,8 @@ dependencies = [
     "matrix-disk-cache",
     "transformers>=4.40.0",
     "sentencepiece>=0.2.0",
+    "blys",
 ]
-# Also pydiffvg but that's not on pypi!
 
 [project.optional-dependencies]
 test = ["pytest"]

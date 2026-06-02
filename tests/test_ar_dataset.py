@@ -16,7 +16,20 @@ class DummyFont:
     def reference_font(self):
         return self._reference
 
+    def has_codepoint(self, char: int) -> bool:
+        return char in self.codepoints
+
+    def has_non_empty_codepoint(self, char: int) -> bool:
+        return char in self.codepoints
+
+    def render_char(self, char: int, size: int = 64, axis_position=None):
+        _ = axis_position
+        return self.render(char, size=size)
+
     def description_with_tags(self):
+        return "dummy description"
+
+    def description_with_tags_and_display(self):
         return "dummy description"
 
 
@@ -68,7 +81,9 @@ def test_collate_ar_phase1_common_style_codepoints() -> None:
         common_style_codepoints=[66, 67, 68],
     )
     out = maker.collate_fn(batch)
-    assert out["style_chars"].tolist() == [[66, 67, 68]]
+    sampled = out["style_chars"].tolist()[0]
+    assert len(sampled) == 3
+    assert set(sampled) == {66, 67, 68}
 
 
 def test_collate_ar_phase1_common_style_codepoints_do_not_leak() -> None:

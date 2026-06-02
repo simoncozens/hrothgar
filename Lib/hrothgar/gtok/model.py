@@ -27,7 +27,7 @@ from hrothgar.llamagen_cnn import (
     Decoder as CNNDecoder,
     VectorQuantizer,
 )
-from hrothgar.utils import SaveLoadModel
+from blys.utils import SaveLoadModel
 
 
 @dataclass

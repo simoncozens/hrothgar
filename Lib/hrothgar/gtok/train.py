@@ -9,13 +9,14 @@ import tqdm
 from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from hrothgar.googlefonts import GoogleFonts
+from blys.googlefonts import GoogleFonts
+from blys import TrainingLoop
+
 from hrothgar.gtok import GtokLossWeights, compute_gtok_loss
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokConfig, GtokModel
 from hrothgar.gtok.vgg_loss import VGG
-from hrothgar.utils import TrainingLoop
 
 
 def _parse_int_list(value: str) -> list[int]:
