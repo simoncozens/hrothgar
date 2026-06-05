@@ -1038,37 +1038,23 @@ class ARModel(SaveLoadModel):
         scheduled_sampling_probability: float,
         descriptions: Optional[List[str]] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Decode with on-policy scheduled sampling.
+        """Decode with per-token scheduled sampling and greedy roll-in.
 
         Uses a two-phase approach to keep activation memory equivalent to
-        teacher forcing (O(sequence_length)) rather than the O(sequence_length²)
+        teacher forcing (O(sequence_length)) rather than the O(sequence_length^2)
         cost of a fully differentiable sequential rollout.
 
-        To keep wall-clock training practical, this method also uses a
-        batch-level stochastic gate: with probability ``p`` it runs the
-        on-policy rollout path; otherwise it falls back to teacher forcing.
-        This uses ``p`` as the mixture weight between fast teacher-forced
-        updates and slower on-policy updates.
+        **Phase 1 — rollout without gradients:** build decoder prefixes
+        autoregressively under ``torch.no_grad``. At each step, greedy argmax
+        prediction is computed and then mixed with the teacher token using an
+        element-wise Bernoulli mask with probability ``p``. This is per-token
+        and per-sample, not batch-gated.
 
-        **Phase 1 — on-policy rollout (no gradient):** Roll the model forward
-        autoregressively under ``torch.no_grad``. At each step the next prefix
-        token is sampled from the model. Because no computation graph is
-        retained, all activations are freed immediately; memory usage is
-        proportional to one forward pass at a time regardless of sequence
-        length.
+        **Phase 2 — parallel forward with gradients:** run one standard decoder
+        pass using the mixed prefixes from phase 1 to obtain train-time logits.
 
-        **Phase 2 — single parallel forward pass (with gradient):** The full
-        mixed prefix collected in phase 1 is fed into the decoder in one shot,
-        exactly like teacher forcing.  This produces the logits used for the
-        cross-entropy loss, with activation memory identical to a standard
-        teacher-forced step.
-
-        The trade-off vs. a fully differentiable rollout is that gradients do
-        not flow *through* the prefix token choices back to earlier timesteps
-        (BPTT is truncated at the rollout boundary).  In practice this is the
-        standard scheduled-sampling formulation and has no meaningful effect on
-        training: the model still observes its own prediction errors as context,
-        which is the purpose of scheduled sampling.
+        This policy aligns roll-in behavior with inference (greedy decoding)
+        and increases effective exposure compared with batch-level gating.
         """
         if scheduled_sampling_probability <= 0.0:
             return self._decode_with_teacher_forcing(
@@ -1079,22 +1065,10 @@ class ARModel(SaveLoadModel):
 
         p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
 
-        # Batch-level gate for speed: only run expensive sequential roll-in on
-        # a fraction ``p`` of training steps.
-        do_on_policy_rollout = bool(
-            (torch.rand((), device=target_token_indices.device) < p).item()
-        )
-        if not do_on_policy_rollout:
-            return self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=target_token_indices,
-                descriptions=descriptions,
-            )
-
         batch_size, sequence_length = target_token_indices.shape
 
-        # Phase 1: autoregressive rollout under no_grad to build the mixed
-        # prefix sequence.  Activations from each step are freed immediately.
+        # Phase 1: autoregressive rollout under no_grad to build mixed
+        # prefixes. Activations from each step are freed immediately.
         with torch.no_grad():
             rollout_prefix = torch.full(
                 (batch_size, 1),
@@ -1107,8 +1081,16 @@ class ARModel(SaveLoadModel):
                 step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
                     :, -1, :
                 ]
-                probabilities = torch.softmax(step_logits.float(), dim=-1)
-                next_token = torch.multinomial(probabilities, num_samples=1).squeeze(-1)
+                predicted_token = torch.argmax(step_logits, dim=-1)
+                teacher_token = target_token_indices[:, step_index]
+                use_model_prediction = (
+                    torch.rand(batch_size, device=target_token_indices.device) < p
+                )
+                next_token = torch.where(
+                    use_model_prediction,
+                    predicted_token,
+                    teacher_token,
+                )
                 mixed_prefix_tokens.append(next_token)
                 rollout_prefix = torch.cat(
                     [rollout_prefix, next_token.unsqueeze(1)], dim=1
