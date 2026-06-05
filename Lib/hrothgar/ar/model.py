@@ -1066,6 +1066,28 @@ class ARModel(SaveLoadModel):
         p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
 
         batch_size, sequence_length = target_token_indices.shape
+        if sequence_length <= 1:
+            return self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=target_token_indices,
+                descriptions=descriptions,
+            )
+
+        use_model_prediction = (
+            torch.rand(
+                (batch_size, sequence_length - 1),
+                device=target_token_indices.device,
+            )
+            < p
+        )
+        if not use_model_prediction.any():
+            # Fast path: if no tokens are sampled from the model, skip the rollout.
+            return self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=target_token_indices,
+                descriptions=descriptions,
+            )
+        last_sampled_step = int(use_model_prediction.nonzero()[:, 1].max().item())
 
         # Phase 1: autoregressive rollout under no_grad to build mixed
         # prefixes. Activations from each step are freed immediately.
@@ -1077,17 +1099,15 @@ class ARModel(SaveLoadModel):
                 dtype=target_token_indices.dtype,
             )
             mixed_prefix_tokens: list[torch.Tensor] = []
-            for step_index in range(sequence_length - 1):
+            for step_index in range(last_sampled_step + 1):
                 step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
                     :, -1, :
                 ]
                 predicted_token = torch.argmax(step_logits, dim=-1)
                 teacher_token = target_token_indices[:, step_index]
-                use_model_prediction = (
-                    torch.rand(batch_size, device=target_token_indices.device) < p
-                )
+                use_model_prediction_this_step = use_model_prediction[:, step_index]
                 next_token = torch.where(
-                    use_model_prediction,
+                    use_model_prediction_this_step,
                     predicted_token,
                     teacher_token,
                 )
@@ -1095,6 +1115,12 @@ class ARModel(SaveLoadModel):
                 rollout_prefix = torch.cat(
                     [rollout_prefix, next_token.unsqueeze(1)], dim=1
                 )
+
+        if last_sampled_step + 1 < sequence_length - 1:
+            remaining_teacher_tokens = target_token_indices[
+                :, last_sampled_step + 1 : sequence_length - 1
+            ]
+            mixed_prefix_tokens.extend(remaining_teacher_tokens.unbind(dim=1))
 
         # Phase 2: single parallel forward pass over the mixed prefix.
         # Memory cost is identical to teacher forcing.
