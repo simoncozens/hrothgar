@@ -35,19 +35,18 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from blys.googlefonts import GoogleFont
-from blys.render import is_blank_rendering
-from blys.utils import parse_codepoint
-
-from hrothgar.ar import dataset as ar_dataset
+from hrothgar.ar.dataset import (
+    _font_has_codepoint,
+    _has_non_empty_glyph,
+    _is_blank_rendering,
+    _sample_style_codepoints,
+)
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
+from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import load_model
-from blys.googlefonts import GoogleFonts
-from blys import TrainingLoop
-
-_parse_codepoint = parse_codepoint
+from hrothgar.utils import TrainingLoop
 
 
 def glyph_lora_model_path(base_model_path: str | Path, target_codepoint: int) -> Path:
@@ -118,7 +117,8 @@ class GADatasetMaker:
         candidate_fonts = [
             font
             for font in google_fonts.fonts
-            if font.has_non_empty_codepoint(target_codepoint)
+            if _font_has_codepoint(font, target_codepoint)
+            and _has_non_empty_glyph(font, target_codepoint)
         ]
 
         if max_fonts is not None and len(candidate_fonts) > max_fonts:
@@ -193,19 +193,21 @@ class GADatasetMaker:
         descriptions = []
 
         for item in batch:
-            font: GoogleFont = item["font"]
+            font = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
 
-            if not reference_font.has_non_empty_codepoint(char):
+            if not _font_has_codepoint(
+                reference_font, char
+            ) or not _has_non_empty_glyph(reference_font, char):
                 reference_font = font
 
-            content_render = reference_font.render_char(char, size=self.image_size)
-            if is_blank_rendering(content_render):
-                content_render = font.render_char(char, size=self.image_size)
+            content_render = reference_font.render(char, size=self.image_size)
+            if _is_blank_rendering(content_render):
+                content_render = font.render(char, size=self.image_size)
             content_renderings.append(torch.tensor(content_render))
 
-            sampled_style_chars = ar_dataset.sample_style_codepoints(  # type: ignore[attr-defined]
+            sampled_style_chars = _sample_style_codepoints(
                 font=font,
                 target_char=char,
                 style_glyph_count=self.style_glyph_count,
@@ -214,10 +216,10 @@ class GADatasetMaker:
             rendered_styles = []
             sanitized_style_chars = []
             for cp in sampled_style_chars:
-                style_render = font.render_char(cp, size=self.image_size)
-                if is_blank_rendering(style_render):
+                style_render = font.render(cp, size=self.image_size)
+                if _is_blank_rendering(style_render):
                     cp = char
-                    style_render = font.render_char(cp, size=self.image_size)
+                    style_render = font.render(cp, size=self.image_size)
                 sanitized_style_chars.append(cp)
                 rendered_styles.append(torch.tensor(style_render))
 
@@ -535,8 +537,12 @@ class ARGlyphAdaptationTrainingLoop(TrainingLoop):
         )
 
 
+def _parse_codepoint(value: str) -> List[int]:
+    return [ord(c) for c in value]
+
+
 def _parse_single_codepoint(value: str) -> int:
-    codepoints = parse_codepoint(value)
+    codepoints = _parse_codepoint(value)
     if len(codepoints) != 1:
         raise ValueError(
             f"--target-character expects exactly one character, got {len(codepoints)}"

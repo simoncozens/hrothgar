@@ -38,16 +38,19 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
-from blys.render import is_blank_rendering
-from blys.dataset import LATIN_CORE
-from blys.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
-from blys import TrainingLoop
-
-from hrothgar.ar.dataset import sample_style_codepoints
+from hrothgar.ar.dataset import (
+    _font_has_codepoint,
+    _has_non_empty_glyph,
+    _is_blank_rendering,
+    _sample_style_codepoints,
+)
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
+from hrothgar.dataset import LATIN_CORE
+from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.utils import TrainingLoop
 
 
 class NFAGlyphDataset(TorchDataset):
@@ -92,7 +95,7 @@ class NFADatasetMaker:
 
     def __init__(
         self,
-        font: GoogleFont,
+        font,
         batch_size: int,
         image_size: int = 128,
         style_glyph_count: int = 8,
@@ -136,7 +139,7 @@ class NFADatasetMaker:
             candidate_codepoints = [
                 cp
                 for cp in LATIN_CORE
-                if font.has_codepoint(cp) and font.has_non_empty_codepoint(cp)
+                if font.has_codepoint(cp) and _has_non_empty_glyph(font, cp)
             ]
 
         if len(candidate_codepoints) < 2:
@@ -162,7 +165,7 @@ class NFADatasetMaker:
             for cp in font.codepoints
             if cp in LATIN_CORE
             and cp not in excluded
-            and font.has_non_empty_codepoint(cp)
+            and _has_non_empty_glyph(font, cp)
         ]
         rng = random.Random(self.style_schedule_seed)
         rng.shuffle(extra_candidates)
@@ -202,7 +205,9 @@ class NFADatasetMaker:
         filtered = [
             cp
             for cp in self.common_style_codepoints
-            if cp != target_char and self.font.has_non_empty_codepoint(cp)
+            if cp != target_char
+            and cp in self.font.codepoints
+            and _has_non_empty_glyph(self.font, cp)
         ]
         if not filtered:
             return [target_char] * self.style_glyph_count
@@ -242,13 +247,13 @@ class NFADatasetMaker:
             char = item["char"]
             reference_font = font.reference_font() or font
 
-            if not reference_font.has_codepoint(
-                char
-            ) or not reference_font.has_non_empty_codepoint(char):
+            if not _font_has_codepoint(
+                reference_font, char
+            ) or not _has_non_empty_glyph(reference_font, char):
                 reference_font = font
 
             content_render = reference_font.render(char, size=self.image_size)
-            if is_blank_rendering(content_render):
+            if _is_blank_rendering(content_render):
                 content_render = font.render(char, size=self.image_size)
             content_renderings.append(torch.tensor(content_render))
 
@@ -257,7 +262,7 @@ class NFADatasetMaker:
                     self._sample_deterministic_common_style_codepoints(char)
                 )
             else:
-                sampled_style_chars = sample_style_codepoints(
+                sampled_style_chars = _sample_style_codepoints(
                     font=font,
                     target_char=char,
                     style_glyph_count=self.style_glyph_count,
@@ -267,7 +272,7 @@ class NFADatasetMaker:
             sanitized_style_chars = []
             for cp in sampled_style_chars:
                 style_render = font.render(cp, size=self.image_size)
-                if is_blank_rendering(style_render):
+                if _is_blank_rendering(style_render):
                     cp = char
                     style_render = font.render(cp, size=self.image_size)
                 sanitized_style_chars.append(cp)
@@ -356,7 +361,6 @@ class ARNFATrainingLoop(TrainingLoop):
         )
 
         common_style_cps = train_args.style_characters
-        assert isinstance(font, GoogleFont)
         maker = NFADatasetMaker(
             font=font,
             batch_size=train_args.batch_size,

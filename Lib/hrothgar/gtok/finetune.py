@@ -23,12 +23,11 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from blys.dataset import Dataset, LATIN_CORE
-from blys.googlefonts import find_google_font_by_basename
-from blys.utils import pick_device
-
+from hrothgar.dataset import Dataset, LATIN_CORE
+from hrothgar.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.losses import GtokLossWeights, compute_gtok_loss
 from hrothgar.gtok.model import GtokModel, load_model
+from hrothgar.utils import pick_device
 
 
 def _latin_core_filter(font_codepoints: set[int]) -> set[int]:

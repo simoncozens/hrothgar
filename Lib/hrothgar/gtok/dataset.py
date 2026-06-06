@@ -18,7 +18,7 @@ from torch.utils.data import (
     WeightedRandomSampler,
 )
 
-from blys.dataset import DatasetMaker, LATIN_CORE
+from hrothgar.dataset import DatasetMaker, LATIN_CORE
 
 # Dataset-level oversampling policy for underperforming style buckets.
 # Keep this in source (not CLI args) so training setup is reproducible from code.
@@ -269,7 +269,7 @@ class GTokDatasetMaker(DatasetMaker):
         renderings = torch.stack(
             [
                 torch.tensor(
-                    item["font"].render_char(
+                    item["font"].render(
                         item["char"],
                         size=self.image_size,
                         axis_position=item["axis_position"],

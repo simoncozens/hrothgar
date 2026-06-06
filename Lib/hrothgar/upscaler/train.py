@@ -10,10 +10,10 @@ import torch.nn.functional as F
 import torchvision
 import tqdm
 from torchmetrics.image import StructuralSimilarityIndexMeasure
-from blys import TrainingLoop
 
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
+from hrothgar.utils import TrainingLoop
 from hrothgar.eagle_loss import EagleLoss
 
 
@@ -51,9 +51,7 @@ def compute_upscaler_loss(
     pred_edges = _edge_map(predictions)
     target_edges = _edge_map(targets)
     edge_l1 = F.l1_loss(pred_edges, target_edges)
-    eagle_contribution = (
-        eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
-    )
+    eagle_contribution = eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
 
     loss = bce + edge_weight * edge_l1 + eagle_loss_weight * eagle_contribution
     return loss, {
@@ -106,7 +104,6 @@ class UpscalerTrainingLoop(TrainingLoop):
         self.target_steps = train_args.target_steps
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
-        assert self.target_steps is not None
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
         self.validation_direction = "higher"
         self.edge_weight = train_args.edge_weight
