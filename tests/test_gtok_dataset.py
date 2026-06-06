@@ -6,7 +6,7 @@ from hrothgar.gtok.dataset import (
     GTokAxisDataset,
     GTokDatasetMaker,
 )
-from blys.dataset import LATIN_CORE
+from hrothgar.dataset import LATIN_CORE
 
 if "GOOGLE_FONTS_REPO" not in os.environ:
     raise ValueError("GOOGLE_FONTS_REPO environment variable not set, cannot run tests")

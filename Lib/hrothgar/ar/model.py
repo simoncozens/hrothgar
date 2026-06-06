@@ -29,7 +29,7 @@ from hrothgar.gtok.model import (
     GtokModel,
     create_2d_sinusoidal_position_embeddings,
 )
-from blys.utils import SaveLoadModel
+from hrothgar.utils import SaveLoadModel
 from tqdm import tqdm
 
 

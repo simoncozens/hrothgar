@@ -9,12 +9,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from blys.googlefonts import GoogleFont, StandaloneFont
-from blys.render import render_gid
-from blys.utils import pick_device, parse_numeric_codepoint
-from blys.font import Font
-
+from hrothgar.googlefonts import StandaloneFont
+from hrothgar.render import render_gid
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
+from hrothgar.utils import pick_device
+
+
+def _parse_char(value: str) -> int:
+    """Parse a glyph char argument.
+
+    Accepts either a single Unicode character or a U+XXXX style codepoint.
+    """
+    if value.startswith(("U+", "u+")):
+        return int(value[2:], 16)
+    if len(value) != 1:
+        raise ValueError(
+            "--char must be a single Unicode character or U+XXXX codepoint"
+        )
+    return ord(value)
 
 
 def _array_for_plot(image_chw: np.ndarray) -> np.ndarray:
@@ -29,7 +41,7 @@ def _save_image(path: Path, image_chw: np.ndarray) -> None:
 
 
 def _render_pair(
-    font: Font, *, char: int | None, gid: int | None
+    font: StandaloneFont, *, char: int | None, gid: int | None
 ) -> tuple[np.ndarray, np.ndarray, str]:
     if gid is not None:
         low_res = render_gid(font.path, gid=gid, size=128)
@@ -38,8 +50,8 @@ def _render_pair(
         return low_res, high_res, label
 
     assert char is not None
-    low_res = font.render_char(char, size=128)
-    high_res = font.render_char(char, size=512)
+    low_res = font.render(char, size=128)
+    high_res = font.render(char, size=512)
     codepoint = f"U+{char:04X}"
     label = f"cp_{char:04X}"
     print(f"Rendering character {chr(char)!r} ({codepoint})")
@@ -111,10 +123,10 @@ def main() -> None:
     if not args.model_path.exists():
         raise FileNotFoundError(f"Upscaler model file not found: {args.model_path}")
 
-    char = parse_numeric_codepoint(args.char) if args.char is not None else None
+    char = _parse_char(args.char) if args.char is not None else None
     gid = args.gid
 
-    font = GoogleFont(args.font)
+    font = StandaloneFont(args.font)
     low_res, high_res, label = _render_pair(font, char=char, gid=gid)
     description = font.description_with_tags_and_display()
 

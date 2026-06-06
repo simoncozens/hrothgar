@@ -4,12 +4,10 @@ A dataset maker for G-Tok.
 Loads the Google Fonts repository and produces batches of (character, rendering, description) tuples for training.
 """
 
-import torch
-import uharfbuzz as hb
-
-from blys.dataset import DatasetMaker
+from hrothgar.dataset import DatasetMaker
 from hrothgar.vectorization.glyph import Glyph
 from hrothgar.vectorization.representations.nodecommand import NodeCommand
+import torch
 
 
 def vectorize_glyph(font, char):
