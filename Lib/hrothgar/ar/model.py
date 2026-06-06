@@ -58,6 +58,8 @@ class ARModelConfig:
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
+    perturbation_probability: float = 0.05
+
     freeze_gtok: bool = True
 
     def __post_init__(self) -> None:
@@ -1024,6 +1026,19 @@ class ARModel(SaveLoadModel):
         decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
             target_token_indices
         )
+
+        # Randomly perturb input tokens to mitigate exposure bias.
+        bernoulli_mask = (
+            torch.rand_like(decoder_input_tokens, dtype=torch.float)
+            < self.config.perturbation_probability
+        )
+        random_tokens = torch.randint_like(
+            decoder_input_tokens, low=0, high=self.codebook_size
+        )
+        decoder_input_tokens = torch.where(
+            bernoulli_mask, random_tokens, decoder_input_tokens
+        )
+
         logits = self.token_decoder(decoder_input_tokens, conditioning_tokens)
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
@@ -1031,117 +1046,117 @@ class ARModel(SaveLoadModel):
         )
         return logits, soft_token_embeddings, reconstructed_images
 
-    def _decode_with_scheduled_sampling(
-        self,
-        conditioning_tokens: torch.Tensor,
-        target_token_indices: torch.Tensor,
-        scheduled_sampling_probability: float,
-        descriptions: Optional[List[str]] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Decode with per-token scheduled sampling and greedy roll-in.
+    # def _decode_with_scheduled_sampling(
+    #     self,
+    #     conditioning_tokens: torch.Tensor,
+    #     target_token_indices: torch.Tensor,
+    #     scheduled_sampling_probability: float,
+    #     descriptions: Optional[List[str]] = None,
+    # ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    #     """Decode with per-token scheduled sampling and greedy roll-in.
 
-        Uses a two-phase approach to keep activation memory equivalent to
-        teacher forcing (O(sequence_length)) rather than the O(sequence_length^2)
-        cost of a fully differentiable sequential rollout.
+    #     Uses a two-phase approach to keep activation memory equivalent to
+    #     teacher forcing (O(sequence_length)) rather than the O(sequence_length^2)
+    #     cost of a fully differentiable sequential rollout.
 
-        **Phase 1 — rollout without gradients:** build decoder prefixes
-        autoregressively under ``torch.no_grad``. At each step, greedy argmax
-        prediction is computed and then mixed with the teacher token using an
-        element-wise Bernoulli mask with probability ``p``. This is per-token
-        and per-sample, not batch-gated.
+    #     **Phase 1 — rollout without gradients:** build decoder prefixes
+    #     autoregressively under ``torch.no_grad``. At each step, greedy argmax
+    #     prediction is computed and then mixed with the teacher token using an
+    #     element-wise Bernoulli mask with probability ``p``. This is per-token
+    #     and per-sample, not batch-gated.
 
-        **Phase 2 — parallel forward with gradients:** run one standard decoder
-        pass using the mixed prefixes from phase 1 to obtain train-time logits.
+    #     **Phase 2 — parallel forward with gradients:** run one standard decoder
+    #     pass using the mixed prefixes from phase 1 to obtain train-time logits.
 
-        This policy aligns roll-in behavior with inference (greedy decoding)
-        and increases effective exposure compared with batch-level gating.
-        """
-        if scheduled_sampling_probability <= 0.0:
-            return self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=target_token_indices,
-                descriptions=descriptions,
-            )
+    #     This policy aligns roll-in behavior with inference (greedy decoding)
+    #     and increases effective exposure compared with batch-level gating.
+    #     """
+    #     if scheduled_sampling_probability <= 0.0:
+    #         return self._decode_with_teacher_forcing(
+    #             conditioning_tokens=conditioning_tokens,
+    #             target_token_indices=target_token_indices,
+    #             descriptions=descriptions,
+    #         )
 
-        p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
+    #     p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
 
-        batch_size, sequence_length = target_token_indices.shape
-        if sequence_length <= 1:
-            return self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=target_token_indices,
-                descriptions=descriptions,
-            )
+    #     batch_size, sequence_length = target_token_indices.shape
+    #     if sequence_length <= 1:
+    #         return self._decode_with_teacher_forcing(
+    #             conditioning_tokens=conditioning_tokens,
+    #             target_token_indices=target_token_indices,
+    #             descriptions=descriptions,
+    #         )
 
-        use_model_prediction = (
-            torch.rand(
-                (batch_size, sequence_length - 1),
-                device=target_token_indices.device,
-            )
-            < p
-        )
-        if not use_model_prediction.any():
-            # Fast path: if no tokens are sampled from the model, skip the rollout.
-            return self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=target_token_indices,
-                descriptions=descriptions,
-            )
-        last_sampled_step = int(use_model_prediction.nonzero()[:, 1].max().item())
+    #     use_model_prediction = (
+    #         torch.rand(
+    #             (batch_size, sequence_length - 1),
+    #             device=target_token_indices.device,
+    #         )
+    #         < p
+    #     )
+    #     if not use_model_prediction.any():
+    #         # Fast path: if no tokens are sampled from the model, skip the rollout.
+    #         return self._decode_with_teacher_forcing(
+    #             conditioning_tokens=conditioning_tokens,
+    #             target_token_indices=target_token_indices,
+    #             descriptions=descriptions,
+    #         )
+    #     last_sampled_step = int(use_model_prediction.nonzero()[:, 1].max().item())
 
-        # Phase 1: autoregressive rollout under no_grad to build mixed
-        # prefixes. Activations from each step are freed immediately.
-        with torch.no_grad():
-            rollout_prefix = torch.full(
-                (batch_size, 1),
-                fill_value=self.token_decoder.bos_token_id,
-                device=target_token_indices.device,
-                dtype=target_token_indices.dtype,
-            )
-            mixed_prefix_tokens: list[torch.Tensor] = []
-            for step_index in range(last_sampled_step + 1):
-                step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
-                    :, -1, :
-                ]
-                predicted_token = torch.argmax(step_logits, dim=-1)
-                teacher_token = target_token_indices[:, step_index]
-                use_model_prediction_this_step = use_model_prediction[:, step_index]
-                next_token = torch.where(
-                    use_model_prediction_this_step,
-                    predicted_token,
-                    teacher_token,
-                )
-                mixed_prefix_tokens.append(next_token)
-                rollout_prefix = torch.cat(
-                    [rollout_prefix, next_token.unsqueeze(1)], dim=1
-                )
+    #     # Phase 1: autoregressive rollout under no_grad to build mixed
+    #     # prefixes. Activations from each step are freed immediately.
+    #     with torch.no_grad():
+    #         rollout_prefix = torch.full(
+    #             (batch_size, 1),
+    #             fill_value=self.token_decoder.bos_token_id,
+    #             device=target_token_indices.device,
+    #             dtype=target_token_indices.dtype,
+    #         )
+    #         mixed_prefix_tokens: list[torch.Tensor] = []
+    #         for step_index in range(last_sampled_step + 1):
+    #             step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
+    #                 :, -1, :
+    #             ]
+    #             predicted_token = torch.argmax(step_logits, dim=-1)
+    #             teacher_token = target_token_indices[:, step_index]
+    #             use_model_prediction_this_step = use_model_prediction[:, step_index]
+    #             next_token = torch.where(
+    #                 use_model_prediction_this_step,
+    #                 predicted_token,
+    #                 teacher_token,
+    #             )
+    #             mixed_prefix_tokens.append(next_token)
+    #             rollout_prefix = torch.cat(
+    #                 [rollout_prefix, next_token.unsqueeze(1)], dim=1
+    #             )
 
-        if last_sampled_step + 1 < sequence_length - 1:
-            remaining_teacher_tokens = target_token_indices[
-                :, last_sampled_step + 1 : sequence_length - 1
-            ]
-            mixed_prefix_tokens.extend(remaining_teacher_tokens.unbind(dim=1))
+    #     if last_sampled_step + 1 < sequence_length - 1:
+    #         remaining_teacher_tokens = target_token_indices[
+    #             :, last_sampled_step + 1 : sequence_length - 1
+    #         ]
+    #         mixed_prefix_tokens.extend(remaining_teacher_tokens.unbind(dim=1))
 
-        # Phase 2: single parallel forward pass over the mixed prefix.
-        # Memory cost is identical to teacher forcing.
-        bos_column = torch.full(
-            (batch_size, 1),
-            fill_value=self.token_decoder.bos_token_id,
-            device=target_token_indices.device,
-            dtype=target_token_indices.dtype,
-        )
-        if mixed_prefix_tokens:
-            mixed_prefix = torch.stack(mixed_prefix_tokens, dim=1)
-            decoder_inputs = torch.cat([bos_column, mixed_prefix], dim=1)
-        else:
-            decoder_inputs = bos_column
+    #     # Phase 2: single parallel forward pass over the mixed prefix.
+    #     # Memory cost is identical to teacher forcing.
+    #     bos_column = torch.full(
+    #         (batch_size, 1),
+    #         fill_value=self.token_decoder.bos_token_id,
+    #         device=target_token_indices.device,
+    #         dtype=target_token_indices.dtype,
+    #     )
+    #     if mixed_prefix_tokens:
+    #         mixed_prefix = torch.stack(mixed_prefix_tokens, dim=1)
+    #         decoder_inputs = torch.cat([bos_column, mixed_prefix], dim=1)
+    #     else:
+    #         decoder_inputs = bos_column
 
-        logits = self.token_decoder(decoder_inputs, conditioning_tokens)
-        soft_token_embeddings, reconstructed_images = self.soft_decode(
-            logits,
-            descriptions=descriptions,
-        )
-        return logits, soft_token_embeddings, reconstructed_images
+    #     logits = self.token_decoder(decoder_inputs, conditioning_tokens)
+    #     soft_token_embeddings, reconstructed_images = self.soft_decode(
+    #         logits,
+    #         descriptions=descriptions,
+    #     )
+    #     return logits, soft_token_embeddings, reconstructed_images
 
     def target_token_indices_from_images(
         self,
@@ -1212,7 +1227,7 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
-        scheduled_sampling_probability: float = 0.0,
+        # scheduled_sampling_probability: float = 0.0,
         descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Run teacher-forced AR decoding for visual pretraining.
@@ -1237,10 +1252,10 @@ class ARModel(SaveLoadModel):
                     descriptions=descriptions,
                 )
         logits, soft_token_embeddings, reconstructed_images = (
-            self._decode_with_scheduled_sampling(
+            self._decode_with_teacher_forcing(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=target_token_indices,
-                scheduled_sampling_probability=scheduled_sampling_probability,
+                # scheduled_sampling_probability=scheduled_sampling_probability,
                 descriptions=descriptions,
             )
         )
