@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -59,6 +59,8 @@ class ARModelConfig:
     decoder_attention_dropout: float = 0.1
 
     perturbation_probability: float = 0.05
+    reconstruction_temperature: float = 1.0
+    num_multitoken_lookahead_steps: int = 2
 
     freeze_gtok: bool = True
 
@@ -86,6 +88,7 @@ class ARModelOutput:
     soft_token_embeddings: torch.Tensor
     conditioning_tokens: torch.Tensor
     target_token_indices: Optional[torch.Tensor]
+    lookahead_logits: Optional[list[torch.Tensor]] = None
 
 
 @dataclass
@@ -105,6 +108,7 @@ class ARAdaptationOutput:
     reconstructed_images: Optional[torch.Tensor]
     soft_token_embeddings: Optional[torch.Tensor]
     target_token_indices: Optional[torch.Tensor]
+    lookahead_logits: Optional[list[torch.Tensor]] = None
 
 
 @dataclass
@@ -785,6 +789,22 @@ class ARModel(SaveLoadModel):
             attention_dropout=config.decoder_attention_dropout,
             conditioning_dim=conditioning_dim,
         )
+        self.lookahead_decoders = nn.ModuleList(
+            [
+                AutoregressiveTokenDecoder(
+                    vocab_size=self.codebook_size,
+                    sequence_length=self.sequence_length,
+                    hidden_dim=config.decoder_hidden_dim,
+                    num_heads=config.decoder_num_heads,
+                    mlp_dim=config.decoder_mlp_dim,
+                    num_layers=config.decoder_num_layers,
+                    dropout=config.decoder_dropout,
+                    attention_dropout=config.decoder_attention_dropout,
+                    conditioning_dim=conditioning_dim,
+                )
+                for _ in range(config.num_multitoken_lookahead_steps)
+            ]
+        )
         self.language_adapter: Optional[nn.Module] = None
         if language_adapter is not None:
             self.set_language_adapter(language_adapter)
@@ -859,6 +879,8 @@ class ARModel(SaveLoadModel):
             param.requires_grad = False
         # Inject LoRA — this creates new trainable parameters inside the decoder.
         self.token_decoder.inject_lora(lora_config)
+        for decoder in self.lookahead_decoders:
+            decoder.inject_lora(lora_config)
         # Ensure G-Tok stays in eval mode regardless of outer train() calls.
         self.freeze_gtok()
         self._nfa_mode = True
@@ -1022,7 +1044,7 @@ class ARModel(SaveLoadModel):
         conditioning_tokens: torch.Tensor,
         target_token_indices: torch.Tensor,
         descriptions: Optional[List[str]] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor]]:
         decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
             target_token_indices
         )
@@ -1040,11 +1062,17 @@ class ARModel(SaveLoadModel):
         )
 
         logits = self.token_decoder(decoder_input_tokens, conditioning_tokens)
+
+        lookahead_logits = []
+        for decoder in self.lookahead_decoders:
+            lookahead_logits.append(decoder(decoder_input_tokens, conditioning_tokens))
+
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
             descriptions=descriptions,
+            temperature=self.config.reconstruction_temperature,
         )
-        return logits, soft_token_embeddings, reconstructed_images
+        return logits, soft_token_embeddings, reconstructed_images, lookahead_logits
 
     # def _decode_with_scheduled_sampling(
     #     self,
@@ -1210,8 +1238,10 @@ class ARModel(SaveLoadModel):
         self,
         logits: torch.Tensor,
         descriptions: Optional[List[str]] = None,
+        temperature: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Project token logits onto the G-Tok codebook and decode to images."""
+        logits = logits / temperature
         probabilities = torch.softmax(logits, dim=-1)
         soft_token_embeddings = torch.matmul(probabilities, self.codebook_embeddings())
         reconstructed_images = self.gtok.decode(
@@ -1251,7 +1281,7 @@ class ARModel(SaveLoadModel):
                     target_images,
                     descriptions=descriptions,
                 )
-        logits, soft_token_embeddings, reconstructed_images = (
+        logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
             self._decode_with_teacher_forcing(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=target_token_indices,
@@ -1266,6 +1296,7 @@ class ARModel(SaveLoadModel):
             soft_token_embeddings=soft_token_embeddings,
             conditioning_tokens=conditioning_tokens,
             target_token_indices=target_token_indices,
+            lookahead_logits=lookahead_logits,
         )
 
     def forward_adaptation(
@@ -1315,6 +1346,7 @@ class ARModel(SaveLoadModel):
         logits: Optional[torch.Tensor] = None
         reconstructed_images: Optional[torch.Tensor] = None
         soft_token_embeddings: Optional[torch.Tensor] = None
+        lookahead_logits: Optional[list[torch.Tensor]] = None
 
         if run_decoder:
             if target_token_indices is None:
@@ -1327,7 +1359,7 @@ class ARModel(SaveLoadModel):
                         target_images,
                         descriptions=descriptions,
                     )
-            logits, soft_token_embeddings, reconstructed_images = (
+            logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
                 self._decode_with_teacher_forcing(
                     conditioning_tokens=multimodal_conditioning_tokens,
                     target_token_indices=target_token_indices,
@@ -1344,6 +1376,7 @@ class ARModel(SaveLoadModel):
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
             target_token_indices=target_token_indices,
+            lookahead_logits=lookahead_logits,
         )
 
     @torch.no_grad()
@@ -1374,15 +1407,12 @@ class ARModel(SaveLoadModel):
             generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
 
         predicted_token_indices_tensor = torch.cat(predicted_token_indices, dim=1)
-        logits = self.token_decoder(
-            self.token_decoder.prepare_teacher_forcing_inputs(
-                predicted_token_indices_tensor
-            ),
-            conditioning_tokens,
-        )
-        soft_token_embeddings, reconstructed_images = self.soft_decode(
-            logits,
-            descriptions=descriptions,
+        logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
+            self._decode_with_teacher_forcing(
+                conditioning_tokens=conditioning_tokens,
+                target_token_indices=predicted_token_indices_tensor,
+                descriptions=descriptions,
+            )
         )
         return ARModelOutput(
             logits=logits,
@@ -1390,6 +1420,7 @@ class ARModel(SaveLoadModel):
             soft_token_embeddings=soft_token_embeddings,
             conditioning_tokens=conditioning_tokens,
             target_token_indices=predicted_token_indices_tensor,
+            lookahead_logits=lookahead_logits,
         )
 
     @torch.no_grad()
@@ -1444,7 +1475,7 @@ class ARModel(SaveLoadModel):
             generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
 
         predicted_token_indices_tensor = torch.cat(predicted_token_indices, dim=1)
-        logits, soft_token_embeddings, reconstructed_images = (
+        logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
             self._decode_with_teacher_forcing(
                 conditioning_tokens=multimodal_conditioning_tokens,
                 target_token_indices=predicted_token_indices_tensor,
@@ -1461,6 +1492,7 @@ class ARModel(SaveLoadModel):
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
             target_token_indices=predicted_token_indices_tensor,
+            lookahead_logits=lookahead_logits,
         )
 
     def load(self, path: str, device: torch.device) -> None:
@@ -1562,6 +1594,9 @@ class ARModel(SaveLoadModel):
             "style_encoder": sum(p.numel() for p in self.style_encoder.parameters()),
             "aggregator": sum(p.numel() for p in self.aggregator.parameters()),
             "token_decoder": sum(p.numel() for p in self.token_decoder.parameters()),
+            "lookahead_decoders": sum(
+                p.numel() for p in self.lookahead_decoders.parameters()
+            ),
             "total_trainable": sum(
                 p.numel() for p in self.parameters() if p.requires_grad
             ),

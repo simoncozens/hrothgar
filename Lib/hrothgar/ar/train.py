@@ -96,9 +96,6 @@ class ARVisualTrainingLoop(TrainingLoop):
         # self.scheduled_sampling_end_probability = (
         #     train_args.scheduled_sampling_end_probability
         # )
-        self.random_perturbation_probability = (
-            train_args.random_perturbation_probability
-        )
 
         if self.grad_accum_steps <= 0:
             raise ValueError(
