@@ -261,6 +261,10 @@ class VectorQuantizer(nn.Module):
             vq_loss = torch.mean((z_q - z.detach()) ** 2)
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2)
             entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
+            _, embed_ind = (-d).max(1)
+            embed_onehot = F.one_hot(embed_ind, self.n_e).type(z.dtype)
+            avg_probs = torch.mean(embed_onehot, dim=0)
+            perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
 
         # preserve gradients
         z_q = z + (z_q - z).detach()

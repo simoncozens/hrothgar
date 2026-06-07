@@ -64,6 +64,15 @@ class GtokLossWeights:
     entropy: float = 1.0
 
 
+@dataclass
+class GTokLossInfo:
+    vq_loss: Optional[torch.Tensor]
+    commit_loss: Optional[torch.Tensor]
+    entropy_loss: Optional[torch.Tensor]
+    codebook_usage: object  # Can be a scalar or tensor-like value
+    perplexity: Optional[torch.Tensor] = None
+
+
 def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
     """Convert a Python scalar or tensor-like value to a scalar float tensor."""
     if isinstance(value, torch.Tensor):
@@ -74,12 +83,7 @@ def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
 def compute_gtok_loss(
     reconstructed_images: torch.Tensor,
     target_images: torch.Tensor,
-    vq_loss_info: Tuple[
-        Optional[torch.Tensor],
-        Optional[torch.Tensor],
-        Optional[torch.Tensor],
-        object,
-    ],
+    loss_info: GTokLossInfo,
     *,
     perceptual_loss_fn: Optional[
         Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -114,7 +118,19 @@ def compute_gtok_loss(
     target_edges = _sobel_gradient_magnitude(target_images)
     edge_loss = F.l1_loss(recon_edges, target_edges)
 
-    vq_loss_raw, commit_loss_raw, entropy_loss_raw, codebook_usage_raw = vq_loss_info
+    (
+        vq_loss_raw,
+        commit_loss_raw,
+        entropy_loss_raw,
+        codebook_usage_raw,
+        perplexity_raw,
+    ) = (
+        loss_info.vq_loss,
+        loss_info.commit_loss,
+        loss_info.entropy_loss,
+        loss_info.codebook_usage,
+        loss_info.perplexity,
+    )
 
     vq_loss = (
         vq_loss_raw
@@ -133,6 +149,11 @@ def compute_gtok_loss(
     )
     codebook_usage = _as_scalar_tensor(
         codebook_usage_raw, device=reconstructed_images.device
+    )
+    perplexity = (
+        perplexity_raw
+        if perplexity_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
     )
 
     weighted_l1 = weights.l1 * l1_loss
@@ -160,6 +181,7 @@ def compute_gtok_loss(
         "commit": commit_loss,
         "entropy": entropy_loss,
         "codebook_usage": codebook_usage,
+        "perplexity": perplexity,
         "weighted_l1": weighted_l1,
         "weighted_perceptual": weighted_perceptual,
         "weighted_edge": weighted_edge,
