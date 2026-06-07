@@ -27,6 +27,7 @@ from hrothgar.llamagen_cnn import (
     Decoder as CNNDecoder,
     VectorQuantizer,
 )
+from hrothgar.gtok.losses import GTokLossInfo
 from hrothgar.utils import SaveLoadModel
 
 
@@ -651,7 +652,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         descriptions: Optional[List[str]] = None,
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor, object]]:
+    ) -> Tuple[torch.Tensor, GTokLossInfo]:
         """Encode glyph images to quantized codes and compute VQ losses.
 
         Args:
@@ -707,11 +708,18 @@ class GtokModel(SaveLoadModel):
         ).permute(0, 3, 1, 2)
 
         # Quantize
-        quantized_4d, loss_info, _indices_info = self.quantizer(quant_in_4d)
+        quantized_4d, raw_loss_info, indices_info = self.quantizer(quant_in_4d)
 
         # Reshape back to sequence format.
         quantized = quantized_4d.permute(0, 2, 3, 1).reshape(
             batch_size, self.sequence_length, self.config.quantizer_code_dim
+        )
+        loss_info = GTokLossInfo(
+            vq_loss=raw_loss_info.vq_loss,
+            commit_loss=raw_loss_info.commit_loss,
+            entropy_loss=raw_loss_info.entropy_loss,
+            codebook_usage=indices_info.codebook_usage,
+            perplexity=indices_info.perplexity,
         )
 
         return quantized, loss_info
@@ -772,7 +780,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         descriptions: Optional[List[str]] = None,
-    ) -> Tuple[torch.Tensor, Tuple]:
+    ) -> Tuple[torch.Tensor, GTokLossInfo]:
         """Forward pass: encode, quantize, and decode.
 
         Args:
