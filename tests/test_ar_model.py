@@ -405,3 +405,59 @@ def test_lora_state_dict_roundtrip() -> None:
         v1 = model.token_decoder.state_dict()[key]
         v2 = model2.token_decoder.state_dict()[key]
         assert torch.allclose(v1, v2), f"Mismatch in {key} after roundtrip"
+
+
+def test_ar_decoder_causal_masking():
+    """
+    Validates that the AutoregressiveTokenDecoder respects causality.
+    Changing an input token at index K should NOT affect logits at indices < K.
+    """
+    # Use a small configuration for speed
+    config = ARModelConfig(
+        decoder_num_layers=2, decoder_hidden_dim=64, decoder_num_heads=4, image_size=128
+    )
+
+    # We don't need a real G-Tok for this test, but ARModel expects one or its config
+    model = ARModel(config)
+    model.eval()
+
+    batch_size = 2
+    seq_len = model.sequence_length
+    vocab_size = model.codebook_size
+
+    # 1. Prepare dummy inputs
+    # conditioning_tokens dim is encoder_feature_dim * 2
+    cond = torch.randn(
+        batch_size, seq_len, config.encoder_feature_dim * 2, device="cpu"
+    )
+
+    # Create two identical input sequences
+    input1 = torch.randint(0, vocab_size, (batch_size, seq_len))
+    input2 = input1.clone()
+
+    # 2. Modify input2 at a specific index K
+    K = seq_len // 2
+    # Ensure the token is actually different
+    input2[:, K] = (input1[:, K] + 1) % vocab_size
+
+    # 3. Run forward pass
+    with torch.no_grad():
+        # AutoregressiveTokenDecoder.forward expects (input_token_indices, conditioning_tokens)
+        logits1 = model.token_decoder(input1, cond)
+        logits2 = model.token_decoder(input2, cond)
+
+    # 4. Verify causality
+    # Logits at index i are produced by looking at inputs [0...i].
+    # Therefore, logits at indices 0 to K-1 must be IDENTICAL.
+    for i in range(K):
+        diff = torch.abs(logits1[:, i, :] - logits2[:, i, :]).max()
+        assert (
+            diff < 1e-6
+        ), f"Causality violation at index {i}: logit changed despite input being identical up to that point."
+
+    # 5. Verify that the change DOES affect the current and future indices
+    # Logits at index K should be different because input[K] changed.
+    diff_at_k = torch.abs(logits1[:, K, :] - logits2[:, K, :]).max()
+    assert (
+        diff_at_k > 1e-5
+    ), f"Input change at index {K} did not affect logit at index {K}. Masking might be too restrictive or layers are disconnected."

@@ -715,11 +715,11 @@ class GtokModel(SaveLoadModel):
             batch_size, self.sequence_length, self.config.quantizer_code_dim
         )
         loss_info = GTokLossInfo(
-            vq_loss=raw_loss_info.vq_loss,
-            commit_loss=raw_loss_info.commit_loss,
-            entropy_loss=raw_loss_info.entropy_loss,
-            codebook_usage=indices_info.codebook_usage,
-            perplexity=indices_info.perplexity,
+            vq_loss=raw_loss_info[0],
+            commit_loss=raw_loss_info[1],
+            entropy_loss=raw_loss_info[2],
+            codebook_usage=raw_loss_info[3],
+            perplexity=indices_info[0],
         )
 
         return quantized, loss_info
