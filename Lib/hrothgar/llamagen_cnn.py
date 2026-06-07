@@ -201,6 +201,8 @@ class VectorQuantizer(nn.Module):
         entropy_loss_ratio,
         l2_norm,
         show_usage,
+        ema_decay=None,
+        ema_epsilon=1e-5,
     ):
         super().__init__()
         self.n_e = codebook_size
@@ -218,6 +220,16 @@ class VectorQuantizer(nn.Module):
             )
         if self.show_usage:
             self.register_buffer("codebook_used", torch.zeros(65536, dtype=torch.long))
+        if ema_decay is not None:
+            self.register_buffer("_ema_cluster_size", torch.zeros(self.n_e))
+            self.register_buffer("_ema_w", torch.Tensor(self.n_e, self.e_dim))
+            # Initialize EMA weights from the current embedding table
+            self._ema_w.copy_(self.embedding.weight.data)
+
+            self.embedding.weight.requires_grad = False
+
+            self._decay = ema_decay
+            self._epsilon = ema_epsilon
 
     def forward(self, z):
         # reshape z -> (batch, height, width, channel) and flatten
@@ -256,13 +268,38 @@ class VectorQuantizer(nn.Module):
             self.codebook_used[-cur_len:] = min_encoding_indices
             codebook_usage = len(torch.unique(self.codebook_used)) / self.n_e
 
-        # compute loss for embedding
         if self.training:
-            vq_loss = torch.mean((z_q - z.detach()) ** 2)
+            # Use EMA to update the embedding vectors
+            if self._decay is not None:
+                with torch.no_grad():
+                    encodings = F.one_hot(min_encoding_indices, self.n_e).type(
+                        z_flattened.dtype
+                    )
+                    self._ema_cluster_size.mul_(self._decay).add_(
+                        torch.sum(encodings, 0), alpha=1 - self._decay
+                    )
+                    # Laplace smoothing of the cluster size
+                    n = torch.sum(self._ema_cluster_size)
+                    smoothed_cluster_size = (
+                        (self._ema_cluster_size + self._epsilon)
+                        / (n + self.n_e * self._epsilon)
+                        * n
+                    )
+                    dw = torch.matmul(encodings.t(), z_flattened)
+                    self._ema_w.mul_(self._decay).add_(dw, alpha=1 - self._decay)
+                    self.embedding.weight.data.copy_(
+                        self._ema_w / smoothed_cluster_size.unsqueeze(1)
+                    )
+
+            # compute loss for embedding
+            vq_loss = (
+                torch.mean((z_q - z.detach()) ** 2)
+                if self._decay is None
+                else torch.tensor(0.0, device=z.device)
+            )
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2)
             entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
-            _, embed_ind = (-d).max(1)
-            embed_onehot = F.one_hot(embed_ind, self.n_e).type(z.dtype)
+            embed_onehot = F.one_hot(min_encoding_indices, self.n_e).type(z.dtype)
             avg_probs = torch.mean(embed_onehot, dim=0)
             perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
 
