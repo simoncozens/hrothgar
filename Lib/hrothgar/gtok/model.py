@@ -95,9 +95,8 @@ def create_2d_sinusoidal_position_embeddings(
 ) -> torch.Tensor:
     """Create 2D sinusoidal position embeddings for Vision Transformer.
 
-    This follows the approach in the original Vision Transformer paper and extends it
-    to be 2D-aware, so that the positional encoding reflects the spatial structure
-    of the glyph, not just a flattened sequence.
+    This follows the approach in the original Vision Transformer paper and matches
+    the official get_2d_sincos_pos_embed implementation exactly.
 
     Args:
         sequence_length: Total number of tokens (grid_height * grid_width)
@@ -112,45 +111,37 @@ def create_2d_sinusoidal_position_embeddings(
     assert (
         sequence_length == grid_height * grid_width
     ), f"sequence_length ({sequence_length}) must equal grid_height * grid_width ({grid_height * grid_width})"
+    assert embedding_dim % 4 == 0, f"embedding_dim ({embedding_dim}) must be divisible by 4"
 
-    # Allocate the position embeddings
-    position_embeddings = torch.zeros(sequence_length, embedding_dim, device=device)
+    # Create 1D sincos embedding helper
+    def get_1d_sincos(pos: torch.Tensor, dim: int) -> torch.Tensor:
+        # dim is embedding_dim // 2
+        omega = torch.arange(dim // 2, dtype=torch.float32, device=device)
+        omega = omega / (dim / 2.0)
+        omega = 1.0 / (10000.0 ** omega)
 
-    # Split embedding dimension between height and width
-    dim_per_axis = embedding_dim // 4
+        pos = pos.reshape(-1)
+        out = torch.einsum("m,d->md", pos, omega)
 
-    # Generate position indices
-    positions_h = torch.arange(grid_height, dtype=torch.float32, device=device)
-    positions_w = torch.arange(grid_width, dtype=torch.float32, device=device)
+        emb_sin = torch.sin(out)
+        emb_cos = torch.cos(out)
 
-    # Generate frequency bands
-    dim_indices = torch.arange(0, dim_per_axis, dtype=torch.float32, device=device)
-    frequencies = 10000 ** (2 * dim_indices / embedding_dim)
+        return torch.cat([emb_sin, emb_cos], dim=1)
 
-    # Create sinusoidal embeddings for each axis
-    sin_h = torch.sin(positions_h.unsqueeze(1) / frequencies)
-    cos_h = torch.cos(positions_h.unsqueeze(1) / frequencies)
-    sin_w = torch.sin(positions_w.unsqueeze(1) / frequencies)
-    cos_w = torch.cos(positions_w.unsqueeze(1) / frequencies)
+    grid_h = torch.arange(grid_height, dtype=torch.float32, device=device)
+    grid_w = torch.arange(grid_width, dtype=torch.float32, device=device)
 
-    # Interleave sin/cos for each axis and combine
-    sin_h_cos_h = torch.cat([sin_h, cos_h], dim=-1)  # (grid_height, 2*dim_per_axis)
-    sin_w_cos_w = torch.cat([sin_w, cos_w], dim=-1)  # (grid_width, 2*dim_per_axis)
+    # In official code: grid[0] is column indices (x_pos), grid[1] is row indices (y_pos)
+    # Flat sequence shape: (grid_height * grid_width,)
+    y_pos = grid_h.unsqueeze(1).expand(grid_height, grid_width).reshape(-1)
+    x_pos = grid_w.unsqueeze(0).expand(grid_height, grid_width).reshape(-1)
 
-    # Create 2D grid by broadcasting
-    h_embeddings = sin_h_cos_h.unsqueeze(1).expand(
-        -1, grid_width, -1
-    )  # (height, width, 2*dim_per_axis)
-    w_embeddings = sin_w_cos_w.unsqueeze(0).expand(
-        grid_height, -1, -1
-    )  # (height, width, 2*dim_per_axis)
+    # Official: emb_h = get_1d(..., grid[0]), emb_w = get_1d(..., grid[1])
+    # emb = concat([emb_h, emb_w], dim=1)
+    emb_x = get_1d_sincos(x_pos, embedding_dim // 2)
+    emb_y = get_1d_sincos(y_pos, embedding_dim // 2)
 
-    # Concatenate and reshape to sequence
-    grid_embeddings = torch.cat(
-        [h_embeddings, w_embeddings], dim=-1
-    )  # (height, width, embedding_dim)
-    position_embeddings = grid_embeddings.reshape(sequence_length, embedding_dim)
-
+    position_embeddings = torch.cat([emb_x, emb_y], dim=1)
     return position_embeddings
 
 
