@@ -10,10 +10,11 @@ from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.gtok import GtokLossWeights, compute_gtok_loss
+from hrothgar.gtok import compute_gtok_loss
+from hrothgar.gtok.config import GtokConfig, GtokLossWeights
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
-from hrothgar.gtok.model import GtokConfig, GtokModel
+from hrothgar.gtok.model import GtokModel
 from hrothgar.gtok.vgg_loss import VGG
 from hrothgar.utils import TrainingLoop
 
@@ -44,46 +45,17 @@ class GtokTrainingLoop(TrainingLoop):
         gtok_config_kwargs = {
             "image_size": train_args.image_size,
         }
-        if train_args.cnn_channel_multipliers is not None:
-            gtok_config_kwargs["cnn_channel_multipliers"] = (
-                train_args.cnn_channel_multipliers
-            )
-        if train_args.cnn_latent_channels is not None:
-            gtok_config_kwargs["cnn_latent_channels"] = train_args.cnn_latent_channels
-        if train_args.quantizer_codebook_size is not None:
-            gtok_config_kwargs["quantizer_codebook_size"] = (
-                train_args.quantizer_codebook_size
-            )
-        if train_args.quantizer_code_dim is not None:
-            gtok_config_kwargs["quantizer_code_dim"] = train_args.quantizer_code_dim
-        if train_args.quantizer_entropy_loss_ratio is not None:
-            gtok_config_kwargs["quantizer_entropy_loss_ratio"] = (
-                train_args.quantizer_entropy_loss_ratio
-            )
-        if train_args.text_conditioning_model_name.lower() != "none":
-            gtok_config_kwargs["text_conditioning_model_name"] = (
-                train_args.text_conditioning_model_name
-            )
-        if train_args.text_conditioning_max_length is not None:
-            gtok_config_kwargs["text_conditioning_max_length"] = (
-                train_args.text_conditioning_max_length
-            )
-
         config = GtokConfig(**gtok_config_kwargs)
         config.save_sidecar(train_args.model_path)
 
         model = GtokModel(config).to(self.device)
-        self.loss_weights = GtokLossWeights(
-            l1=train_args.loss_weight_l1,
-            perceptual=train_args.loss_weight_perceptual,
-            edge=train_args.loss_weight_edge,
-        )
+        self.loss_weights = GtokLossWeights()
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
             train_args.dataset_path,
             batch_size=16,
             image_size=config.image_size,
-            class_balanced=train_args.class_balanced,
+            class_balanced=True,
         )
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -299,60 +271,6 @@ if __name__ == "__main__":
         help="Square glyph raster size for GTok training.",
     )
     parser.add_argument(
-        "--model-path",
-        type=str,
-        help="Path to save the trained model",
-        default="gtok_model.pth",
-    )
-    parser.add_argument(
-        "--cnn-channel-multipliers",
-        type=_parse_int_list,
-        default=None,
-        help=(
-            "Optional comma-separated CNN channel multipliers for the tokenizer "
-            "pyramid (for example: 1,2,2,4,4)."
-        ),
-    )
-    parser.add_argument(
-        "--cnn-latent-channels",
-        type=int,
-        default=None,
-        help="Optional tokenizer latent channel count override.",
-    )
-    parser.add_argument(
-        "--quantizer-codebook-size",
-        type=int,
-        default=None,
-        help="Optional VQ codebook size override.",
-    )
-    parser.add_argument(
-        "--quantizer-code-dim",
-        type=int,
-        default=None,
-        help="Optional VQ code dimensionality override.",
-    )
-    parser.add_argument(
-        "--quantizer-entropy-loss-ratio",
-        type=float,
-        default=None,
-        help="Optional entropy regularization weight override for the VQ quantizer.",
-    )
-    parser.add_argument(
-        "--text-conditioning-model-name",
-        type=str,
-        default="google/flan-t5-small",
-        help=(
-            "Optional Hugging Face model name for frozen text conditioning "
-            "(for example: google/flan-t5-small)."
-        ),
-    )
-    parser.add_argument(
-        "--text-conditioning-max-length",
-        type=int,
-        default=128,
-        help="Maximum tokenized length for text conditioning prompts.",
-    )
-    parser.add_argument(
         "--targeted-validation-families-file",
         type=str,
         default=None,
@@ -360,38 +278,6 @@ if __name__ == "__main__":
             "Optional path to a newline-delimited text file of font family names. "
             "When provided, logs additional targeted validation metrics and "
             "reconstruction previews using only these families."
-        ),
-    )
-    parser.add_argument(
-        "--loss-weight-l1",
-        type=float,
-        default=1.0,
-        help="Weight for the L1 reconstruction loss term.",
-    )
-    parser.add_argument(
-        "--loss-weight-perceptual",
-        type=float,
-        default=0.1,
-        help="Weight for the perceptual (VGG) loss term.",
-    )
-    parser.add_argument(
-        "--loss-weight-edge",
-        type=float,
-        default=0.0,
-        help=(
-            "Weight for the Sobel gradient-magnitude (edge) loss term. "
-            "Penalises contour blurring more strongly than pixel-space L1 alone. "
-            "Default 0.0 (disabled); try 0.5–2.0 to enable."
-        ),
-    )
-    parser.add_argument(
-        "--class-balanced",
-        action="store_true",
-        default=False,
-        help=(
-            "When set, uses inverse class-frequency weighted sampling during "
-            "training so that under-represented font classes (e.g. handwriting, "
-            "display) are sampled proportionally more often."
         ),
     )
     args = parser.parse_args()

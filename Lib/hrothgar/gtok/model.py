@@ -16,7 +16,6 @@ References:
 import json
 from pathlib import Path
 from typing import Optional, Tuple, List
-from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -27,66 +26,9 @@ from hrothgar.llamagen_cnn import (
     Decoder as CNNDecoder,
     VectorQuantizer,
 )
-from hrothgar.gtok.losses import GTokLossInfo
+from hrothgar.gtok.losses import GtokLossInfo
+from hrothgar.gtok.config import GtokConfig
 from hrothgar.utils import SaveLoadModel
-
-
-@dataclass
-class GtokConfig:
-    """Configuration for the G-Tok tokenizer."""
-
-    image_size: int = 128
-
-    # CNN encoder/decoder parameters (from LlamaGen)
-    cnn_base_channels: int = 128
-    cnn_channel_multipliers: Optional[List[int]] = (
-        None  # If None, defaults to [1, 2, 2, 4, 4] for a 16x downsampling pyramid.
-    )
-    cnn_num_residual_blocks: int = 2
-    cnn_latent_channels: int = 256
-    cnn_dropout: float = 0.0
-
-    # ViT parameters
-    vit_hidden_dim: int = 384  # Dimensionality of transformer embeddings
-    vit_num_layers: int = 6  # Number of transformer layers
-    vit_num_heads: int = 6  # Number of attention heads
-    vit_mlp_dim: int = (
-        1536  # Dimensionality of feedforward networks (typically 4x hidden_dim)
-    )
-    vit_dropout: float = 0.1
-    vit_attention_dropout: float = 0.1
-
-    # Quantization parameters
-    quantizer_codebook_size: int = 2048  # Size of the codebook
-    quantizer_code_dim: int = 8  # Dimensionality of each code
-    quantizer_beta: float = 0.25  # Commitment loss weight
-    quantizer_entropy_loss_ratio: float = 0.01  # Entropy regularization weight
-
-    # Optional text conditioning via a frozen Flan-T5 encoder.
-    text_conditioning_model_name: Optional[str] = None
-    text_conditioning_max_length: int = 128
-
-    def __post_init__(self):
-        """Set defaults for list parameters."""
-        if self.cnn_channel_multipliers is None:
-            self.cnn_channel_multipliers = [1, 2, 2, 4, 4]
-        if self.image_size <= 0:
-            raise ValueError(f"image_size must be positive, got {self.image_size}")
-        if self.vit_hidden_dim % self.vit_num_heads != 0:
-            raise ValueError(
-                "vit_hidden_dim must be divisible by vit_num_heads "
-                f"(got vit_hidden_dim={self.vit_hidden_dim}, vit_num_heads={self.vit_num_heads})"
-            )
-        assert self.cnn_channel_multipliers is not None
-
-    def save_sidecar(self, model_path: Path) -> None:
-        from dataclasses import asdict
-
-        config_path = Path(str(model_path).replace(".pth", ".conf.json"))
-        with config_path.open("w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2, sort_keys=True)
-            f.write("\n")
-        print(f"Saved GTok config to {config_path}")
 
 
 class FrozenFlanT5Conditioner(nn.Module):
@@ -653,7 +595,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         descriptions: Optional[List[str]] = None,
-    ) -> Tuple[torch.Tensor, GTokLossInfo]:
+    ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Encode glyph images to quantized codes and compute VQ losses.
 
         Args:
@@ -662,7 +604,7 @@ class GtokModel(SaveLoadModel):
         Returns:
             Tuple of:
                 - quantized: Quantized representations, shape (batch_size, sequence_length, code_dim)
-                - loss_info: Tuple of (vq_loss, commit_loss, entropy_loss, codebook_usage)
+                - loss_info: GtokLossInfo tuple containing VQ loss components and metrics
         """
         # CNN encode to a spatial token grid.
         cnn_out = self.cnn_encoder(images)
@@ -781,7 +723,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         descriptions: Optional[List[str]] = None,
-    ) -> Tuple[torch.Tensor, GTokLossInfo]:
+    ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Forward pass: encode, quantize, and decode.
 
         Args:
