@@ -745,14 +745,7 @@ class ARModel(SaveLoadModel):
             )
         encoder_ch_mult = tuple(gtok_ch_mult)
 
-        self.content_encoder = CNNEncoder(
-            in_channels=3,
-            ch=config.content_encoder_base_channels,
-            ch_mult=encoder_ch_mult,
-            num_res_blocks=config.content_encoder_num_residual_blocks,
-            z_channels=config.encoder_feature_dim,
-            dropout=0.0,
-        )
+        self.content_encoder = self.gtok.cnn_encoder
         self.style_encoder = CNNEncoder(
             in_channels=3,
             ch=config.style_encoder_base_channels,
