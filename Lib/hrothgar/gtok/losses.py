@@ -16,6 +16,7 @@ of individual terms for TensorBoard logging.
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
+from hrothgar.gtok.config import GtokLossWeights
 import torch
 import torch.nn.functional as F
 
