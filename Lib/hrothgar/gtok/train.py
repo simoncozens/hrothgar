@@ -271,6 +271,12 @@ if __name__ == "__main__":
         help="Square glyph raster size for GTok training.",
     )
     parser.add_argument(
+        "--model-path",
+        type=str,
+        help="Path to save the trained model",
+        default="models/gtok.pth",
+    )
+    parser.add_argument(
         "--targeted-validation-families-file",
         type=str,
         default=None,
