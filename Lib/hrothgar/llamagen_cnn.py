@@ -294,7 +294,7 @@ class VectorQuantizer(nn.Module):
                     )
 
                     # Reassign dead codes
-                    dead = self._ema_cluster_size < 1.0
+                    dead = self._ema_cluster_size < 0.01
                     if torch.any(dead) and self.reassign_dead_codes:
                         num_dead = int(torch.sum(dead).item())
                         random_idx = torch.randint(
@@ -313,6 +313,8 @@ class VectorQuantizer(nn.Module):
                         self.embedding.weight.data[dead] = (
                             z_flattened[random_idx] + noise
                         )
+                        # Reset EMA cluster size for reassigned codes so they aren't immediately purged again
+                        self._ema_cluster_size[dead] = 1.0
 
             # compute loss for embedding
             vq_loss = (
