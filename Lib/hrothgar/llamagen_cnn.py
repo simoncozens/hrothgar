@@ -203,6 +203,7 @@ class VectorQuantizer(nn.Module):
         show_usage,
         ema_decay=None,
         ema_epsilon=1e-5,
+        reassign_dead_codes=True,
     ):
         super().__init__()
         self.n_e = codebook_size
@@ -211,6 +212,7 @@ class VectorQuantizer(nn.Module):
         self.entropy_loss_ratio = entropy_loss_ratio
         self.l2_norm = l2_norm
         self.show_usage = show_usage
+        self.reassign_dead_codes = reassign_dead_codes
 
         self.embedding = nn.Embedding(self.n_e, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
@@ -290,6 +292,27 @@ class VectorQuantizer(nn.Module):
                     self.embedding.weight.data.copy_(
                         self._ema_w / smoothed_cluster_size.unsqueeze(1)
                     )
+
+                    # Reassign dead codes
+                    dead = self._ema_cluster_size < 1.0
+                    if torch.any(dead) and self.reassign_dead_codes:
+                        num_dead = int(torch.sum(dead).item())
+                        random_idx = torch.randint(
+                            0,
+                            z_flattened.size(0),
+                            (num_dead,),
+                            device=z_flattened.device,
+                        )
+                        noise = (
+                            torch.randn(num_dead, self.e_dim, device=z_flattened.device)
+                            * 0.01
+                        )
+                        print(
+                            f"Reinitializing {num_dead} dead codes ({num_dead / self.n_e:.2%} of codebook)"
+                        )
+                        self.embedding.weight.data[dead] = (
+                            z_flattened[random_idx] + noise
+                        )
 
             # compute loss for embedding
             vq_loss = (
