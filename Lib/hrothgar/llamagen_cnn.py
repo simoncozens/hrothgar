@@ -312,9 +312,9 @@ class VectorQuantizer(nn.Module):
                             torch.randn(num_dead, self.e_dim, device=z_flattened.device)
                             * 0.01
                         )
-                        print(
-                            f"Reinitializing {num_dead} dead codes ({num_dead / self.n_e:.2%} of codebook)"
-                        )
+                        # print(
+                        #     f"Reinitializing {num_dead} dead codes ({num_dead / self.n_e:.2%} of codebook)"
+                        # )
                         self.embedding.weight.data[dead] = (
                             z_flattened[random_idx] + noise
                         )
