@@ -52,20 +52,8 @@ def _sobel_gradient_magnitude(images: torch.Tensor) -> torch.Tensor:
     return magnitude.view(B, C, H, W)
 
 
-@dataclass(frozen=True)
-class GtokLossWeights:
-    """Weights applied to each loss term in ``compute_gtok_loss``."""
-
-    l1: float = 1.0
-    perceptual: float = 0.1
-    edge: float = 0.0
-    vq: float = 1.0
-    commit: float = 1.0
-    entropy: float = 1.0
-
-
 @dataclass
-class GTokLossInfo:
+class GtokLossInfo:
     vq_loss: Optional[torch.Tensor]
     commit_loss: Optional[torch.Tensor]
     entropy_loss: Optional[torch.Tensor]
@@ -83,7 +71,7 @@ def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
 def compute_gtok_loss(
     reconstructed_images: torch.Tensor,
     target_images: torch.Tensor,
-    loss_info: GTokLossInfo,
+    loss_info: GtokLossInfo,
     *,
     perceptual_loss_fn: Optional[
         Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -95,8 +83,7 @@ def compute_gtok_loss(
     Args:
             reconstructed_images: Model reconstruction output, shape ``(B, C, H, W)``.
             target_images: Ground-truth target images, shape ``(B, C, H, W)``.
-            vq_loss_info: Tuple returned by ``GtokModel`` quantization pipeline:
-                    ``(vq_loss, commit_loss, entropy_loss, codebook_usage)``.
+            loss_info: ``GtokLossInfo`` object containing VQ-related losses and metrics.
             perceptual_loss_fn: Optional callable (for example ``hrothgar.gtok.vgg_loss.VGG``)
                     that takes ``(reconstructed_images, target_images)`` and returns a scalar tensor.
             weights: Coefficients for each term in the final weighted sum.
