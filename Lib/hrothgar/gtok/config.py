@@ -33,7 +33,7 @@ class GtokConfig:
     quantizer_entropy_loss_ratio: float = 0.01  # Entropy regularization weight
 
     # Optional text conditioning via a frozen Flan-T5 encoder.
-    text_conditioning_model_name: Optional[str] = "google/flan-t5-small"
+    text_conditioning_model_name: Optional[str] = None  # E.g. "google/flan-t5-small"
     text_conditioning_max_length: int = 128
 
     def __post_init__(self):
