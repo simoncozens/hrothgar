@@ -223,7 +223,7 @@ class VectorQuantizer(nn.Module):
         if self.show_usage:
             self.register_buffer("codebook_used", torch.zeros(65536, dtype=torch.long))
         if ema_decay is not None:
-            self.register_buffer("_ema_cluster_size", torch.zeros(self.n_e))
+            self.register_buffer("_ema_cluster_size", torch.ones(self.n_e))
             self.register_buffer("_ema_w", torch.Tensor(self.n_e, self.e_dim))
             # Initialize EMA weights from the current embedding table
             self._ema_w.copy_(self.embedding.weight.data)
