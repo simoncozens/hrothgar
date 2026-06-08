@@ -111,14 +111,16 @@ def create_2d_sinusoidal_position_embeddings(
     assert (
         sequence_length == grid_height * grid_width
     ), f"sequence_length ({sequence_length}) must equal grid_height * grid_width ({grid_height * grid_width})"
-    assert embedding_dim % 4 == 0, f"embedding_dim ({embedding_dim}) must be divisible by 4"
+    assert (
+        embedding_dim % 4 == 0
+    ), f"embedding_dim ({embedding_dim}) must be divisible by 4"
 
     # Create 1D sincos embedding helper
     def get_1d_sincos(pos: torch.Tensor, dim: int) -> torch.Tensor:
         # dim is embedding_dim // 2
         omega = torch.arange(dim // 2, dtype=torch.float32, device=device)
         omega = omega / (dim / 2.0)
-        omega = 1.0 / (10000.0 ** omega)
+        omega = 1.0 / (10000.0**omega)
 
         pos = pos.reshape(-1)
         out = torch.einsum("m,d->md", pos, omega)
@@ -648,7 +650,7 @@ class GtokModel(SaveLoadModel):
         quantized = quantized_4d.permute(0, 2, 3, 1).reshape(
             batch_size, self.sequence_length, self.config.quantizer_code_dim
         )
-        loss_info = GTokLossInfo(
+        loss_info = GtokLossInfo(
             vq_loss=raw_loss_info[0],
             commit_loss=raw_loss_info[1],
             entropy_loss=raw_loss_info[2],
