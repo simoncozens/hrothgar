@@ -68,7 +68,7 @@ class ARModelConfig:
     self_perturbation: bool = True
     perturbation_warmup_steps: int = 20_000
     reconstruction_temperature: float = 1.0
-    num_multitoken_lookahead_steps: int = 2
+    num_multitoken_lookahead_steps: int = 0
 
     # Regularisation on the style encoding path.
     style_dropout: float = 0.3
