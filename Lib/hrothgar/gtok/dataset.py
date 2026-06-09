@@ -275,6 +275,8 @@ class GTokDatasetMaker(DatasetMaker):
                 dataset,
                 batch_sampler=batch_sampler,
                 collate_fn=self.collate_fn,
+                pin_memory=True,
+                num_workers=12,
             )
         return DataLoader(
             dataset,
@@ -282,6 +284,8 @@ class GTokDatasetMaker(DatasetMaker):
             shuffle=True,
             drop_last=True,
             collate_fn=self.collate_fn,
+            pin_memory=True,
+            num_workers=12,
         )
 
     def test_set(self):
