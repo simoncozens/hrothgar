@@ -31,61 +31,6 @@ from hrothgar.gtok.config import GtokConfig
 from hrothgar.utils import SaveLoadModel
 
 
-class FrozenFlanT5Conditioner(nn.Module):
-    """Frozen Flan-T5 text encoder that returns pooled sentence embeddings."""
-
-    def __init__(self, model_name: str, max_length: int = 128):
-        super().__init__()
-        self.model_name = model_name
-        self.max_length = max_length
-        try:
-            from transformers import AutoTokenizer, T5EncoderModel
-        except ImportError as exc:
-            raise ImportError(
-                "transformers is required for GTok text conditioning. "
-                "Install with: pip install transformers sentencepiece"
-            ) from exc
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.encoder = T5EncoderModel.from_pretrained(model_name)
-        self.output_dim = int(self.encoder.config.d_model)
-        self.encoder.eval()
-        for parameter in self.encoder.parameters():
-            parameter.requires_grad = False
-
-    def forward(self, descriptions: List[str], device: torch.device) -> torch.Tensor:
-        """Encode a batch of descriptions into pooled embeddings.
-
-        Args:
-            descriptions: List of length B with text prompts.
-            device: Device where the returned tensor should live.
-
-        Returns:
-            Tensor of shape (B, output_dim).
-        """
-        if not descriptions:
-            raise ValueError("descriptions must be non-empty")
-
-        encoded = self.tokenizer(
-            descriptions,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.max_length,
-        )
-        encoded = {k: v.to(device) for k, v in encoded.items()}
-        with torch.no_grad():
-            outputs = self.encoder(**encoded)
-
-        # Mean-pool only over non-padding tokens.
-        hidden = outputs.last_hidden_state
-        attention_mask = encoded["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-        summed = (hidden * attention_mask).sum(dim=1)
-        denom = attention_mask.sum(dim=1).clamp_min(1.0)
-        pooled = summed / denom
-        return pooled
-
-
 def create_2d_sinusoidal_position_embeddings(
     sequence_length: int,
     grid_height: int,
@@ -451,13 +396,6 @@ class GtokModel(SaveLoadModel):
         self.token_grid_width = config.image_size // self.downsampling_factor
         self.sequence_length = self.token_grid_height * self.token_grid_width
 
-        self.text_conditioner: Optional[FrozenFlanT5Conditioner] = None
-        if config.text_conditioning_model_name:
-            self.text_conditioner = FrozenFlanT5Conditioner(
-                config.text_conditioning_model_name,
-                max_length=config.text_conditioning_max_length,
-            )
-
         # CNN Encoder: Downsamples images to feature maps
         self.cnn_encoder = CNNEncoder(
             in_channels=3,
@@ -488,21 +426,6 @@ class GtokModel(SaveLoadModel):
             config.vit_hidden_dim, config.quantizer_code_dim
         )
 
-        # Project text embedding dim to ViT hidden dim before affine modulation.
-        text_embedding_dim = (
-            self.text_conditioner.output_dim
-            if self.text_conditioner is not None
-            else config.vit_hidden_dim
-        )
-        self.encoder_text_projection = nn.Linear(
-            text_embedding_dim,
-            config.vit_hidden_dim,
-        )
-        self.encoder_text_affine = nn.Linear(
-            config.vit_hidden_dim,
-            config.vit_hidden_dim * 2,
-        )
-
         # Vector Quantizer: Codebook with 2048 entries and 8-dim codes
         self.quantizer = VectorQuantizer(
             codebook_size=config.quantizer_codebook_size,
@@ -517,16 +440,6 @@ class GtokModel(SaveLoadModel):
         # Projection from quantizer to ViT decoder input
         self.quantizer_to_vit_decoder = nn.Linear(
             config.quantizer_code_dim, config.vit_hidden_dim
-        )
-
-        # Independent decoder-side text projection and affine modulation.
-        self.decoder_text_projection = nn.Linear(
-            text_embedding_dim,
-            config.vit_hidden_dim,
-        )
-        self.decoder_text_affine = nn.Linear(
-            config.vit_hidden_dim,
-            config.vit_hidden_dim * 2,
         )
 
         # ViT Decoder: 6-layer causal transformer for autoregressive decoding
@@ -552,37 +465,6 @@ class GtokModel(SaveLoadModel):
             out_channels=3,
             dropout=config.cnn_dropout,
         )
-
-    def _description_embeddings(
-        self,
-        descriptions: Optional[List[str]],
-        batch_size: int,
-        device: torch.device,
-    ) -> Optional[torch.Tensor]:
-        if self.text_conditioner is None or descriptions is None:
-            return None
-        if len(descriptions) != batch_size:
-            raise ValueError(
-                f"description count must match batch size (got {len(descriptions)} vs {batch_size})"
-            )
-        return self.text_conditioner(descriptions, device=device)
-
-    @staticmethod
-    def _apply_feature_affine(
-        token_features: torch.Tensor,
-        text_embeddings: Optional[torch.Tensor],
-        projection: nn.Linear,
-        affine: nn.Linear,
-    ) -> torch.Tensor:
-        """Apply per-feature affine modulation: y = x * (1 + gamma) + beta."""
-        if text_embeddings is None:
-            return token_features
-        conditioned = projection(text_embeddings)
-        gamma_beta = affine(conditioned)
-        gamma, beta = torch.chunk(gamma_beta, chunks=2, dim=-1)
-        gamma = gamma.unsqueeze(1)
-        beta = beta.unsqueeze(1)
-        return token_features * (1.0 + gamma) + beta
 
     def encode(
         self,
@@ -614,20 +496,6 @@ class GtokModel(SaveLoadModel):
         )  # (batch, sequence_length + 1, vit_hidden_dim)
         # Remove class token for quantization
         vit_out = vit_out[:, 1:, :]  # (batch, sequence_length, vit_hidden_dim)
-
-        text_embeddings = self._description_embeddings(
-            descriptions,
-            batch_size=batch_size,
-            device=images.device,
-        )
-
-        # Modulate encoder token features before quantization.
-        vit_out = self._apply_feature_affine(
-            vit_out,
-            text_embeddings,
-            self.encoder_text_projection,
-            self.encoder_text_affine,
-        )
 
         # Project to quantizer input
         quant_in = self.vit_encoder_to_quantizer(
@@ -674,24 +542,10 @@ class GtokModel(SaveLoadModel):
             Reconstructed glyph images of shape (batch_size, 3, image_size, image_size)
         """
         batch_size = quantized.shape[0]
-        text_embeddings = self._description_embeddings(
-            descriptions,
-            batch_size=batch_size,
-            device=quantized.device,
-        )
-
         # Project to ViT decoder input
         decoder_in = self.quantizer_to_vit_decoder(
             quantized
         )  # (batch, sequence_length, vit_hidden_dim)
-
-        # Modulate decoder token stream with the same text embedding.
-        decoder_in = self._apply_feature_affine(
-            decoder_in,
-            text_embeddings,
-            self.decoder_text_projection,
-            self.decoder_text_affine,
-        )
 
         # ViT decode
         vit_out = self.vit_decoder(

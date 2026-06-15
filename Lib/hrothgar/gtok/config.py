@@ -19,22 +19,16 @@ class GtokConfig:
     # ViT parameters
     vit_hidden_dim: int = 384  # Dimensionality of transformer embeddings
     vit_num_layers: int = 6  # Number of transformer layers
-    vit_num_heads: int = 6  # Number of attention heads
-    vit_mlp_dim: int = (
-        1536  # Dimensionality of feedforward networks (typically 4x hidden_dim)
-    )
-    vit_dropout: float = 0.1
-    vit_attention_dropout: float = 0.1
+    vit_num_heads: int = 8  # Number of attention heads
+    vit_mlp_dim: int = 512  # Dimensionality of feedforward networks
+    vit_dropout: float = 0.0
+    vit_attention_dropout: float = 0.0
 
     # Quantization parameters
     quantizer_codebook_size: int = 4096  # Size of the codebook
     quantizer_code_dim: int = 8  # Dimensionality of each code
     quantizer_beta: float = 0.25  # Commitment loss weight
-    quantizer_entropy_loss_ratio: float = 0.01  # Entropy regularization weight
-
-    # Optional text conditioning via a frozen Flan-T5 encoder.
-    text_conditioning_model_name: Optional[str] = None  # E.g. "google/flan-t5-small"
-    text_conditioning_max_length: int = 128
+    quantizer_entropy_loss_ratio: float = 0.0  # Entropy regularization weight
 
     def __post_init__(self):
         """Set defaults for list parameters."""
