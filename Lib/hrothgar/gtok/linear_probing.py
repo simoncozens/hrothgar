@@ -34,19 +34,15 @@ import torch.nn as nn
 import tqdm
 from torch.utils.data import DataLoader
 
-from hrothgar.dataset import DatasetMaker
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.model import GtokConfig, GtokModel, load_model
-from hrothgar.utils import pick_device, torch_setup
-
+from hrothgar.utils import torch_setup
 
 # ---------------------------------------------------------------------------
 # Character probe alphabet: a-z and A-Z, mapped to 0..51
 # ---------------------------------------------------------------------------
 
-_PROBE_CHARS = list(range(ord("A"), ord("Z") + 1)) + list(
-    range(ord("a"), ord("z") + 1)
-)
+_PROBE_CHARS = list(range(ord("A"), ord("Z") + 1)) + list(range(ord("a"), ord("z") + 1))
 _CHAR_TO_INDEX: Dict[int, int] = {cp: i for i, cp in enumerate(_PROBE_CHARS)}
 
 
@@ -172,24 +168,36 @@ class FrozenGtokFeatureExtractor:
 
 
 class ProbeDataset(torch.utils.data.Dataset):
-    """Dataset that renders probe-alphabet glyphs from the given font list."""
+    """Dataset that renders probe-alphabet glyphs from a list of samples.
 
-    def __init__(
-        self,
+    Each sample is a ``(font, codepoint, char_label, family_label)`` tuple.
+    """
+
+    def __init__(self, samples: List[Tuple], image_size: int) -> None:
+        self.samples = samples
+        self._image_size = image_size
+
+    @classmethod
+    def from_font_list(
+        cls,
         fonts: List,
         char_codepoints: List[int],
         image_size: int,
         char_to_label: Dict[int, int],
         family_to_label: Dict[str, int],
-    ):
-        self.samples: List[Tuple] = []
+    ) -> ProbeDataset:
+        """Build a dataset by enumerating all font × character combinations."""
+        samples: List[Tuple] = []
         for font in fonts:
             family_label = family_to_label.get(font.family)
+            if family_label is None:
+                continue
             for cp in char_codepoints:
                 char_label = char_to_label.get(cp)
-                if char_label is None or family_label is None:
+                if char_label is None:
                     continue
-                self.samples.append((font, cp, char_label, family_label))
+                samples.append((font, cp, char_label, family_label))
+        return cls(samples, image_size)
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -241,9 +249,7 @@ class GtokLinearProbe:
         self.device = torch_setup()
 
         # 1. Load G-Tok.
-        gtok, gtok_config = load_model(
-            Path(config.gtok_model_path), device=self.device
-        )
+        gtok, gtok_config = load_model(Path(config.gtok_model_path), device=self.device)
         self.gtok = gtok
         self.gtok_config = gtok_config
         self.extractor = FrozenGtokFeatureExtractor(gtok, gtok_config, self.device)
@@ -254,84 +260,89 @@ class GtokLinearProbe:
 
     def _build_datasets(self) -> None:
         cfg = self.config
-
-        gf = GoogleFonts(cfg.dataset_path)
         rng = np.random.RandomState(cfg.seed)
 
-        # Shuffle fonts deterministically.
-        all_fonts = list(gf.fonts)
-        rng.shuffle(all_fonts)
+        # Load all fonts and group them by family.
+        gf = GoogleFonts(cfg.dataset_path)
+        family_to_fonts: Dict[str, List] = {}
+        for font in gf.fonts:
+            family_to_fonts.setdefault(font.family, []).append(font)
 
-        # Split fonts 80/20 train/test (by family to avoid leakage).
-        maker = DatasetMaker(
-            cfg.dataset_path,
-            batch_size=1,  # not used; just need the font split
-            image_size=cfg.image_size,
-            split_seed=cfg.seed,
-        )
-        train_fonts = maker.train_fonts
-        test_fonts = maker.test_fonts
-
-        # --- Build font-family label map from train set only ---
-        family_counts: Dict[str, int] = {}
-        for font in train_fonts:
-            family_counts[font.family] = family_counts.get(font.family, 0) + 1
-
-        # Keep families with at least min_samples in train.
-        eligible = [
-            (fam, cnt)
-            for fam, cnt in family_counts.items()
-            if cnt >= cfg.probe_font_min_samples
+        # Eligible families: those with at least probe_font_min_samples font
+        # *files* (each renders 52 characters, so effective sample count is
+        # len(fonts) × 52 — well above 20 for even a single font file).
+        eligible_families = [
+            fam
+            for fam, fonts in family_to_fonts.items()
+            if len(fonts) >= cfg.probe_font_min_samples
         ]
-        eligible.sort(key=lambda x: -x[1])  # most frequent first
+        eligible_families.sort()
+
         if cfg.probe_font_count > 0:
-            eligible = eligible[: cfg.probe_font_count]
+            eligible_families = eligible_families[: cfg.probe_font_count]
 
-        keep_families = {fam for fam, _cnt in eligible}
-        self.family_to_label = {fam: i for i, (fam, _) in enumerate(eligible)}
+        self.family_to_label = {fam: i for i, fam in enumerate(eligible_families)}
         self.num_font_classes = len(self.family_to_label)
-
-        # --- Filter fonts to those whose families are in the label map ---
-        train_fonts_filtered = [
-            f for f in train_fonts if f.family in keep_families
-        ]
-        test_fonts_filtered = [
-            f for f in test_fonts if f.family in keep_families
-        ]
-
-        # --- Build datasets ---
-        self.train_dataset = ProbeDataset(
-            train_fonts_filtered,
-            _PROBE_CHARS,
-            cfg.image_size,
-            char_to_label=_CHAR_TO_INDEX,
-            family_to_label=self.family_to_label,
-        )
-        self.test_dataset = ProbeDataset(
-            test_fonts_filtered,
-            _PROBE_CHARS,
-            cfg.image_size,
-            char_to_label=_CHAR_TO_INDEX,
-            family_to_label=self.family_to_label,
-        )
-
-        # Cap total samples if requested.
-        if cfg.max_samples > 0 and len(self.train_dataset) > cfg.max_samples:
-            indices = rng.choice(
-                len(self.train_dataset), cfg.max_samples, replace=False
-            )
-            self.train_dataset.samples = [self.train_dataset.samples[i] for i in indices]
-
         self.num_char_classes = len(_CHAR_TO_INDEX)
+
+        # Build per-family train/test sample lists by splitting font *files*
+        # within each family.  This avoids the empty test-set problem caused
+        # by a family-level train/test split.
+        train_samples: List[Tuple] = []
+        test_samples: List[Tuple] = []
+
+        for family in eligible_families:
+            fonts = family_to_fonts[family]
+            rng.shuffle(fonts)
+
+            family_label = self.family_to_label[family]
+            n_fonts = len(fonts)
+
+            if n_fonts == 1:
+                # Single-font family: probabilistically assign to train or test.
+                if rng.random() < cfg.train_frac:
+                    train_fonts_for_family = fonts
+                    test_fonts_for_family = []
+                else:
+                    train_fonts_for_family = []
+                    test_fonts_for_family = fonts
+            else:
+                # Multi-font family: split with at least one in each.
+                n_train = max(1, int(round(n_fonts * cfg.train_frac)))
+                n_train = min(n_train, n_fonts - 1)  # leave ≥1 for test
+                train_fonts_for_family = fonts[:n_train]
+                test_fonts_for_family = fonts[n_train:]
+
+            for font in train_fonts_for_family:
+                for cp in _PROBE_CHARS:
+                    char_label = _CHAR_TO_INDEX[cp]
+                    train_samples.append((font, cp, char_label, family_label))
+
+            for font in test_fonts_for_family:
+                for cp in _PROBE_CHARS:
+                    char_label = _CHAR_TO_INDEX[cp]
+                    test_samples.append((font, cp, char_label, family_label))
+
+        # Cap total training samples if requested.
+        if cfg.max_samples > 0 and len(train_samples) > cfg.max_samples:
+            rng.shuffle(train_samples)
+            train_samples = train_samples[: cfg.max_samples]
+
+        self.train_dataset = ProbeDataset(train_samples, cfg.image_size)
+        self.test_dataset = ProbeDataset(test_samples, cfg.image_size)
 
         print(f"Probe character classes: {self.num_char_classes}  (a-zA-Z)")
         print(f"Probe font-family classes: {self.num_font_classes}")
-        print(f"Train samples: {len(self.train_dataset)}")
-        print(f"Test samples:  {len(self.test_dataset)}")
+        print(
+            f"Train fonts:               {len(train_samples) // self.num_char_classes}"
+        )
+        print(
+            f"Test fonts:                {len(test_samples) // self.num_char_classes}"
+        )
+        print(f"Train samples:             {len(self.train_dataset)}")
+        print(f"Test samples:              {len(self.test_dataset)}")
 
-    def _make_loader(
-        self, dataset: ProbeDataset, shuffle: bool
-    ) -> DataLoader:
+    def _make_loader(self, dataset: ProbeDataset, shuffle: bool) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
@@ -435,8 +446,12 @@ class GtokLinearProbe:
         )
 
         print(f"\n=== Results ===")
-        print(f"Character accuracy:  {char_acc:.4f}  {'✓' if char_acc >= 0.85 else '✗ (target ≥ 0.85)'}")
-        print(f"Font-family accuracy: {font_acc:.4f}  {'✓' if font_acc >= 0.70 else '✗ (target ≥ 0.70)'}")
+        print(
+            f"Character accuracy:  {char_acc:.4f}  {'✓' if char_acc >= 0.85 else '✗ (target ≥ 0.85)'}"
+        )
+        print(
+            f"Font-family accuracy: {font_acc:.4f}  {'✓' if font_acc >= 0.70 else '✗ (target ≥ 0.70)'}"
+        )
 
         return char_acc, font_acc
 
