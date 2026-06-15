@@ -28,6 +28,8 @@ from hrothgar.llamagen_cnn import (
 )
 from hrothgar.gtok.losses import GtokLossInfo
 from hrothgar.gtok.config import GtokConfig
+from hrothgar.upstream.tokenizer import ViTEncoder as UpstreamViTEncoder
+from hrothgar.upstream.tokenizer import ViTDecoder as UpstreamViTDecoder
 from hrothgar.utils import SaveLoadModel
 
 
@@ -407,21 +409,21 @@ class GtokModel(SaveLoadModel):
         )
 
         # ViT Encoder: self-attention over the CNN token grid.
-
-        self.vit_encoder = ViTEncoder(
-            input_dim=config.cnn_latent_channels,
-            hidden_dim=config.vit_hidden_dim,
-            num_layers=config.vit_num_layers,
-            num_heads=config.vit_num_heads,
+        # We follow the upstream GAR-Font layout: Conv2d patch projection
+        # before the ViT encoder (no class token, no internal projection).
+        self.proj_patch = nn.Conv2d(
+            config.cnn_latent_channels, config.vit_hidden_dim, kernel_size=1
+        )
+        self.vit_encoder = UpstreamViTEncoder(
+            patch_num=self.token_grid_height,
+            dim=config.vit_hidden_dim,
+            depth=config.vit_num_layers,
+            heads=config.vit_num_heads,
             mlp_dim=config.vit_mlp_dim,
-            sequence_length=self.sequence_length,
-            grid_height=self.token_grid_height,
-            grid_width=self.token_grid_width,
-            dropout=config.vit_dropout,
-            attention_dropout=config.vit_attention_dropout,
+            dim_head=config.vit_hidden_dim // config.vit_num_heads,
         )
 
-        # Projection to quantizer input
+        # Project ViT output to quantizer input dimensions.
         self.vit_encoder_to_quantizer = nn.Linear(
             config.vit_hidden_dim, config.quantizer_code_dim
         )
@@ -442,18 +444,18 @@ class GtokModel(SaveLoadModel):
             config.quantizer_code_dim, config.vit_hidden_dim
         )
 
-        # ViT Decoder: 6-layer causal transformer for autoregressive decoding
-        self.vit_decoder = CausalViTDecoder(
-            hidden_dim=config.vit_hidden_dim,
-            num_layers=config.vit_num_layers,
-            num_heads=config.vit_num_heads,
+        # ViT Decoder: causal transformer (upstream GAR-Font implementation).
+        self.vit_decoder = UpstreamViTDecoder(
+            patch_num=self.token_grid_height,
+            dim=config.vit_hidden_dim,
+            depth=config.vit_num_layers,
+            heads=config.vit_num_heads,
             mlp_dim=config.vit_mlp_dim,
-            output_dim=config.cnn_latent_channels,
-            sequence_length=self.sequence_length,
-            grid_height=self.token_grid_height,
-            grid_width=self.token_grid_width,
-            dropout=config.vit_dropout,
-            attention_dropout=config.vit_attention_dropout,
+            dim_head=config.vit_hidden_dim // config.vit_num_heads,
+        )
+        # Reverse patch projection: ViT output → CNN feature channels.
+        self.proj_unpatch = nn.Conv2d(
+            config.vit_hidden_dim, config.cnn_latent_channels, kernel_size=1
         )
 
         # CNN Decoder: Upsamples feature maps back to images
@@ -469,7 +471,6 @@ class GtokModel(SaveLoadModel):
     def encode(
         self,
         images: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Encode glyph images to quantized codes and compute VQ losses.
 
@@ -484,18 +485,13 @@ class GtokModel(SaveLoadModel):
         # CNN encode to a spatial token grid.
         cnn_out = self.cnn_encoder(images)
 
-        # Reshape CNN output to sequence format
-        batch_size, channels, height, width = cnn_out.shape
-        cnn_seq = cnn_out.permute(0, 2, 3, 1).reshape(
-            batch_size, height * width, channels
-        )
+        # Patch projection: Conv2d maps CNN channels → ViT hidden dim.
+        tokens = (
+            self.proj_patch(cnn_out).flatten(2).transpose(1, 2)
+        )  # (B, N, vit_hidden_dim)
 
-        # ViT encode (includes class token in output, we keep full output for now)
-        vit_out = self.vit_encoder(
-            cnn_seq
-        )  # (batch, sequence_length + 1, vit_hidden_dim)
-        # Remove class token for quantization
-        vit_out = vit_out[:, 1:, :]  # (batch, sequence_length, vit_hidden_dim)
+        # ViT encode (no class token — upstream layout).
+        vit_out = self.vit_encoder(tokens)  # (B, N, vit_hidden_dim)
 
         # Project to quantizer input
         quant_in = self.vit_encoder_to_quantizer(
@@ -531,7 +527,6 @@ class GtokModel(SaveLoadModel):
     def decode(
         self,
         quantized: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> torch.Tensor:
         """Decode quantized codes back to glyph images.
 
@@ -543,23 +538,19 @@ class GtokModel(SaveLoadModel):
         """
         batch_size = quantized.shape[0]
         # Project to ViT decoder input
-        decoder_in = self.quantizer_to_vit_decoder(
-            quantized
-        )  # (batch, sequence_length, vit_hidden_dim)
+        decoder_in = self.quantizer_to_vit_decoder(quantized)  # (B, N, vit_hidden_dim)
 
-        # ViT decode
-        vit_out = self.vit_decoder(
-            decoder_in
-        )  # (batch, sequence_length, cnn_latent_channels)
+        # ViT decode (upstream causal transformer, same-dim in/out).
+        vit_out = self.vit_decoder(decoder_in)  # (B, N, vit_hidden_dim)
 
-        # Reshape to 4D for CNN decoder
-        batch_size, _seq_length, channels = vit_out.shape
-        cnn_in = vit_out.reshape(
+        # Reshape to 4D, then reverse patch projection: ViT dim → CNN channels.
+        vit_out_4d = vit_out.transpose(1, 2).reshape(
             batch_size,
+            -1,
             self.token_grid_height,
             self.token_grid_width,
-            channels,
-        ).permute(0, 3, 1, 2)
+        )  # (B, vit_hidden_dim, H, W)
+        cnn_in = self.proj_unpatch(vit_out_4d)  # (B, cnn_latent_channels, H, W)
 
         # CNN decode
         images = self.cnn_decoder(cnn_in)
@@ -569,7 +560,6 @@ class GtokModel(SaveLoadModel):
     def forward(
         self,
         images: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Forward pass: encode, quantize, and decode.
 
@@ -581,8 +571,8 @@ class GtokModel(SaveLoadModel):
                 - reconstructed: Reconstructed images of shape (batch_size, 3, image_size, image_size)
                 - loss_info: VQ loss information tuple
         """
-        quantized, loss_info = self.encode(images, descriptions=descriptions)
-        reconstructed = self.decode(quantized, descriptions=descriptions)
+        quantized, loss_info = self.encode(images)
+        reconstructed = self.decode(quantized)
         return reconstructed, loss_info
 
 
