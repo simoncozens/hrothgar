@@ -102,6 +102,10 @@ class LinearProbe(nn.Module):
     the same continuous representations the AR generator's content encoder is
     designed to condition on, so probing them directly answers whether the
     latent space separates content and style.
+
+    The full token sequence is flattened (following the paper: "Features are
+    extracted and flattened from the frozen tokenizer encoder"), giving
+    ``N * code_dim`` features.
     """
 
     def __init__(self, feature_dim: int, num_classes: int) -> None:
@@ -109,7 +113,7 @@ class LinearProbe(nn.Module):
         self.classifier = nn.Linear(feature_dim, num_classes)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        """Mean-pool over token sequence, then classify.
+        """Flatten token sequence, then classify.
 
         Args:
             features: ``(B, N, D)`` frozen G-Tok pre-quantization features.
@@ -117,8 +121,7 @@ class LinearProbe(nn.Module):
         Returns:
             Logits of shape ``(B, num_classes)``.
         """
-        pooled = features.mean(dim=1)  # (B, D)
-        return self.classifier(pooled)
+        return self.classifier(features.reshape(features.shape[0], -1))
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +257,12 @@ class GtokLinearProbe:
         self.gtok = gtok
         self.gtok_config = gtok_config
         self.extractor = FrozenGtokFeatureExtractor(gtok, gtok_config, self.device)
-        self.feature_dim = gtok_config.quantizer_code_dim
+        # Flattened token sequence: N tokens × code_dim (matches the paper).
+        self.feature_dim = (
+            gtok_config.quantizer_code_dim
+            * self.extractor.grid_h
+            * self.extractor.grid_w
+        )
 
         # 2. Build probe datasets.
         self._build_datasets()
