@@ -13,6 +13,7 @@ References:
   - LlamaGen tokenizer: https://github.com/FoundationVision/LlamaGen
 """
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Optional, Tuple, List
@@ -589,7 +590,12 @@ def load_model(model_path: Path, device: torch.device) -> tuple[GtokModel, GtokC
         )
     with config_path.open("r", encoding="utf-8") as fh:
         config_dict = json.load(fh)
-    config = GtokConfig(**config_dict)
+    # Drop keys not recognised by the current GtokConfig (backward compat).
+    valid_keys = {
+        f.name for f in dataclasses.fields(GtokConfig)
+    }
+    filtered = {k: v for k, v in config_dict.items() if k in valid_keys}
+    config = GtokConfig(**filtered)
 
     model = GtokModel(config).to(device)
     model.load(str(model_path), device=device)
