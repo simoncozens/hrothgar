@@ -224,6 +224,12 @@ class GTokDatasetMaker(DatasetMaker):
             **kwargs,
         )
 
+    def filter_fonts(self):
+        # For now, try only very non-display fonts
+        self.googlefonts.fonts = [
+            font for font in self.googlefonts.fonts if font.display_score() < 60.0
+        ]
+
     def train_set(self):
         return GTokAxisDataset(
             self.train_fonts,

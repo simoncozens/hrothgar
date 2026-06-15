@@ -186,6 +186,19 @@ class ARPhase1DatasetMaker(DatasetMaker):
         self.target_codepoint_oversample_factor = target_codepoint_oversample_factor
         self.target_only = target_only
 
+    def filter_fonts(self):
+        self.googlefonts.fonts = [
+            font
+            for font in self.googlefonts.fonts
+            if not (
+                "SC" in font.family  # Drop small caps families
+                or "bitcount" in font.family.lower()
+                or "playwrite" in font.family.lower()
+                # Drop barcode/redaction/etc.
+                or any("Special use" in k for k in font.tags().keys())
+            )
+        ]
+
     def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
         if self.target_only:
             return set(font_codepoints) & (self.extra_target_codepoints or set())
