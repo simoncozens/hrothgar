@@ -190,6 +190,8 @@ class GoogleFont(Font):
         based on its tag composition. Higher values indicate more display-oriented
         characteristics (ornaments, effects, distinctive styling).
         """
+        if self.metadata.category == "DISPLAY":
+            return 100.0
         return compute_display_score(self.tags())
 
     def description_with_tags_and_display(self) -> str:

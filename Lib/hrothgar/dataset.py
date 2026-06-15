@@ -57,6 +57,7 @@ class DatasetMaker:
             )
 
         self.googlefonts = GoogleFonts(repo_url, having=having_filter)
+        self.filter_fonts()
         self.batch_size = batch_size
         self.image_size = image_size
         self.split_seed = split_seed
@@ -114,6 +115,9 @@ class DatasetMaker:
             font for family in test_family_set for font in family_to_fonts[family]
         ]
         return train_fonts, test_fonts
+
+    def filter_fonts(self):
+        pass
 
     def train_set(self):
         return Dataset(
