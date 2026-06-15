@@ -264,6 +264,9 @@ class GtokLinearProbe:
 
         # Load all fonts and group them by family.
         gf = GoogleFonts(cfg.dataset_path)
+        # Use the same font filter as GTok
+        gf.fonts = [font for font in gf.fonts if font.display_score() < 60.0]
+
         family_to_fonts: Dict[str, List] = {}
         for font in gf.fonts:
             family_to_fonts.setdefault(font.family, []).append(font)
