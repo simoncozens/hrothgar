@@ -1,0 +1,550 @@
+"""Linear probing for G-Tok tokenizer quality assessment.
+
+Evaluates whether the frozen G-Tok encoder produces representations that
+linearly separate character identity (a-zA-Z) and font family.  High accuracy
+on both tasks indicates a well-organised latent space suitable for downstream
+autoregressive modelling.
+
+Usage as a module::
+
+    from hrothgar.gtok.linear_probing import GtokLinearProbe, ProbeConfig
+    config = ProbeConfig(...)
+    probe = GtokLinearProbe(config)
+    char_acc, font_acc = probe.run()
+
+CLI::
+
+    python -m hrothgar.gtok.linear_probing \\
+        --gtok-model-path models/gtok_model.pth \\
+        --dataset-path $GOOGLE_FONTS_REPO \\
+        --epochs 10
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+import tqdm
+from torch.utils.data import DataLoader
+
+from hrothgar.dataset import DatasetMaker
+from hrothgar.googlefonts import GoogleFonts
+from hrothgar.gtok.model import GtokConfig, GtokModel, load_model
+from hrothgar.utils import pick_device, torch_setup
+
+
+# ---------------------------------------------------------------------------
+# Character probe alphabet: a-z and A-Z, mapped to 0..51
+# ---------------------------------------------------------------------------
+
+_PROBE_CHARS = list(range(ord("A"), ord("Z") + 1)) + list(
+    range(ord("a"), ord("z") + 1)
+)
+_CHAR_TO_INDEX: Dict[int, int] = {cp: i for i, cp in enumerate(_PROBE_CHARS)}
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProbeConfig:
+    """Configuration for G-Tok linear probing.
+
+    Attributes:
+        gtok_model_path: Path to a trained G-Tok ``.pth`` weights file.
+            A ``.conf.json`` sidecar must exist alongside it.
+        dataset_path: Path to the Google Fonts repository.
+        epochs: Number of training epochs for each probe head.
+        batch_size: Batch size for training and evaluation.
+        learning_rate: Adam learning rate.
+        weight_decay: L2 regularisation strength.
+        image_size: Glyph render size (must match the G-Tok checkpoint).
+        probe_font_count: Maximum number of font-family classes (takes the
+            most frequent *probe_font_count* families).  Set to 0 for no limit.
+        probe_font_min_samples: Only include font families with at least this
+            many samples in the *train* split.
+        train_frac: Fraction of probe-eligible data used for the probe
+            training set (rest is held out for probe validation).
+        max_samples: Cap on total samples across all probe classes.  Set to 0
+            for no limit.
+        seed: RNG seed for reproducibility.
+    """
+
+    gtok_model_path: str = "models/gtok_model.pth"
+    dataset_path: str = os.environ.get("GOOGLE_FONTS_REPO", "")
+    epochs: int = 10
+    batch_size: int = 64
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-4
+    image_size: int = 64
+    probe_font_count: int = 100
+    probe_font_min_samples: int = 20
+    train_frac: float = 0.8
+    max_samples: int = 50_000
+    seed: int = 42
+
+
+# ---------------------------------------------------------------------------
+# Probe model: mean-pool frozen features → linear classifier
+# ---------------------------------------------------------------------------
+
+
+class LinearProbe(nn.Module):
+    """Single linear layer on top of mean-pooled frozen G-Tok features.
+
+    The probe operates on the *pre-quantization* projected features from the
+    G-Tok encoder (the output of ``vit_encoder_to_quantizer``).  These are
+    the same continuous representations the AR generator's content encoder is
+    designed to condition on, so probing them directly answers whether the
+    latent space separates content and style.
+    """
+
+    def __init__(self, feature_dim: int, num_classes: int) -> None:
+        super().__init__()
+        self.classifier = nn.Linear(feature_dim, num_classes)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """Mean-pool over token sequence, then classify.
+
+        Args:
+            features: ``(B, N, D)`` frozen G-Tok pre-quantization features.
+
+        Returns:
+            Logits of shape ``(B, num_classes)``.
+        """
+        pooled = features.mean(dim=1)  # (B, D)
+        return self.classifier(pooled)
+
+
+# ---------------------------------------------------------------------------
+# Feature extractor using a frozen G-Tok encoder
+# ---------------------------------------------------------------------------
+
+
+class FrozenGtokFeatureExtractor:
+    """Extract pre-quantization features from a frozen G-Tok model."""
+
+    def __init__(self, model: GtokModel, config: GtokConfig, device: torch.device):
+        self.model = model
+        self.config = config
+        self.device = device
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        self.downsampling_factor = 2 ** (len(config.cnn_channel_multipliers or []) - 1)
+        self.grid_h = config.image_size // self.downsampling_factor
+        self.grid_w = config.image_size // self.downsampling_factor
+
+    @torch.no_grad()
+    def extract(self, images: torch.Tensor) -> torch.Tensor:
+        """Return pre-quantization features for a batch of images.
+
+        Args:
+            images: ``(B, 3, H, W)`` float tensor in [0, 1].
+
+        Returns:
+            Features of shape ``(B, N, code_dim)`` where N is the flattened
+            token grid size.
+        """
+        batch_size = images.shape[0]
+        cnn_out = self.model.cnn_encoder(images)
+        cnn_seq = cnn_out.permute(0, 2, 3, 1).reshape(
+            batch_size, self.grid_h * self.grid_w, -1
+        )
+        vit_out = self.model.vit_encoder(cnn_seq)[:, 1:, :]  # drop class token
+        features = self.model.vit_encoder_to_quantizer(vit_out)
+        return features  # (B, N, code_dim)
+
+
+# ---------------------------------------------------------------------------
+# Dataset builder for probing
+# ---------------------------------------------------------------------------
+
+
+class ProbeDataset(torch.utils.data.Dataset):
+    """Dataset that renders probe-alphabet glyphs from the given font list."""
+
+    def __init__(
+        self,
+        fonts: List,
+        char_codepoints: List[int],
+        image_size: int,
+        char_to_label: Dict[int, int],
+        family_to_label: Dict[str, int],
+    ):
+        self.samples: List[Tuple] = []
+        for font in fonts:
+            family_label = family_to_label.get(font.family)
+            for cp in char_codepoints:
+                char_label = char_to_label.get(cp)
+                if char_label is None or family_label is None:
+                    continue
+                self.samples.append((font, cp, char_label, family_label))
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int):
+        font, cp, char_label, family_label = self.samples[idx]
+        return {
+            "font": font,
+            "char": cp,
+            "char_label": char_label,
+            "family_label": family_label,
+        }
+
+
+def _collate_probe_batch(batch, image_size: int) -> Dict[str, torch.Tensor]:
+    """Render a batch of probe samples into tensors."""
+    images = torch.stack(
+        [
+            torch.tensor(item["font"].render(item["char"], size=image_size))
+            for item in batch
+        ]
+    )
+    char_labels = torch.tensor([item["char_label"] for item in batch], dtype=torch.long)
+    family_labels = torch.tensor(
+        [item["family_label"] for item in batch], dtype=torch.long
+    )
+    return {
+        "images": images,
+        "char_label": char_labels,
+        "family_label": family_labels,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Top-level runner
+# ---------------------------------------------------------------------------
+
+
+class GtokLinearProbe:
+    """Run linear probing on a frozen G-Tok encoder.
+
+    Builds two independent linear probes — one for character identity
+    (a-zA-Z) and one for font family — trains each for a fixed number of
+    epochs, and reports validation accuracy.
+    """
+
+    def __init__(self, config: ProbeConfig) -> None:
+        self.config = config
+        self.device = torch_setup()
+
+        # 1. Load G-Tok.
+        gtok, gtok_config = load_model(
+            Path(config.gtok_model_path), device=self.device
+        )
+        self.gtok = gtok
+        self.gtok_config = gtok_config
+        self.extractor = FrozenGtokFeatureExtractor(gtok, gtok_config, self.device)
+        self.feature_dim = gtok_config.quantizer_code_dim
+
+        # 2. Build probe datasets.
+        self._build_datasets()
+
+    def _build_datasets(self) -> None:
+        cfg = self.config
+
+        gf = GoogleFonts(cfg.dataset_path)
+        rng = np.random.RandomState(cfg.seed)
+
+        # Shuffle fonts deterministically.
+        all_fonts = list(gf.fonts)
+        rng.shuffle(all_fonts)
+
+        # Split fonts 80/20 train/test (by family to avoid leakage).
+        maker = DatasetMaker(
+            cfg.dataset_path,
+            batch_size=1,  # not used; just need the font split
+            image_size=cfg.image_size,
+            split_seed=cfg.seed,
+        )
+        train_fonts = maker.train_fonts
+        test_fonts = maker.test_fonts
+
+        # --- Build font-family label map from train set only ---
+        family_counts: Dict[str, int] = {}
+        for font in train_fonts:
+            family_counts[font.family] = family_counts.get(font.family, 0) + 1
+
+        # Keep families with at least min_samples in train.
+        eligible = [
+            (fam, cnt)
+            for fam, cnt in family_counts.items()
+            if cnt >= cfg.probe_font_min_samples
+        ]
+        eligible.sort(key=lambda x: -x[1])  # most frequent first
+        if cfg.probe_font_count > 0:
+            eligible = eligible[: cfg.probe_font_count]
+
+        keep_families = {fam for fam, _cnt in eligible}
+        self.family_to_label = {fam: i for i, (fam, _) in enumerate(eligible)}
+        self.num_font_classes = len(self.family_to_label)
+
+        # --- Filter fonts to those whose families are in the label map ---
+        train_fonts_filtered = [
+            f for f in train_fonts if f.family in keep_families
+        ]
+        test_fonts_filtered = [
+            f for f in test_fonts if f.family in keep_families
+        ]
+
+        # --- Build datasets ---
+        self.train_dataset = ProbeDataset(
+            train_fonts_filtered,
+            _PROBE_CHARS,
+            cfg.image_size,
+            char_to_label=_CHAR_TO_INDEX,
+            family_to_label=self.family_to_label,
+        )
+        self.test_dataset = ProbeDataset(
+            test_fonts_filtered,
+            _PROBE_CHARS,
+            cfg.image_size,
+            char_to_label=_CHAR_TO_INDEX,
+            family_to_label=self.family_to_label,
+        )
+
+        # Cap total samples if requested.
+        if cfg.max_samples > 0 and len(self.train_dataset) > cfg.max_samples:
+            indices = rng.choice(
+                len(self.train_dataset), cfg.max_samples, replace=False
+            )
+            self.train_dataset.samples = [self.train_dataset.samples[i] for i in indices]
+
+        self.num_char_classes = len(_CHAR_TO_INDEX)
+
+        print(f"Probe character classes: {self.num_char_classes}  (a-zA-Z)")
+        print(f"Probe font-family classes: {self.num_font_classes}")
+        print(f"Train samples: {len(self.train_dataset)}")
+        print(f"Test samples:  {len(self.test_dataset)}")
+
+    def _make_loader(
+        self, dataset: ProbeDataset, shuffle: bool
+    ) -> DataLoader:
+        return DataLoader(
+            dataset,
+            batch_size=self.config.batch_size,
+            shuffle=shuffle,
+            drop_last=False,
+            collate_fn=lambda batch: _collate_probe_batch(
+                batch, self.config.image_size
+            ),
+            num_workers=4,
+            pin_memory=True,
+        )
+
+    def _train_one_probe(
+        self,
+        probe: LinearProbe,
+        train_loader: DataLoader,
+        test_loader: DataLoader,
+        label_key: str,
+        *,
+        desc: str,
+    ) -> float:
+        """Train a single linear probe and return best test accuracy."""
+        cfg = self.config
+        probe.to(self.device)
+        optimizer = torch.optim.AdamW(
+            probe.parameters(),
+            lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
+        )
+        loss_fn = nn.CrossEntropyLoss()
+
+        best_acc = 0.0
+
+        for epoch in range(cfg.epochs):
+            probe.train()
+            total_loss = 0.0
+            total_samples = 0
+
+            for batch in tqdm.tqdm(train_loader, desc=f"{desc} epoch {epoch+1}"):
+                images = batch["images"].to(self.device)
+                labels = batch[label_key].to(self.device)
+
+                features = self.extractor.extract(images)
+                logits = probe(features)
+                loss = loss_fn(logits, labels)
+
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item() * images.shape[0]
+                total_samples += images.shape[0]
+
+            # --- Validation ---
+            probe.eval()
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for batch in test_loader:
+                    images = batch["images"].to(self.device)
+                    labels = batch[label_key].to(self.device)
+                    features = self.extractor.extract(images)
+                    logits = probe(features)
+                    preds = torch.argmax(logits, dim=1)
+                    correct += (preds == labels).sum().item()
+                    total += labels.shape[0]
+
+            acc = correct / total if total > 0 else 0.0
+            best_acc = max(best_acc, acc)
+            print(
+                f"  {desc}  epoch {epoch+1:2d}  "
+                f"train loss: {total_loss / max(total_samples, 1):.4f}  "
+                f"test acc: {acc:.4f}  (best: {best_acc:.4f})"
+            )
+
+        return best_acc
+
+    def run(self) -> Tuple[float, float]:
+        """Run both probes and return (char_accuracy, font_accuracy)."""
+        train_loader = self._make_loader(self.train_dataset, shuffle=True)
+        test_loader = self._make_loader(self.test_dataset, shuffle=False)
+
+        print("\n=== Character probe (a-zA-Z) ===")
+        char_probe = LinearProbe(self.feature_dim, self.num_char_classes)
+        char_acc = self._train_one_probe(
+            char_probe,
+            train_loader,
+            test_loader,
+            label_key="char_label",
+            desc="Char",
+        )
+
+        print(f"\n=== Font-family probe ({self.num_font_classes} families) ===")
+        font_probe = LinearProbe(self.feature_dim, self.num_font_classes)
+        font_acc = self._train_one_probe(
+            font_probe,
+            train_loader,
+            test_loader,
+            label_key="family_label",
+            desc="Font",
+        )
+
+        print(f"\n=== Results ===")
+        print(f"Character accuracy:  {char_acc:.4f}  {'✓' if char_acc >= 0.85 else '✗ (target ≥ 0.85)'}")
+        print(f"Font-family accuracy: {font_acc:.4f}  {'✓' if font_acc >= 0.70 else '✗ (target ≥ 0.70)'}")
+
+        return char_acc, font_acc
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Linear probing for G-Tok tokenizer quality"
+    )
+    parser.add_argument(
+        "--gtok-model-path",
+        type=str,
+        default="models/gtok_model.pth",
+        help="Path to trained G-Tok weights (.pth); .conf.json must exist beside it",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=str,
+        default=os.environ.get("GOOGLE_FONTS_REPO", ""),
+        help="Path to the Google Fonts repository",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=10,
+        help="Number of training epochs per probe head",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size for training and evaluation",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=1e-3,
+        help="AdamW learning rate",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=1e-4,
+        help="L2 regularisation strength",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=64,
+        help="Glyph render size (must match the G-Tok checkpoint)",
+    )
+    parser.add_argument(
+        "--probe-font-count",
+        type=int,
+        default=100,
+        help="Maximum number of font-family classes",
+    )
+    parser.add_argument(
+        "--probe-font-min-samples",
+        type=int,
+        default=20,
+        help="Minimum samples per font family in the train split",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=50_000,
+        help="Cap on total training samples (0 for no limit)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="RNG seed for dataset shuffling",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if not args.dataset_path:
+        parser.error(
+            "--dataset-path is required (or set GOOGLE_FONTS_REPO environment variable)"
+        )
+
+    config = ProbeConfig(
+        gtok_model_path=args.gtok_model_path,
+        dataset_path=args.dataset_path,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        image_size=args.image_size,
+        probe_font_count=args.probe_font_count,
+        probe_font_min_samples=args.probe_font_min_samples,
+        max_samples=args.max_samples,
+        seed=args.seed,
+    )
+
+    probe = GtokLinearProbe(config)
+    probe.run()
+
+
+if __name__ == "__main__":
+    main()
