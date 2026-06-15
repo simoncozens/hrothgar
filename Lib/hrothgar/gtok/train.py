@@ -119,8 +119,7 @@ class GtokTrainingLoop(TrainingLoop):
 
     def train_step(self, batch):
         gt_images = batch["rendering"].to(self.device)
-        descriptions = batch.get("description")
-        recon_images, vq_loss_info = self.model(gt_images, descriptions=descriptions)
+        recon_images, vq_loss_info = self.model(gt_images)
         loss, loss_info = compute_gtok_loss(
             recon_images,
             gt_images,
@@ -147,10 +146,8 @@ class GtokTrainingLoop(TrainingLoop):
             total=max_batches,
         ):
             val_gt_images = val_batch["rendering"].to(self.device)
-            val_descriptions = val_batch.get("description")
             val_recon_images, _ = self.model(
                 val_gt_images,
-                descriptions=val_descriptions,
             )
             classifications = val_batch.get(
                 "classification", ["UNKNOWN"] * val_gt_images.shape[0]
@@ -232,8 +229,7 @@ class GtokTrainingLoop(TrainingLoop):
         # Also display some pretty pictures
         val_batch = next(iter(loader))
         val_gt_images = val_batch["rendering"].to(self.device)
-        val_descriptions = val_batch.get("description")
-        val_recon_images, _ = self.model(val_gt_images, descriptions=val_descriptions)
+        val_recon_images, _ = self.model(val_gt_images)
         # Log a grid of reconstructed vs. target images
         recon_grid = torch.cat([val_gt_images[:16], val_recon_images[:16]], dim=0)
         self.writer.add_image(

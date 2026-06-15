@@ -1189,12 +1189,8 @@ class ARModel(SaveLoadModel):
 
         cnn_out = self.gtok.cnn_encoder(target_images)
         _batch_size, channels, height, width = cnn_out.shape
-        cnn_tokens = cnn_out.permute(0, 2, 3, 1).reshape(
-            batch_size,
-            height * width,
-            channels,
-        )
-        vit_tokens = self.gtok.vit_encoder(cnn_tokens)[:, 1:, :]
+        tokens = self.gtok.proj_patch(cnn_out).flatten(2).transpose(1, 2)
+        vit_tokens = self.gtok.vit_encoder(tokens)
 
         text_embeddings = self.gtok._description_embeddings(
             descriptions,

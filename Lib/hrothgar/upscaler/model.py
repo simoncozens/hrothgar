@@ -207,8 +207,8 @@ class UpscalerModel(SaveLoadModel):
                 features = cnn_features
             else:
                 b, c, h, w = cnn_features.shape
-                cnn_sequence = cnn_features.permute(0, 2, 3, 1).reshape(b, h * w, c)
-                vit_tokens = self.gtok.vit_encoder(cnn_sequence)[:, 1:, :]
+                tokens = self.gtok.proj_patch(cnn_features).flatten(2).transpose(1, 2)
+                vit_tokens = self.gtok.vit_encoder(tokens)
                 vit_features = vit_tokens.reshape(b, h, w, -1).permute(0, 3, 1, 2)
                 features = torch.cat([cnn_features, vit_features], dim=1)
 

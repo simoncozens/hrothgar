@@ -152,14 +152,15 @@ class FrozenGtokFeatureExtractor:
             Features of shape ``(B, N, code_dim)`` where N is the flattened
             token grid size.
         """
-        batch_size = images.shape[0]
         cnn_out = self.model.cnn_encoder(images)
-        cnn_seq = cnn_out.permute(0, 2, 3, 1).reshape(
-            batch_size, self.grid_h * self.grid_w, -1
-        )
-        vit_out = self.model.vit_encoder(cnn_seq)[:, 1:, :]  # drop class token
-        features = self.model.vit_encoder_to_quantizer(vit_out)
-        return features  # (B, N, code_dim)
+        # Patch projection (Conv2d) then flatten — matches upstream GAR-Font layout.
+        tokens = (
+            self.model.proj_patch(cnn_out).flatten(2).transpose(1, 2)
+        )  # (B, N, vit_hidden_dim)
+        # Upstream ViTEncoder: no class token, same-dim in/out.
+        vit_out = self.model.vit_encoder(tokens)  # (B, N, vit_hidden_dim)
+        features = self.model.vit_encoder_to_quantizer(vit_out)  # (B, N, code_dim)
+        return features
 
 
 # ---------------------------------------------------------------------------
