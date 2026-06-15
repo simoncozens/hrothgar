@@ -257,7 +257,12 @@ class VectorQuantizer(nn.Module):
 
         min_encoding_indices = torch.argmin(d, dim=1)
         z_q = embedding[min_encoding_indices].view(z.shape)
-        perplexity = None
+
+        # Calculate perplexity in both training and eval for consistent monitoring
+        embed_onehot = F.one_hot(min_encoding_indices, self.n_e).type(z.dtype)
+        avg_probs = torch.mean(embed_onehot, dim=0)
+        perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
+
         min_encodings = None
         vq_loss = None
         commit_loss = None
@@ -324,9 +329,6 @@ class VectorQuantizer(nn.Module):
             )
             commit_loss = self.beta * torch.mean((z_q.detach() - z) ** 2)
             entropy_loss = self.entropy_loss_ratio * compute_entropy_loss(-d)
-            embed_onehot = F.one_hot(min_encoding_indices, self.n_e).type(z.dtype)
-            avg_probs = torch.mean(embed_onehot, dim=0)
-            perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
