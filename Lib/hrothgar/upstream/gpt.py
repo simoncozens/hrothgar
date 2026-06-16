@@ -447,7 +447,7 @@ class Transformer(nn.Module):
             h = self.tok_dropout(token_embeddings)
             self.freqs_cis = self.freqs_cis.to(h.device)
 
-        if self.training or eval_mode_sample:
+        if self.training or eval_mode_sample or input_pos is None:
             freqs_cis = self.freqs_cis[: token_embeddings.shape[1]]
         else:
             freqs_cis = self.freqs_cis[input_pos]
@@ -460,7 +460,7 @@ class Transformer(nn.Module):
         h = self.norm(h)
         logits = self.output(h).float()
 
-        if self.training or eval_mode_sample:
+        if self.training or eval_mode_sample or input_pos is None:
             logits = logits[:, (self.img_feature_code_len - 1) :].contiguous()
 
         loss = None
