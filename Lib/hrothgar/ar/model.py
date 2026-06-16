@@ -1036,7 +1036,6 @@ class ARModel(SaveLoadModel):
         self,
         conditioning_tokens: torch.Tensor,
         target_token_indices: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor]]:
         decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
             target_token_indices
@@ -1062,7 +1061,6 @@ class ARModel(SaveLoadModel):
 
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
-            descriptions=descriptions,
             temperature=self.config.reconstruction_temperature,
         )
         return logits, soft_token_embeddings, reconstructed_images, lookahead_logits
@@ -1182,7 +1180,6 @@ class ARModel(SaveLoadModel):
     def target_token_indices_from_images(
         self,
         target_images: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> torch.Tensor:
         """Encode target glyph images into G-Tok codebook indices."""
         batch_size = target_images.shape[0]
@@ -1191,18 +1188,6 @@ class ARModel(SaveLoadModel):
         _batch_size, channels, height, width = cnn_out.shape
         tokens = self.gtok.proj_patch(cnn_out).flatten(2).transpose(1, 2)
         vit_tokens = self.gtok.vit_encoder(tokens)
-
-        text_embeddings = self.gtok._description_embeddings(
-            descriptions,
-            batch_size=batch_size,
-            device=target_images.device,
-        )
-        vit_tokens = self.gtok._apply_feature_affine(
-            vit_tokens,
-            text_embeddings,
-            self.gtok.encoder_text_projection,
-            self.gtok.encoder_text_affine,
-        )
 
         quantizer_inputs = self.gtok.vit_encoder_to_quantizer(vit_tokens)
         quantizer_inputs = quantizer_inputs.reshape(
@@ -1226,7 +1211,6 @@ class ARModel(SaveLoadModel):
     def soft_decode(
         self,
         logits: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
         temperature: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Project token logits onto the G-Tok codebook and decode to images."""
@@ -1235,7 +1219,6 @@ class ARModel(SaveLoadModel):
         soft_token_embeddings = torch.matmul(probabilities, self.codebook_embeddings())
         reconstructed_images = self.gtok.decode(
             soft_token_embeddings,
-            descriptions=descriptions,
         )
         return soft_token_embeddings, reconstructed_images
 
@@ -1247,7 +1230,6 @@ class ARModel(SaveLoadModel):
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
         # scheduled_sampling_probability: float = 0.0,
-        descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Run teacher-forced AR decoding for visual pretraining.
 
@@ -1268,14 +1250,12 @@ class ARModel(SaveLoadModel):
             with torch.no_grad():
                 target_token_indices = self.target_token_indices_from_images(
                     target_images,
-                    descriptions=descriptions,
                 )
         logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
             self._decode_with_teacher_forcing(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=target_token_indices,
                 # scheduled_sampling_probability=scheduled_sampling_probability,
-                descriptions=descriptions,
             )
         )
 
@@ -1373,7 +1353,6 @@ class ARModel(SaveLoadModel):
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
-        descriptions: Optional[List[str]] = None,
     ) -> ARModelOutput:
         """Greedily decode a full token sequence and reconstruct the glyph image."""
         conditioning_tokens = self.aggregate_conditioning(
@@ -1400,7 +1379,6 @@ class ARModel(SaveLoadModel):
             self._decode_with_teacher_forcing(
                 conditioning_tokens=conditioning_tokens,
                 target_token_indices=predicted_token_indices_tensor,
-                descriptions=descriptions,
             )
         )
         return ARModelOutput(
@@ -1418,7 +1396,6 @@ class ARModel(SaveLoadModel):
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
         text_embeddings: torch.Tensor,
-        descriptions: Optional[list[str]] = None,
     ) -> ARAdaptationOutput:
         """Greedy generation path that uses multimodal conditioning tokens."""
         content_tokens = self.encode_content(content_images)
@@ -1468,7 +1445,6 @@ class ARModel(SaveLoadModel):
             self._decode_with_teacher_forcing(
                 conditioning_tokens=multimodal_conditioning_tokens,
                 target_token_indices=predicted_token_indices_tensor,
-                descriptions=descriptions,
             )
         )
 

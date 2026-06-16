@@ -182,7 +182,6 @@ class ARVisualTrainingLoop(TrainingLoop):
             style_reference_images,
             target_images=target_images,
             # scheduled_sampling_probability=scheduled_sampling_probability,
-            descriptions=descriptions,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
@@ -294,7 +293,6 @@ class ARVisualTrainingLoop(TrainingLoop):
                         val_content_images,
                         val_style_images,
                         target_images=val_target_images,
-                        descriptions=val_descriptions,
                     )
                 _val_loss, val_loss_info = compute_ar_loss(
                     val_output,
@@ -338,17 +336,14 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_target_images = val_batch["target_rendering"].to(self.device)
                 val_content_images = val_batch["content_rendering"].to(self.device)
                 val_style_images = val_batch["style_renderings"].to(self.device)
-                val_descriptions = val_batch.get("description")
 
                 with self._autocast_context():
                     fr_output = self.model.generate(
                         content_images=val_content_images,
                         style_reference_images=val_style_images,
-                        descriptions=val_descriptions,
                     )
                 gt_token_indices = self.model.target_token_indices_from_images(
                     val_target_images,
-                    descriptions=val_descriptions,
                 )
                 fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
                 fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
@@ -386,19 +381,16 @@ class ARVisualTrainingLoop(TrainingLoop):
         val_target_images = val_batch["target_rendering"].to(self.device)
         val_content_images = val_batch["content_rendering"].to(self.device)
         val_style_images = val_batch["style_renderings"].to(self.device)
-        val_descriptions = val_batch.get("description")
 
         with self._autocast_context():
             val_output = self.model(
                 val_content_images,
                 val_style_images,
                 target_images=val_target_images,
-                descriptions=val_descriptions,
             )
             autoregression_output = self.model.generate(
                 content_images=val_content_images,
                 style_reference_images=val_style_images,
-                descriptions=val_descriptions,
             )
 
         preview_count = min(8, val_target_images.shape[0])
