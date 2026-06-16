@@ -196,6 +196,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
                 or "playwrite" in font.family.lower()
                 # Drop barcode/redaction/etc.
                 or any("Special use" in k for k in font.tags().keys())
+                # For now try only very non-display fonts
+                or font.display_score() > 60.0
             )
         ]
 
