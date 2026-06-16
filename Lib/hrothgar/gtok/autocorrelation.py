@@ -153,9 +153,7 @@ class TokenSequenceDataset(torch.utils.data.Dataset):
     @torch.no_grad()
     def __getitem__(self, idx: int) -> torch.Tensor:
         font, cp = self.samples[idx]
-        image = torch.tensor(
-            font.render(cp, size=self.image_size), dtype=torch.float32
-        )
+        image = torch.tensor(font.render(cp, size=self.image_size), dtype=torch.float32)
         image = image.unsqueeze(0).to(self.device)
 
         cnn_out = self.gtok.cnn_encoder(image)
@@ -165,9 +163,7 @@ class TokenSequenceDataset(torch.utils.data.Dataset):
 
         # Reshape and quantize to get discrete indices.
         _batch, _channels, _h, _w = cnn_out.shape
-        pre_quant_4d = pre_quant.reshape(
-            _batch, _h, _w, -1
-        ).permute(0, 3, 1, 2)
+        pre_quant_4d = pre_quant.reshape(_batch, _h, _w, -1).permute(0, 3, 1, 2)
         _quantized, _loss, indices_info = self.gtok.quantizer(pre_quant_4d)
         token_indices = indices_info[2]  # (B*N,) flattened
 
@@ -196,9 +192,7 @@ class TokenAutocorrelation:
         self.config = config
         self.device = torch_setup()
 
-        gtok, gtok_config = load_model(
-            Path(config.gtok_model_path), device=self.device
-        )
+        gtok, gtok_config = load_model(Path(config.gtok_model_path), device=self.device)
         self.gtok = gtok
         self.gtok_config = gtok_config
         self.gtok.eval()
@@ -272,9 +266,7 @@ class TokenAutocorrelation:
             hidden_dim=cfg.hidden_dim,
         ).to(self.device)
 
-        optimizer = torch.optim.AdamW(
-            probe.parameters(), lr=cfg.learning_rate
-        )
+        optimizer = torch.optim.AdamW(probe.parameters(), lr=cfg.learning_rate)
         loss_fn = nn.CrossEntropyLoss()
 
         best_acc = 0.0
@@ -365,21 +357,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--epochs", type=int, default=5, help="Training epochs for the probe"
     )
-    parser.add_argument(
-        "--batch-size", type=int, default=64, help="Batch size"
-    )
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument(
         "--learning-rate", type=float, default=1e-3, help="AdamW learning rate"
     )
     parser.add_argument(
-        "--hidden-dim", type=int, default=128, help="Hidden dim of the probe transformer"
+        "--hidden-dim",
+        type=int,
+        default=128,
+        help="Hidden dim of the probe transformer",
     )
     parser.add_argument(
         "--max-samples", type=int, default=50_000, help="Cap on total samples"
     )
-    parser.add_argument(
-        "--seed", type=int, default=42, help="RNG seed"
-    )
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed")
     return parser
 
 

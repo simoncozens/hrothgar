@@ -27,15 +27,17 @@ from hrothgar.llamagen_cnn import Encoder as CNNEncoder
 from hrothgar.gtok.model import (
     GtokConfig,
     GtokModel,
-    create_2d_sinusoidal_position_embeddings,
 )
+from hrothgar.upstream.feature_fusion_module import FeatureFusionModule
+from hrothgar.upstream.gpt import GPTModelArgs, Transformer as GPTTransformer
 from hrothgar.utils import SaveLoadModel
 from tqdm import tqdm
 
 
 @dataclass
+@dataclass
 class ARModelConfig:
-    """Configuration for the visual-pretraining AR generator."""
+    """Configuration for the visual-pretraining AR generator (PrefixLM design)."""
 
     image_size: int = 128
     encoder_feature_dim: int = 256
@@ -48,9 +50,11 @@ class ARModelConfig:
     style_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4, 4)
     style_encoder_num_residual_blocks: int = 2
 
+    # FeatureFusionModule (upstream GAR-Font).
     aggregator_num_layers: int = 3
     aggregator_num_heads: int = 8
 
+    # GPT decoder (PrefixLM).
     decoder_hidden_dim: int = 1024
     decoder_num_layers: int = 24
     decoder_num_heads: int = 16
@@ -78,6 +82,24 @@ class ARModelConfig:
                 f"(got {self.decoder_hidden_dim} and {self.decoder_num_heads})"
             )
 
+    def gpt_args(
+        self, vocab_size: int, img_feature_code_len: int, target_token_len: int
+    ) -> GPTModelArgs:
+        """Build upstream GPTModelArgs from this config + derived sizes."""
+        return GPTModelArgs(
+            dim=self.decoder_hidden_dim,
+            n_layer=self.decoder_num_layers,
+            n_head=self.decoder_num_heads,
+            vocab_size=vocab_size,
+            img_feature_channel=self.encoder_feature_dim * 2,
+            img_feature_code_len=img_feature_code_len,
+            target_token_len=target_token_len,
+            token_dropout_p=self.decoder_dropout,
+            attn_dropout_p=self.decoder_attention_dropout,
+            resid_dropout_p=self.decoder_dropout,
+            ffn_dropout_p=self.decoder_dropout,
+        )
+
 
 @dataclass
 class ARModelOutput:
@@ -86,7 +108,6 @@ class ARModelOutput:
     logits: torch.Tensor
     reconstructed_images: torch.Tensor
     soft_token_embeddings: torch.Tensor
-    conditioning_tokens: torch.Tensor
     target_token_indices: Optional[torch.Tensor]
     lookahead_logits: Optional[list[torch.Tensor]] = None
 
@@ -754,47 +775,32 @@ class ARModel(SaveLoadModel):
             z_channels=config.encoder_feature_dim,
             dropout=0.0,
         )
-        self.aggregator = ContentStyleAggregator(
-            feature_dim=config.encoder_feature_dim,
-            num_heads=config.aggregator_num_heads,
-            num_layers=config.aggregator_num_layers,
+        self.aggregator = FeatureFusionModule(
+            z_channel=config.encoder_feature_dim,
+            n_heads=config.aggregator_num_heads,
+            n_style_blocks=config.aggregator_num_layers,
         )
 
+        # PrefixLM: image features are prepended to the code-token sequence.
+        # The GPT uses self-attention over the full [img | code] sequence.
         conditioning_dim = config.encoder_feature_dim * 2
-        self.register_buffer(
-            "conditioning_position_embeddings",
-            create_2d_sinusoidal_position_embeddings(
-                self.sequence_length,
-                self.token_grid_height,
-                self.token_grid_width,
-                conditioning_dim,
-            ),
-            persistent=False,
-        )
-        self.token_decoder = AutoregressiveTokenDecoder(
+        gpt_config = GPTModelArgs(
             vocab_size=self.codebook_size,
-            sequence_length=self.sequence_length,
-            hidden_dim=config.decoder_hidden_dim,
-            num_heads=config.decoder_num_heads,
-            mlp_dim=config.decoder_mlp_dim,
-            num_layers=config.decoder_num_layers,
-            dropout=config.decoder_dropout,
-            attention_dropout=config.decoder_attention_dropout,
-            conditioning_dim=conditioning_dim,
+            dim=config.decoder_hidden_dim,
+            n_layer=config.decoder_num_layers,
+            n_head=config.decoder_num_heads,
+            img_feature_channel=conditioning_dim,
+            img_feature_code_len=self.sequence_length,
+            target_token_len=self.sequence_length,
+            token_dropout_p=config.decoder_dropout,
+            attn_dropout_p=config.decoder_attention_dropout,
+            resid_dropout_p=config.decoder_dropout,
+            ffn_dropout_p=config.decoder_dropout,
         )
+        self.token_decoder = GPTTransformer(gpt_config)
         self.lookahead_decoders = nn.ModuleList(
             [
-                AutoregressiveTokenDecoder(
-                    vocab_size=self.codebook_size,
-                    sequence_length=self.sequence_length,
-                    hidden_dim=config.decoder_hidden_dim,
-                    num_heads=config.decoder_num_heads,
-                    mlp_dim=config.decoder_mlp_dim,
-                    num_layers=config.decoder_num_layers,
-                    dropout=config.decoder_dropout,
-                    attention_dropout=config.decoder_attention_dropout,
-                    conditioning_dim=conditioning_dim,
-                )
+                GPTTransformer(gpt_config)
                 for _ in range(config.num_multitoken_lookahead_steps)
             ]
         )
@@ -937,30 +943,32 @@ class ARModel(SaveLoadModel):
         """
         return [p for p in self.parameters() if p.requires_grad]
 
+    # ------------------------------------------------------------------
+    # Encoding and conditioning (PrefixLM: 2D feature maps preserved)
+    # ------------------------------------------------------------------
+
     def encode_content(self, content_images: torch.Tensor) -> torch.Tensor:
-        """Encode content glyphs to token-aligned spatial features."""
+        """Encode content glyphs to a 2D feature map ``(B, C, H, W)``."""
         content_features = self.content_encoder(content_images)
-        batch_size, channels, height, width = content_features.shape
+        _batch, _channels, height, width = content_features.shape
         if height != self.token_grid_height or width != self.token_grid_width:
             raise ValueError(
                 "Content encoder output shape does not match G-Tok token grid "
                 f"(got {(height, width)}, expected {(self.token_grid_height, self.token_grid_width)})"
             )
-        return content_features.permute(0, 2, 3, 1).reshape(
-            batch_size, height * width, channels
-        )
+        return content_features  # (B, C, H, W) — 2D preserved
 
     def encode_style(self, style_reference_images: torch.Tensor) -> torch.Tensor:
-        """Encode style references and flatten them into attention memory tokens."""
+        """Encode style references to a 2D feature map ``(B, n_ref, C, H, W)``."""
         batch_size, num_references, channels, height, width = (
             style_reference_images.shape
         )
         if channels != 3:
             raise ValueError(f"Expected RGB style references, got {channels} channels")
-        flattened_images = style_reference_images.reshape(
+        flattened = style_reference_images.reshape(
             batch_size * num_references, channels, height, width
         )
-        encoded = self.style_encoder(flattened_images)
+        encoded = self.style_encoder(flattened)
         _, feature_channels, feature_height, feature_width = encoded.shape
         if (
             feature_height != self.token_grid_height
@@ -968,245 +976,70 @@ class ARModel(SaveLoadModel):
         ):
             raise ValueError(
                 "Style encoder output shape does not match G-Tok token grid "
-                f"(got {(feature_height, feature_width)}, expected {(self.token_grid_height, self.token_grid_width)})"
+                f"(got {(feature_height, feature_width)}, "
+                f"expected {(self.token_grid_height, self.token_grid_width)})"
             )
-        encoded = encoded.reshape(
-            batch_size,
-            num_references,
-            feature_channels,
-            feature_height,
-            feature_width,
-        )
-        style_tokens = encoded.permute(0, 1, 3, 4, 2).reshape(
-            batch_size,
-            num_references * feature_height * feature_width,
-            feature_channels,
-        )
-        return style_tokens
+        return encoded.reshape(
+            batch_size, num_references, feature_channels, feature_height, feature_width
+        )  # (B, n_ref, C, H, W) — 2D preserved
 
-    def aggregate_conditioning(
+    def build_conditioning_map(
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
     ) -> torch.Tensor:
-        """Build the conditioning sequence used by the AR decoder."""
-        content_tokens = self.encode_content(content_images)
-        style_tokens = self.encode_style(style_reference_images)
-        aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
-        conditioning_tokens = torch.cat(
-            [content_tokens, aggregated_style_tokens], dim=-1
-        )
-        return conditioning_tokens + self.conditioning_position_embeddings.unsqueeze(0)
+        """Build the 2D conditioning feature map for PrefixLM.
 
-    def aggregate_conditioning_components(
-        self,
-        content_images: torch.Tensor,
-        style_reference_images: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return content, style-aggregated, and final visual conditioning tokens."""
-        content_tokens = self.encode_content(content_images)
-        style_tokens = self.encode_style(style_reference_images)
-        aggregated_style_tokens = self.aggregator(content_tokens, style_tokens)
-        conditioning_tokens = torch.cat(
-            [content_tokens, aggregated_style_tokens], dim=-1
-        )
-        conditioning_tokens = (
-            conditioning_tokens + self.conditioning_position_embeddings.unsqueeze(0)
-        )
-        return content_tokens, aggregated_style_tokens, conditioning_tokens
+        Returns ``(B, 2*encoder_feature_dim, H, W)`` — content and
+        style-fused features concatenated along the channel axis.
+        """
+        content_features = self.encode_content(content_images)  # (B, C, H, W)
+        style_features = self.encode_style(
+            style_reference_images
+        )  # (B, n_ref, C, H, W)
+        fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
+        return torch.cat([content_features, fused], dim=1)  # (B, 2C, H, W)
 
-    def _adapt_style_tokens_with_language(
-        self,
-        style_tokens: torch.Tensor,
-        text_embeddings: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.language_adapter is None:
-            raise RuntimeError(
-                "No language adapter is registered. Call set_language_adapter(...) before adaptation mode."
-            )
-        adapted_style_tokens = self.language_adapter(style_tokens, text_embeddings)
-        if adapted_style_tokens.shape != style_tokens.shape:
-            raise ValueError(
-                "Language adapter must return style tokens with the same shape as input "
-                f"(got {tuple(adapted_style_tokens.shape)} vs {tuple(style_tokens.shape)})"
-            )
-        return adapted_style_tokens
+    # ------------------------------------------------------------------
+    # Token decoding (PrefixLM: image features prepended to code tokens)
+    # ------------------------------------------------------------------
 
-    def _decode_with_teacher_forcing(
+    def _decode_prefix_lm(
         self,
-        conditioning_tokens: torch.Tensor,
+        conditioning_map: torch.Tensor,
         target_token_indices: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor]]:
-        decoder_input_tokens = self.token_decoder.prepare_teacher_forcing_inputs(
-            target_token_indices
-        )
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """Run PrefixLM teacher-forced decoding.
 
-        # Randomly perturb input tokens to mitigate exposure bias.
-        bernoulli_mask = (
-            torch.rand_like(decoder_input_tokens, dtype=torch.float)
-            < self.config.perturbation_probability
-        )
-        random_tokens = torch.randint_like(
-            decoder_input_tokens, low=0, high=self.codebook_size
-        )
-        decoder_input_tokens = torch.where(
-            bernoulli_mask, random_tokens, decoder_input_tokens
-        )
+        Args:
+            conditioning_map: ``(B, 2C, H, W)`` conditioning feature map.
+            target_token_indices: ``(B, N)`` target codebook indices.
 
-        logits = self.token_decoder(decoder_input_tokens, conditioning_tokens)
+        Returns:
+            ``(logits, lookahead_logits)`` where logits has shape
+            ``(B, N, vocab_size)``.
+        """
+        # PrefixLM: the GPT expects idx to be one token shorter than targets
+        # (the last target token is only used as a label, not as input).
+        idx = target_token_indices[:, :-1]  # (B, N-1)
+        targets = target_token_indices  # (B, N)
+
+        logits, _loss = self.token_decoder(
+            idx=idx,
+            imgs_feature_map=conditioning_map,
+            targets=targets,
+        )
 
         lookahead_logits = []
         for decoder in self.lookahead_decoders:
-            lookahead_logits.append(decoder(decoder_input_tokens, conditioning_tokens))
+            la_logits, _ = decoder(
+                idx=idx,
+                imgs_feature_map=conditioning_map,
+                targets=targets,
+            )
+            lookahead_logits.append(la_logits)
 
-        soft_token_embeddings, reconstructed_images = self.soft_decode(
-            logits,
-            temperature=self.config.reconstruction_temperature,
-        )
-        return logits, soft_token_embeddings, reconstructed_images, lookahead_logits
-
-    # def _decode_with_scheduled_sampling(
-    #     self,
-    #     conditioning_tokens: torch.Tensor,
-    #     target_token_indices: torch.Tensor,
-    #     scheduled_sampling_probability: float,
-    #     descriptions: Optional[List[str]] = None,
-    # ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    #     """Decode with per-token scheduled sampling and greedy roll-in.
-
-    #     Uses a two-phase approach to keep activation memory equivalent to
-    #     teacher forcing (O(sequence_length)) rather than the O(sequence_length^2)
-    #     cost of a fully differentiable sequential rollout.
-
-    #     **Phase 1 — rollout without gradients:** build decoder prefixes
-    #     autoregressively under ``torch.no_grad``. At each step, greedy argmax
-    #     prediction is computed and then mixed with the teacher token using an
-    #     element-wise Bernoulli mask with probability ``p``. This is per-token
-    #     and per-sample, not batch-gated.
-
-    #     **Phase 2 — parallel forward with gradients:** run one standard decoder
-    #     pass using the mixed prefixes from phase 1 to obtain train-time logits.
-
-    #     This policy aligns roll-in behavior with inference (greedy decoding)
-    #     and increases effective exposure compared with batch-level gating.
-    #     """
-    #     if scheduled_sampling_probability <= 0.0:
-    #         return self._decode_with_teacher_forcing(
-    #             conditioning_tokens=conditioning_tokens,
-    #             target_token_indices=target_token_indices,
-    #             descriptions=descriptions,
-    #         )
-
-    #     p = min(1.0, max(0.0, float(scheduled_sampling_probability)))
-
-    #     batch_size, sequence_length = target_token_indices.shape
-    #     if sequence_length <= 1:
-    #         return self._decode_with_teacher_forcing(
-    #             conditioning_tokens=conditioning_tokens,
-    #             target_token_indices=target_token_indices,
-    #             descriptions=descriptions,
-    #         )
-
-    #     use_model_prediction = (
-    #         torch.rand(
-    #             (batch_size, sequence_length - 1),
-    #             device=target_token_indices.device,
-    #         )
-    #         < p
-    #     )
-    #     if not use_model_prediction.any():
-    #         # Fast path: if no tokens are sampled from the model, skip the rollout.
-    #         return self._decode_with_teacher_forcing(
-    #             conditioning_tokens=conditioning_tokens,
-    #             target_token_indices=target_token_indices,
-    #             descriptions=descriptions,
-    #         )
-    #     last_sampled_step = int(use_model_prediction.nonzero()[:, 1].max().item())
-
-    #     # Phase 1: autoregressive rollout under no_grad to build mixed
-    #     # prefixes. Activations from each step are freed immediately.
-    #     with torch.no_grad():
-    #         rollout_prefix = torch.full(
-    #             (batch_size, 1),
-    #             fill_value=self.token_decoder.bos_token_id,
-    #             device=target_token_indices.device,
-    #             dtype=target_token_indices.dtype,
-    #         )
-    #         mixed_prefix_tokens: list[torch.Tensor] = []
-    #         for step_index in range(last_sampled_step + 1):
-    #             step_logits = self.token_decoder(rollout_prefix, conditioning_tokens)[
-    #                 :, -1, :
-    #             ]
-    #             predicted_token = torch.argmax(step_logits, dim=-1)
-    #             teacher_token = target_token_indices[:, step_index]
-    #             use_model_prediction_this_step = use_model_prediction[:, step_index]
-    #             next_token = torch.where(
-    #                 use_model_prediction_this_step,
-    #                 predicted_token,
-    #                 teacher_token,
-    #             )
-    #             mixed_prefix_tokens.append(next_token)
-    #             rollout_prefix = torch.cat(
-    #                 [rollout_prefix, next_token.unsqueeze(1)], dim=1
-    #             )
-
-    #     if last_sampled_step + 1 < sequence_length - 1:
-    #         remaining_teacher_tokens = target_token_indices[
-    #             :, last_sampled_step + 1 : sequence_length - 1
-    #         ]
-    #         mixed_prefix_tokens.extend(remaining_teacher_tokens.unbind(dim=1))
-
-    #     # Phase 2: single parallel forward pass over the mixed prefix.
-    #     # Memory cost is identical to teacher forcing.
-    #     bos_column = torch.full(
-    #         (batch_size, 1),
-    #         fill_value=self.token_decoder.bos_token_id,
-    #         device=target_token_indices.device,
-    #         dtype=target_token_indices.dtype,
-    #     )
-    #     if mixed_prefix_tokens:
-    #         mixed_prefix = torch.stack(mixed_prefix_tokens, dim=1)
-    #         decoder_inputs = torch.cat([bos_column, mixed_prefix], dim=1)
-    #     else:
-    #         decoder_inputs = bos_column
-
-    #     logits = self.token_decoder(decoder_inputs, conditioning_tokens)
-    #     soft_token_embeddings, reconstructed_images = self.soft_decode(
-    #         logits,
-    #         descriptions=descriptions,
-    #     )
-    #     return logits, soft_token_embeddings, reconstructed_images
-
-    def target_token_indices_from_images(
-        self,
-        target_images: torch.Tensor,
-    ) -> torch.Tensor:
-        """Encode target glyph images into G-Tok codebook indices."""
-        batch_size = target_images.shape[0]
-
-        cnn_out = self.gtok.cnn_encoder(target_images)
-        _batch_size, channels, height, width = cnn_out.shape
-        tokens = self.gtok.proj_patch(cnn_out).flatten(2).transpose(1, 2)
-        vit_tokens = self.gtok.vit_encoder(tokens)
-
-        quantizer_inputs = self.gtok.vit_encoder_to_quantizer(vit_tokens)
-        quantizer_inputs = quantizer_inputs.reshape(
-            batch_size,
-            self.token_grid_height,
-            self.token_grid_width,
-            self.codebook_dim,
-        ).permute(0, 3, 1, 2)
-
-        _quantized, _loss_info, indices_info = self.gtok.quantizer(quantizer_inputs)
-        token_indices = indices_info[2].reshape(batch_size, self.sequence_length)
-        return token_indices
-
-    def codebook_embeddings(self) -> torch.Tensor:
-        """Return the codebook matrix used for soft and hard decoding."""
-        codebook = self.gtok.quantizer.embedding.weight
-        if self.gtok.quantizer.l2_norm:
-            codebook = F.normalize(codebook, p=2, dim=-1)
-        return codebook
+        return logits, lookahead_logits
 
     def soft_decode(
         self,
@@ -1217,10 +1050,38 @@ class ARModel(SaveLoadModel):
         logits = logits / temperature
         probabilities = torch.softmax(logits, dim=-1)
         soft_token_embeddings = torch.matmul(probabilities, self.codebook_embeddings())
-        reconstructed_images = self.gtok.decode(
-            soft_token_embeddings,
-        )
+        reconstructed_images = self.gtok.decode(soft_token_embeddings)
         return soft_token_embeddings, reconstructed_images
+
+    def target_token_indices_from_images(
+        self,
+        target_images: torch.Tensor,
+    ) -> torch.Tensor:
+        """Encode target glyph images into G-Tok codebook indices."""
+        batch_size = target_images.shape[0]
+        cnn_out = self.gtok.cnn_encoder(target_images)
+        tokens = self.gtok.proj_patch(cnn_out).flatten(2).transpose(1, 2)
+        vit_tokens = self.gtok.vit_encoder(tokens)
+        quantizer_inputs = self.gtok.vit_encoder_to_quantizer(vit_tokens)
+        quantizer_inputs = quantizer_inputs.reshape(
+            batch_size,
+            self.token_grid_height,
+            self.token_grid_width,
+            self.codebook_dim,
+        ).permute(0, 3, 1, 2)
+        _quantized, _loss_info, indices_info = self.gtok.quantizer(quantizer_inputs)
+        return indices_info[2].reshape(batch_size, self.sequence_length)
+
+    def codebook_embeddings(self) -> torch.Tensor:
+        """Return the codebook matrix used for soft and hard decoding."""
+        codebook = self.gtok.quantizer.embedding.weight
+        if self.gtok.quantizer.l2_norm:
+            codebook = F.normalize(codebook, p=2, dim=-1)
+        return codebook
+
+    # ------------------------------------------------------------------
+    # Training and generation entry points
+    # ------------------------------------------------------------------
 
     def forward(
         self,
@@ -1229,15 +1090,9 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
-        # scheduled_sampling_probability: float = 0.0,
     ) -> ARModelOutput:
-        """Run teacher-forced AR decoding for visual pretraining.
-
-        Either ``target_token_indices`` or ``target_images`` must be provided.
-        The latter is convenient during training because it allows the model to
-        derive token targets directly from the frozen G-Tok tokenizer.
-        """
-        conditioning_tokens = self.aggregate_conditioning(
+        """Run teacher-forced PrefixLM decoding for visual pretraining."""
+        conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
         )
@@ -1245,25 +1100,27 @@ class ARModel(SaveLoadModel):
         if target_token_indices is None:
             if target_images is None:
                 raise ValueError(
-                    "Either target_token_indices or target_images must be provided for ARModel.forward"
+                    "Either target_token_indices or target_images must be provided"
                 )
             with torch.no_grad():
                 target_token_indices = self.target_token_indices_from_images(
                     target_images,
                 )
-        logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
-            self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=target_token_indices,
-                # scheduled_sampling_probability=scheduled_sampling_probability,
-            )
+
+        logits, lookahead_logits = self._decode_prefix_lm(
+            conditioning_map=conditioning_map,
+            target_token_indices=target_token_indices,
+        )
+
+        soft_token_embeddings, reconstructed_images = self.soft_decode(
+            logits,
+            temperature=self.config.reconstruction_temperature,
         )
 
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
-            conditioning_tokens=conditioning_tokens,
             target_token_indices=target_token_indices,
             lookahead_logits=lookahead_logits,
         )
@@ -1354,40 +1211,45 @@ class ARModel(SaveLoadModel):
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
     ) -> ARModelOutput:
-        """Greedily decode a full token sequence and reconstruct the glyph image."""
-        conditioning_tokens = self.aggregate_conditioning(
+        """Greedy autoregressive generation via PrefixLM."""
+        conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
         )
         batch_size = content_images.shape[0]
-        generated_tokens = torch.full(
-            (batch_size, 1),
-            fill_value=self.token_decoder.bos_token_id,
-            device=content_images.device,
-            dtype=torch.long,
-        )
+        device = content_images.device
 
-        predicted_token_indices = []
+        # Start with empty idx — the GPT prepends image features automatically.
+        idx = torch.empty(batch_size, 0, dtype=torch.long, device=device)
+
+        generated_tokens: list[torch.Tensor] = []
         for _ in tqdm(range(self.sequence_length)):
-            logits = self.token_decoder(generated_tokens, conditioning_tokens)
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            predicted_token_indices.append(next_token)
-            generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
-
-        predicted_token_indices_tensor = torch.cat(predicted_token_indices, dim=1)
-        logits, soft_token_embeddings, reconstructed_images, lookahead_logits = (
-            self._decode_with_teacher_forcing(
-                conditioning_tokens=conditioning_tokens,
-                target_token_indices=predicted_token_indices_tensor,
+            logits, _ = self.token_decoder(
+                idx=idx,
+                imgs_feature_map=conditioning_map,
             )
+            # Last logit position predicts the next token.
+            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
+            generated_tokens.append(next_token)
+            idx = torch.cat([idx, next_token], dim=1)
+
+        predicted = torch.cat(generated_tokens, dim=1)  # (B, N)
+
+        # Re-run with teacher forcing on the predicted tokens to get proper
+        # logits for soft decoding.
+        logits, _ = self._decode_prefix_lm(
+            conditioning_map=conditioning_map,
+            target_token_indices=predicted,
+        )
+        soft_token_embeddings, reconstructed_images = self.soft_decode(
+            logits,
+            temperature=self.config.reconstruction_temperature,
         )
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
-            conditioning_tokens=conditioning_tokens,
-            target_token_indices=predicted_token_indices_tensor,
-            lookahead_logits=lookahead_logits,
+            target_token_indices=predicted,
         )
 
     @torch.no_grad()

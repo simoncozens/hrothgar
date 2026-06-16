@@ -23,6 +23,8 @@ from hrothgar.upstream.blocks import (
     AttentionBlock,
     nonlinearity,
 )
+from hrothgar.upstream.feature_fusion_module import FeatureFusionModule
+from hrothgar.upstream.gpt import GPTModelArgs, Transformer as GPTTransformer
 
 __all__ = [
     "Tokenizer",
@@ -36,4 +38,7 @@ __all__ = [
     "ResBlock",
     "AttentionBlock",
     "nonlinearity",
+    "FeatureFusionModule",
+    "GPTModelArgs",
+    "GPTTransformer",
 ]

@@ -51,7 +51,9 @@ def compute_upscaler_loss(
     pred_edges = _edge_map(predictions)
     target_edges = _edge_map(targets)
     edge_l1 = F.l1_loss(pred_edges, target_edges)
-    eagle_contribution = eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
+    eagle_contribution = (
+        eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
+    )
 
     loss = bce + edge_weight * edge_l1 + eagle_loss_weight * eagle_contribution
     return loss, {
