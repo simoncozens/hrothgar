@@ -1009,20 +1009,25 @@ class ARModel(SaveLoadModel):
         conditioning_map: torch.Tensor,
         target_token_indices: torch.Tensor,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """Run PrefixLM teacher-forced decoding.
+        """Run PrefixLM teacher-forced decoding with token perturbation.
 
-        Args:
-            conditioning_map: ``(B, 2C, H, W)`` conditioning feature map.
-            target_token_indices: ``(B, N)`` target codebook indices.
-
-        Returns:
-            ``(logits, lookahead_logits)`` where logits has shape
-            ``(B, N, vocab_size)``.
+        Randomly perturbs input tokens (with probability ``perturbation_probability``)
+        to mitigate the exposure bias inherent in PrefixLM, where the model sees
+        perfect code tokens during training but its own imperfect predictions
+        during free-running generation.
         """
-        # PrefixLM: the GPT expects idx to be one token shorter than targets
-        # (the last target token is only used as a label, not as input).
         idx = target_token_indices[:, :-1]  # (B, N-1)
         targets = target_token_indices  # (B, N)
+
+        # Token perturbation: randomly replace some input tokens with random
+        # codebook entries to simulate free-running errors during training.
+        if self.training and self.config.perturbation_probability > 0:
+            mask = (
+                torch.rand_like(idx, dtype=torch.float)
+                < self.config.perturbation_probability
+            )
+            random_tokens = torch.randint_like(idx, low=0, high=self.codebook_size)
+            idx = torch.where(mask, random_tokens, idx)
 
         logits, _loss = self.token_decoder(
             idx=idx,
