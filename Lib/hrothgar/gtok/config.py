@@ -26,9 +26,8 @@ class GtokConfig:
 
     # Quantization parameters
     quantizer_codebook_size: int = 4096  # Size of the codebook
-    quantizer_code_dim: int = 8  # Dimensionality of each code
     quantizer_beta: float = 0.25  # Commitment loss weight
-    quantizer_entropy_loss_ratio: float = 0.0  # Entropy regularization weight
+    quantizer_entropy_loss_ratio: float = 0.1  # Entropy regularization weight
 
     def __post_init__(self):
         """Set defaults for list parameters."""
@@ -40,6 +39,18 @@ class GtokConfig:
                 f"(got vit_hidden_dim={self.vit_hidden_dim}, vit_num_heads={self.vit_num_heads})"
             )
         assert self.cnn_channel_multipliers is not None
+
+    @property
+    def quantizer_code_dim(self) -> int:
+        """Dimensionality of each code in the quantizer."""
+        if self.image_size == 128:
+            return 16
+        elif self.image_size == 64:
+            return 8
+        else:
+            raise ValueError(
+                f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
+            )
 
     def save_sidecar(self, model_path: Path) -> None:
         from dataclasses import asdict
