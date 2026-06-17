@@ -37,6 +37,7 @@ from hrothgar.utils import torch_setup
 
 
 @dataclass
+@dataclass
 class AutocorrConfig:
     """Configuration for token autocorrelation probing."""
 
@@ -45,7 +46,6 @@ class AutocorrConfig:
     epochs: int = 5
     batch_size: int = 64
     learning_rate: float = 1e-3
-    image_size: int = 64
     hidden_dim: int = 128
     max_samples: int = 50_000
     seed: int = 42
@@ -195,6 +195,7 @@ class TokenAutocorrelation:
         gtok, gtok_config = load_model(Path(config.gtok_model_path), device=self.device)
         self.gtok = gtok
         self.gtok_config = gtok_config
+        self.image_size: int = gtok_config.image_size
         self.gtok.eval()
         for param in self.gtok.parameters():
             param.requires_grad = False
@@ -232,10 +233,10 @@ class TokenAutocorrelation:
         test_samples = samples[split:]
 
         self.train_dataset = TokenSequenceDataset(
-            train_samples, self.gtok, cfg.image_size, self.device
+            train_samples, self.gtok, self.image_size, self.device
         )
         self.test_dataset = TokenSequenceDataset(
-            test_samples, self.gtok, cfg.image_size, self.device
+            test_samples, self.gtok, self.image_size, self.device
         )
 
         print(f"Vocabulary size:     {self.vocab_size}")
