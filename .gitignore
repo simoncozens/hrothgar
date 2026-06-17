@@ -1,4 +1,6 @@
+GAR-Font
 outputs/
+*.md
 *.txt
 *finetuned*pth
 *.png
