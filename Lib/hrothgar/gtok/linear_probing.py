@@ -52,6 +52,7 @@ _CHAR_TO_INDEX: Dict[int, int] = {cp: i for i, cp in enumerate(_PROBE_CHARS)}
 
 
 @dataclass
+@dataclass
 class ProbeConfig:
     """Configuration for G-Tok linear probing.
 
@@ -63,7 +64,6 @@ class ProbeConfig:
         batch_size: Batch size for training and evaluation.
         learning_rate: Adam learning rate.
         weight_decay: L2 regularisation strength.
-        image_size: Glyph render size (must match the G-Tok checkpoint).
         probe_font_count: Maximum number of font-family classes (takes the
             most frequent *probe_font_count* families).  Set to 0 for no limit.
         probe_font_min_samples: Only include font families with at least this
@@ -81,7 +81,6 @@ class ProbeConfig:
     batch_size: int = 64
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
-    image_size: int = 64
     probe_font_count: int = 100
     probe_font_min_samples: int = 20
     train_frac: float = 0.8
@@ -143,6 +142,8 @@ class FrozenGtokFeatureExtractor:
         self.downsampling_factor = 2 ** (len(config.cnn_channel_multipliers or []) - 1)
         self.grid_h = config.image_size // self.downsampling_factor
         self.grid_w = config.image_size // self.downsampling_factor
+        print("Downsampling factor:", self.downsampling_factor)
+        print("Grid size:", self.grid_h, "x", self.grid_w)
 
     @torch.no_grad()
     def extract(self, images: torch.Tensor) -> torch.Tensor:
@@ -256,6 +257,8 @@ class GtokLinearProbe:
         gtok, gtok_config = load_model(Path(config.gtok_model_path), device=self.device)
         self.gtok = gtok
         self.gtok_config = gtok_config
+        # Render at the model's native resolution (read from sidecar).
+        self.image_size: int = gtok_config.image_size
         self.extractor = FrozenGtokFeatureExtractor(gtok, gtok_config, self.device)
         # Flattened token sequence: N tokens × code_dim (matches the paper).
         self.feature_dim = (
@@ -340,8 +343,8 @@ class GtokLinearProbe:
             rng.shuffle(train_samples)
             train_samples = train_samples[: cfg.max_samples]
 
-        self.train_dataset = ProbeDataset(train_samples, cfg.image_size)
-        self.test_dataset = ProbeDataset(test_samples, cfg.image_size)
+        self.train_dataset = ProbeDataset(train_samples, self.image_size)
+        self.test_dataset = ProbeDataset(test_samples, self.image_size)
 
         print(f"Probe character classes: {self.num_char_classes}  (a-zA-Z)")
         print(f"Probe font-family classes: {self.num_font_classes}")
@@ -360,9 +363,7 @@ class GtokLinearProbe:
             batch_size=self.config.batch_size,
             shuffle=shuffle,
             drop_last=False,
-            collate_fn=lambda batch: _collate_probe_batch(
-                batch, self.config.image_size
-            ),
+            collate_fn=lambda batch: _collate_probe_batch(batch, self.image_size),
             num_workers=4,
             pin_memory=True,
         )
@@ -514,12 +515,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="L2 regularisation strength",
     )
     parser.add_argument(
-        "--image-size",
-        type=int,
-        default=64,
-        help="Glyph render size (must match the G-Tok checkpoint)",
-    )
-    parser.add_argument(
         "--probe-font-count",
         type=int,
         default=100,
@@ -562,7 +557,6 @@ def main() -> None:
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
-        image_size=args.image_size,
         probe_font_count=args.probe_font_count,
         probe_font_min_samples=args.probe_font_min_samples,
         max_samples=args.max_samples,
