@@ -20,6 +20,7 @@ from typing import Optional, Tuple, List
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision.models.vision_transformer import Encoder, EncoderBlock
 
 from hrothgar.llamagen_cnn import (
@@ -360,6 +361,39 @@ class CausalViTDecoder(nn.Module):
         return x
 
 
+class AuxARHead(nn.Module):
+    """Lightweight next-token prediction head for auxiliary AR loss.
+
+    Takes ViT encoder outputs (pre-quantization) at position ``i`` and
+    predicts the codebook index at position ``i+1``.  The resulting
+    cross-entropy loss encourages the encoder to produce sequentially
+    structured code sequences.
+
+    The head is deliberately shallow (single-hidden-layer MLP) to keep the
+    gradient signal weak — the auxiliary loss should guide the encoder
+    without dominating reconstruction quality.
+    """
+
+    def __init__(self, hidden_dim: int, codebook_size: int, aux_hidden_dim: int = 128):
+        super().__init__()
+        self.predictor = nn.Sequential(
+            nn.Linear(hidden_dim, aux_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(aux_hidden_dim, codebook_size),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Predict next-code logits from per-position encoder features.
+
+        Args:
+            x: Encoder features of shape ``(batch_size, sequence_length, hidden_dim)``.
+
+        Returns:
+            Logits of shape ``(batch_size, sequence_length, codebook_size)``.
+        """
+        return self.predictor(x)
+
+
 class GtokModel(SaveLoadModel):
     """G-Tok: Hybrid CNN-ViT glyph tokenizer.
 
@@ -469,6 +503,14 @@ class GtokModel(SaveLoadModel):
             dropout=config.cnn_dropout,
         )
 
+        # Auxiliary AR prediction head (only used when loss weight > 0)
+        if config.aux_ar_loss_weight > 0:
+            self.aux_ar_head = AuxARHead(
+                hidden_dim=config.vit_hidden_dim,
+                codebook_size=config.quantizer_codebook_size,
+                aux_hidden_dim=config.aux_ar_hidden_dim,
+            )
+
     def encode(
         self,
         images: torch.Tensor,
@@ -515,12 +557,29 @@ class GtokModel(SaveLoadModel):
         quantized = quantized_4d.permute(0, 2, 3, 1).reshape(
             batch_size, self.sequence_length, self.config.quantizer_code_dim
         )
+
+        # Auxiliary AR loss: predict next code index from current ViT features.
+        aux_ar_loss: Optional[torch.Tensor] = None
+        if hasattr(self, "aux_ar_head") and self.config.aux_ar_loss_weight > 0:
+            # indices_info[2] is min_encoding_indices, shape (B*N,)
+            code_indices = indices_info[2].view(
+                batch_size, self.sequence_length
+            )  # (B, N)
+            # Predict next index from current position; last position has no target.
+            ar_logits = self.aux_ar_head(vit_out[:, :-1, :])  # (B, N-1, codebook_size)
+            ar_targets = code_indices[:, 1:]  # (B, N-1)
+            aux_ar_loss = F.cross_entropy(
+                ar_logits.reshape(-1, self.config.quantizer_codebook_size),
+                ar_targets.reshape(-1),
+            )
+
         loss_info = GtokLossInfo(
             vq_loss=raw_loss_info[0],
             commit_loss=raw_loss_info[1],
             entropy_loss=raw_loss_info[2],
             codebook_usage=raw_loss_info[3],
             perplexity=indices_info[0],
+            aux_ar_loss=aux_ar_loss,
         )
 
         return quantized, loss_info
