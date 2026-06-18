@@ -45,7 +45,7 @@ def _sobel_gradient_magnitude(images: torch.Tensor) -> torch.Tensor:
     ).view(1, 1, 3, 3)
 
     B, C, H, W = images.shape
-    flat = images.view(B * C, 1, H, W)
+    flat = images.reshape(B * C, 1, H, W)
     grad_x = F.conv2d(flat, sobel_x, padding=1)
     grad_y = F.conv2d(flat, sobel_y, padding=1)
     # Add small epsilon to avoid zero-gradient sqrt instability.
@@ -60,6 +60,7 @@ class GtokLossInfo:
     entropy_loss: Optional[torch.Tensor]
     codebook_usage: object  # Can be a scalar or tensor-like value
     perplexity: Optional[torch.Tensor] = None
+    aux_ar_loss: Optional[torch.Tensor] = None  # Set by model when aux_ar_head exists
 
 
 def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
@@ -144,6 +145,15 @@ def compute_gtok_loss(
         else torch.zeros((), device=reconstructed_images.device)
     )
 
+    # Auxiliary AR loss from the model's next-token prediction head
+    aux_ar_loss_raw = loss_info.aux_ar_loss
+    aux_ar_loss = (
+        aux_ar_loss_raw
+        if aux_ar_loss_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
+    )
+    weighted_aux_ar = weights.aux_ar * aux_ar_loss
+
     weighted_l1 = weights.l1 * l1_loss
     weighted_perceptual = weights.perceptual * perceptual_loss
     weighted_edge = weights.edge * edge_loss
@@ -158,6 +168,7 @@ def compute_gtok_loss(
         + weighted_vq
         + weighted_commit
         + weighted_entropy
+        + weighted_aux_ar
     )
 
     terms: Dict[str, torch.Tensor] = {
@@ -168,6 +179,7 @@ def compute_gtok_loss(
         "vq": vq_loss,
         "commit": commit_loss,
         "entropy": entropy_loss,
+        "aux_ar": aux_ar_loss,
         "codebook_usage": codebook_usage,
         "perplexity": perplexity,
         "weighted_l1": weighted_l1,
@@ -176,6 +188,7 @@ def compute_gtok_loss(
         "weighted_vq": weighted_vq,
         "weighted_commit": weighted_commit,
         "weighted_entropy": weighted_entropy,
+        "weighted_aux_ar": weighted_aux_ar,
     }
 
     return total_loss, terms

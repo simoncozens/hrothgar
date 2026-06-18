@@ -3,6 +3,7 @@
 import torch
 
 from hrothgar.gtok.losses import (
+    GtokLossInfo,
     GtokLossWeights,
     _sobel_gradient_magnitude,
     compute_gtok_loss,
@@ -21,16 +22,17 @@ def test_compute_gtok_loss_with_all_terms() -> None:
     reconstructed = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
     target = torch.ones((1, 3, 2, 2), dtype=torch.float32)
 
-    vq_loss_info = (
-        torch.tensor(2.0),
-        torch.tensor(3.0),
-        torch.tensor(4.0),
-        0.5,
+    vq_loss_info = GtokLossInfo(
+        vq_loss=torch.tensor(2.0),
+        commit_loss=torch.tensor(3.0),
+        entropy_loss=torch.tensor(4.0),
+        codebook_usage=0.5,
     )
 
     weights = GtokLossWeights(
         l1=1.0,
         perceptual=0.5,
+        edge=0.0,
         vq=2.0,
         commit=3.0,
         entropy=4.0,
@@ -60,14 +62,16 @@ def test_compute_gtok_loss_handles_missing_vq_terms() -> None:
     reconstructed = torch.zeros((1, 3, 2, 2), dtype=torch.float32)
     target = torch.ones((1, 3, 2, 2), dtype=torch.float32)
 
-    vq_loss_info = (None, None, None, 0.0)
+    vq_loss_info = GtokLossInfo(
+        vq_loss=None, commit_loss=None, entropy_loss=None, codebook_usage=0.0
+    )
 
     total_loss, terms = compute_gtok_loss(
         reconstructed,
         target,
         vq_loss_info,
         perceptual_loss_fn=None,
-        weights=GtokLossWeights(),
+        weights=GtokLossWeights(edge=0.0),
     )
 
     # Only L1 contributes when perceptual and VQ terms are absent.
