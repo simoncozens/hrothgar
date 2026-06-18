@@ -29,13 +29,6 @@ class GtokConfig:
     quantizer_beta: float = 0.25  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.1  # Entropy regularization weight
 
-    # Auxiliary autoregressive prediction loss (tokeniser training only)
-    # A small next-token prediction loss applied to the code index sequence,
-    # which encourages the encoder to produce sequentially structured codes.
-    # Recommended range: 0.01–0.05
-    aux_ar_loss_weight: float = 0.05
-    aux_ar_hidden_dim: int = 128  # Hidden size of the AR prediction head
-
     def __post_init__(self):
         """Set defaults for list parameters."""
         if self.image_size <= 0:
@@ -90,4 +83,4 @@ class GtokLossWeights:
     vq: float = 1.0
     commit: float = 0.1
     entropy: float = 1.0
-    aux_ar: float = 1.0  # Weight applied to loss_info.aux_ar_loss
+    aux_ar: float = 0.05  # Weight applied to loss_info.aux_ar_loss
