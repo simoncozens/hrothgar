@@ -225,9 +225,17 @@ class GTokDatasetMaker(DatasetMaker):
         )
 
     def filter_fonts(self):
-        # For now, try only very non-display fonts
+        # Use same filter as AR.
         self.googlefonts.fonts = [
-            font for font in self.googlefonts.fonts if font.display_score() < 60.0
+            font
+            for font in self.googlefonts.fonts
+            if not (
+                "SC" in font.family  # Drop small caps families
+                or "bitcount" in font.family.lower()
+                or "playwrite" in font.family.lower()
+                # Drop barcode/redaction/etc.
+                or any("Special use" in k for k in font.tags().keys())
+            )
         ]
 
     def train_set(self):
