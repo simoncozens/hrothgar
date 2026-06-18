@@ -503,13 +503,12 @@ class GtokModel(SaveLoadModel):
             dropout=config.cnn_dropout,
         )
 
-        # Auxiliary AR prediction head (only used when loss weight > 0)
-        if config.aux_ar_loss_weight > 0:
-            self.aux_ar_head = AuxARHead(
-                hidden_dim=config.vit_hidden_dim,
-                codebook_size=config.quantizer_codebook_size,
-                aux_hidden_dim=config.aux_ar_hidden_dim,
-            )
+        # Auxiliary AR prediction head (lightweight MLP, ~500K params at 2048×128)
+        self.aux_ar_head = AuxARHead(
+            hidden_dim=config.vit_hidden_dim,
+            codebook_size=config.quantizer_codebook_size,
+            aux_hidden_dim=128,
+        )
 
     def encode(
         self,
@@ -560,7 +559,7 @@ class GtokModel(SaveLoadModel):
 
         # Auxiliary AR loss: predict next code index from current ViT features.
         aux_ar_loss: Optional[torch.Tensor] = None
-        if hasattr(self, "aux_ar_head") and self.config.aux_ar_loss_weight > 0:
+        if hasattr(self, "aux_ar_head"):
             # indices_info[2] is min_encoding_indices, shape (B*N,)
             code_indices = indices_info[2].view(
                 batch_size, self.sequence_length
