@@ -81,4 +81,4 @@ class GtokLossWeights:
     vq: float = 1.0
     commit: float = 0.1
     entropy: float = 1.0
-    aux_ar: float = 0.05  # Weight applied to loss_info.aux_ar_loss
+    aux_ar: float = 0.1  # Weight applied to loss_info.aux_ar_loss
