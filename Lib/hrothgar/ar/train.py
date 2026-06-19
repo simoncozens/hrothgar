@@ -299,10 +299,15 @@ class ARVisualTrainingLoop(TrainingLoop):
                     val_target_images,
                     weights=self.loss_weights,
                 )
-                recon_clamped = torch.clamp(val_output.reconstructed_images, 0.0, 1.0)
-                target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
-                val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
-                val_metrics["lpips"].append(self.lpips(recon_clamped, target_clamped))
+                recon_clamped = torch.clamp(
+                    val_output.reconstructed_images, 0.0, 1.0
+                ).float()
+                target_clamped = torch.clamp(val_target_images, 0.0, 1.0).float()
+                with torch.autocast(device_type=self.device.type, enabled=False):
+                    val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
+                    val_metrics["lpips"].append(
+                        self.lpips(recon_clamped, target_clamped)
+                    )
                 val_metrics["token_accuracy"].append(val_loss_info["token_accuracy"])
                 val_metrics["token_cross_entropy"].append(
                     val_loss_info["token_cross_entropy"]
@@ -345,10 +350,15 @@ class ARVisualTrainingLoop(TrainingLoop):
                 gt_token_indices = self.model.target_token_indices_from_images(
                     val_target_images,
                 )
-                fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
-                fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
-                fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
-                fr_metrics["lpips"].append(self.lpips(fr_clamped, fr_target_clamped))
+                fr_clamped = torch.clamp(
+                    fr_output.reconstructed_images, 0.0, 1.0
+                ).float()
+                fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0).float()
+                with torch.autocast(device_type=self.device.type, enabled=False):
+                    fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
+                    fr_metrics["lpips"].append(
+                        self.lpips(fr_clamped, fr_target_clamped)
+                    )
                 fr_metrics["token_accuracy"].append(
                     (fr_output.target_token_indices == gt_token_indices).float().mean()
                 )
@@ -700,12 +710,15 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                 if self.run_decoder:
                     recon_clamped = torch.clamp(
                         val_output.reconstructed_images, 0.0, 1.0
-                    )
-                    target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
-                    val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
-                    val_metrics["lpips"].append(
-                        self.lpips(recon_clamped, target_clamped)
-                    )
+                    ).float()
+                    target_clamped = torch.clamp(val_target_images, 0.0, 1.0).float()
+                    with torch.autocast(device_type=self.device.type, enabled=False):
+                        val_metrics["ssim"].append(
+                            self.ssim(recon_clamped, target_clamped)
+                        )
+                        val_metrics["lpips"].append(
+                            self.lpips(recon_clamped, target_clamped)
+                        )
                     if "token_accuracy" in loss_info:
                         val_metrics["token_accuracy"].append(
                             loss_info["token_accuracy"]
@@ -769,12 +782,17 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                         val_target_images,
                         descriptions=val_batch.get("description"),
                     )
-                    fr_clamped = torch.clamp(fr_output.reconstructed_images, 0.0, 1.0)
-                    fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0)
-                    fr_metrics["ssim"].append(self.ssim(fr_clamped, fr_target_clamped))
-                    fr_metrics["lpips"].append(
-                        self.lpips(fr_clamped, fr_target_clamped)
-                    )
+                    fr_clamped = torch.clamp(
+                        fr_output.reconstructed_images, 0.0, 1.0
+                    ).float()
+                    fr_target_clamped = torch.clamp(val_target_images, 0.0, 1.0).float()
+                    with torch.autocast(device_type=self.device.type, enabled=False):
+                        fr_metrics["ssim"].append(
+                            self.ssim(fr_clamped, fr_target_clamped)
+                        )
+                        fr_metrics["lpips"].append(
+                            self.lpips(fr_clamped, fr_target_clamped)
+                        )
                     fr_metrics["token_accuracy"].append(
                         (fr_output.target_token_indices == gt_token_indices)
                         .float()

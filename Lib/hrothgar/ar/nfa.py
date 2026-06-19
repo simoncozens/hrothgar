@@ -532,12 +532,15 @@ class ARNFATrainingLoop(TrainingLoop):
                         target_images=val_target,
                         descriptions=val_descriptions,
                     )
-                val_metrics["ssim"].append(
-                    self.ssim(val_output.reconstructed_images, val_target)
-                )
-                val_metrics["lpips"].append(
-                    self.lpips(val_output.reconstructed_images, val_target)
-                )
+                recon_clamped = torch.clamp(
+                    val_output.reconstructed_images, 0.0, 1.0
+                ).float()
+                target_clamped = torch.clamp(val_target, 0.0, 1.0).float()
+                with torch.autocast(device_type=self.device.type, enabled=False):
+                    val_metrics["ssim"].append(self.ssim(recon_clamped, target_clamped))
+                    val_metrics["lpips"].append(
+                        self.lpips(recon_clamped, target_clamped)
+                    )
 
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
