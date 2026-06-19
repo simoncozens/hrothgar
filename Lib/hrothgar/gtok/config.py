@@ -77,9 +77,7 @@ class GtokConfig:
 class GtokLossWeights:
     """Weights applied to each loss term in ``compute_gtok_loss``."""
 
-    l1: float = 1.0
-    perceptual: float = 0.1
-    edge: float = 2.0
+    glyphloss: float = 1.0
     vq: float = 1.0
     commit: float = 0.1
     entropy: float = 1.0
