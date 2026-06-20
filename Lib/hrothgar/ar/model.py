@@ -2,15 +2,15 @@
 
 This module implements the vision-only stage of the GAR-Font AR generator:
 
-1. A content encoder extracts structural features from a reference glyph.
-2. A lightweight style encoder extracts visual style features from style references.
-3. A content-style aggregator fuses both streams with stacked cross-attention,
-   following the design used in FsFont and referenced by GAR-Font.
-4. A causal Transformer decoder autoregressively predicts G-Tok codebook indices.
-5. A soft codebook projection feeds the frozen G-Tok decoder to reconstruct images.
-
-The training loop is intentionally left for later; this file focuses on model
-definition and the tensors needed for token- and pixel-level supervision.
+1. A frozen G-Tok CNN encoder extracts structural content features.
+2. The upstream GAR-Font StyleEncoder (InstanceNorm, reflective padding,
+   ``scale_var``) extracts visual style features from reference glyphs.
+3. A content-style aggregator (FeatureFusionModule) fuses both streams with
+   stacked cross-attention.
+4. A causal GPT Transformer decoder autoregressively predicts G-Tok codebook
+   indices via PrefixLM.
+5. A soft codebook projection feeds the frozen G-Tok decoder to reconstruct
+   images.
 """
 
 from __future__ import annotations
@@ -28,10 +28,10 @@ from hrothgar.gtok.model import (
     GtokConfig,
     GtokModel,
 )
-from hrothgar.llamagen_cnn import Encoder as CNNEncoder
 from hrothgar.upstream.feature_fusion_module import FeatureFusionModule
 from hrothgar.upstream.gpt import GPTModelArgs
 from hrothgar.upstream.gpt import Transformer as GPTTransformer
+from hrothgar.upstream.style_encoder import StyleEncoder
 from hrothgar.utils import SaveLoadModel
 
 
@@ -43,13 +43,8 @@ class ARModelConfig:
     image_size: int = 128
     encoder_feature_dim: int = 256
 
-    content_encoder_base_channels: int = 128
-    content_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4, 4)
-    content_encoder_num_residual_blocks: int = 2
-
+    # Upstream GAR-Font StyleEncoder (InstanceNorm, reflective padding, scale_var).
     style_encoder_base_channels: int = 32
-    style_encoder_channel_multipliers: tuple[int, ...] = (1, 2, 2, 4, 4)
-    style_encoder_num_residual_blocks: int = 2
 
     # FeatureFusionModule (upstream GAR-Font).
     aggregator_num_layers: int = 3
@@ -757,24 +752,28 @@ class ARModel(SaveLoadModel):
         self.codebook_size = self.gtok.config.quantizer_codebook_size
         self.codebook_dim = self.gtok.config.quantizer_code_dim
 
-        # Match AR encoder pyramid depth to the loaded G-Tok tokenizer so
-        # spatial grids always align (for example 16x16 vs 8x8 token grids).
-        # This is derived from the GTok config sidecar loaded with the model.
-        gtok_ch_mult = self.gtok.config.cnn_channel_multipliers
-        if gtok_ch_mult is None:
+        # Compute the downsample ratio needed to match the G-Tok token grid.
+        # The StyleEncoder halves spatial resolution ``log2(ratio)`` times,
+        # so ``ratio = image_size / token_grid_height``.
+        style_downsample_ratio = config.image_size // self.token_grid_height
+        if style_downsample_ratio not in (8, 16):
             raise ValueError(
-                "Loaded G-Tok model has no cnn_channel_multipliers in config"
+                f"StyleEncoder downsample ratio must be 8 or 16, but "
+                f"image_size={config.image_size} / token_grid_height="
+                f"{self.token_grid_height} = {style_downsample_ratio}"
             )
-        encoder_ch_mult = tuple(gtok_ch_mult)
 
         self.content_encoder = self.gtok.cnn_encoder
-        self.style_encoder = CNNEncoder(
-            in_channels=3,
-            ch=config.style_encoder_base_channels,
-            ch_mult=encoder_ch_mult,
-            num_res_blocks=config.style_encoder_num_residual_blocks,
-            z_channels=config.encoder_feature_dim,
-            dropout=0.0,
+        self.style_encoder = StyleEncoder(
+            C_in=3,
+            C=config.style_encoder_base_channels,
+            C_out=config.encoder_feature_dim,
+            norm="in",
+            activ="relu",
+            pad_type="reflect",
+            sigmoid=False,
+            scale_var=True,
+            downsample_ratio=style_downsample_ratio,
         )
         self.aggregator = FeatureFusionModule(
             z_channel=config.encoder_feature_dim,
