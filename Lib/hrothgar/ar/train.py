@@ -90,6 +90,7 @@ class ARVisualTrainingLoop(TrainingLoop):
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
         self.grad_accum_steps = train_args.grad_accum_steps
+        self.max_grad_norm = train_args.max_grad_norm
         self.canary_batches = train_args.canary
         # self.scheduled_sampling_start_step = train_args.scheduled_sampling_start_step
         # self.scheduled_sampling_end_step = train_args.scheduled_sampling_end_step
@@ -239,6 +240,13 @@ class ARVisualTrainingLoop(TrainingLoop):
                     )
 
                     if should_step:
+                        if self.max_grad_norm > 0:
+                            if self.scaler.is_enabled():
+                                self.scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                max_norm=self.max_grad_norm,
+                            )
                         if self.scaler.is_enabled():
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
@@ -521,6 +529,7 @@ class ARMultimodalTrainingLoop(TrainingLoop):
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
         self.grad_accum_steps = train_args.grad_accum_steps
+        self.max_grad_norm = train_args.max_grad_norm
         self.canary_batches = train_args.canary
 
         if self.grad_accum_steps <= 0:
@@ -638,6 +647,13 @@ class ARMultimodalTrainingLoop(TrainingLoop):
                     )
 
                     if should_step:
+                        if self.max_grad_norm > 0:
+                            if self.scaler.is_enabled():
+                                self.scaler.unscale_(self.optimizer)
+                            torch.nn.utils.clip_grad_norm_(
+                                self.model.parameters(),
+                                max_norm=self.max_grad_norm,
+                            )
                         if self.scaler.is_enabled():
                             self.scaler.step(self.optimizer)
                             self.scaler.update()
@@ -670,8 +686,9 @@ class ARMultimodalTrainingLoop(TrainingLoop):
             return
 
         self.model.eval()
-        self.model.gtok.eval()
-        self.text_encoder.eval()
+        with torch.no_grad():
+            self.model.gtok.eval()
+            self.text_encoder.eval()
         with torch.no_grad():
             val_metrics = {"alignment_l2": []}
             if self.run_decoder:
@@ -1011,6 +1028,15 @@ if __name__ == "__main__":
         help="AdamW beta2 (paper default: 0.95)",
     )
     parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help=(
+            "Maximum gradient norm for clipping.  Set to 0 to disable.  "
+            "The upstream GAR-Font paper and LlamaGen both use 1.0."
+        ),
+    )
+    parser.add_argument(
         "--precision",
         type=str,
         choices=["fp32", "bf16", "fp16"],
@@ -1052,8 +1078,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help=(
-            "Path to a pretrained visual AR checkpoint. Required for "
-            "--mode multimodal."
+            "Path to a pretrained visual AR checkpoint. Required for --mode multimodal."
         ),
     )
     parser.add_argument(

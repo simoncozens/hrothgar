@@ -54,11 +54,10 @@ from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.googlefonts import Font, GoogleFonts
-from hrothgar.gtok.model import GtokConfig, GtokModel, load_model
 from hrothgar.gtok.llamagen_lpips import LPIPS
+from hrothgar.gtok.model import load_model
 from hrothgar.gtok.vgg_loss import VGG
 from hrothgar.utils import torch_setup
-
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -220,9 +219,7 @@ class ReconstructionDataset(torch.utils.data.Dataset):
         return self.samples[idx]
 
 
-def _collate_render(
-    batch: List[Tuple[Font, int]], *, image_size: int
-) -> torch.Tensor:
+def _collate_render(batch: List[Tuple[Font, int]], *, image_size: int) -> torch.Tensor:
     """Render a batch of (font, codepoint) samples into a stacked tensor.
 
     Returns:
@@ -256,9 +253,7 @@ class GtokValidator:
         self.device = torch_setup()
 
         # --- Load G-Tok ---
-        gtok, gtok_config = load_model(
-            Path(config.gtok_model_path), device=self.device
-        )
+        gtok, gtok_config = load_model(Path(config.gtok_model_path), device=self.device)
         self.gtok = gtok
         self.gtok_config = gtok_config
         self.image_size: int = gtok_config.image_size
@@ -310,7 +305,9 @@ class GtokValidator:
             selected_families = all_families[: cfg.max_fonts]
 
         print(f"Validating {len(selected_families)} font families...")
-        print(f"Probe characters: {cfg.probe_chars}  ({len(self._probe_codepoints)} glyphs)")
+        print(
+            f"Probe characters: {cfg.probe_chars}  ({len(self._probe_codepoints)} glyphs)"
+        )
 
         # Build per-family sample lists.
         for family in selected_families:
@@ -330,17 +327,13 @@ class GtokValidator:
             ]
             self._datasets[family] = ReconstructionDataset(samples)
 
-    def _make_loader(
-        self, dataset: ReconstructionDataset
-    ) -> DataLoader:
+    def _make_loader(self, dataset: ReconstructionDataset) -> DataLoader:
         return DataLoader(
             dataset,
             batch_size=self.config.batch_size,
             shuffle=False,
             drop_last=False,
-            collate_fn=lambda batch: _collate_render(
-                batch, image_size=self.image_size
-            ),
+            collate_fn=lambda batch: _collate_render(batch, image_size=self.image_size),
             num_workers=0,  # GPU encoding prohibits forking.
             pin_memory=False,
         )
@@ -356,9 +349,7 @@ class GtokValidator:
         loader = self._make_loader(dataset)
 
         # Accumulate per-sample metric values.
-        all_values: Dict[str, List[float]] = {
-            name: [] for name in self._metrics
-        }
+        all_values: Dict[str, List[float]] = {name: [] for name in self._metrics}
 
         for batch in tqdm.tqdm(loader, desc="  Reconstructing", leave=False):
             images = batch.to(self.device)  # (B, 3, H, W)
@@ -373,7 +364,8 @@ class GtokValidator:
             for name, metric in self._metrics.items():
                 if name == "l1":
                     per_sample = (
-                        (images - reconstructed).abs()
+                        (images - reconstructed)
+                        .abs()
                         .reshape(images.shape[0], -1)
                         .mean(dim=1)
                     )
@@ -386,9 +378,7 @@ class GtokValidator:
                     vals: List[float] = []
                     for i in range(images.shape[0]):
                         vals.append(
-                            metric(
-                                images[i : i + 1], reconstructed[i : i + 1]
-                            ).item()
+                            metric(images[i : i + 1], reconstructed[i : i + 1]).item()
                         )
                     all_values[name].extend(vals)
 
@@ -419,9 +409,7 @@ class GtokValidator:
               details.
         """
         per_family: Dict[str, Dict[str, Dict[str, float]]] = {}
-        all_avgs: Dict[str, List[float]] = {
-            name: [] for name in self._metrics
-        }
+        all_avgs: Dict[str, List[float]] = {name: [] for name in self._metrics}
 
         for family, dataset in self._datasets.items():
             print(f"\n--- {family} ---")
@@ -479,9 +467,9 @@ class GtokValidator:
         passed = len(failures) == 0
 
         # --- Print summary ---
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Overall reconstruction quality")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         for name, label in [
             ("l1", "L1   "),
             ("lpips", "LPIPS"),
@@ -489,17 +477,18 @@ class GtokValidator:
             ("vgg", "VGG  "),
         ]:
             s = overall[name]
-            print(f"  {label}:  min={s['min']:.4f}  avg={s['avg']:.4f}  max={s['max']:.4f}")
+            print(
+                f"  {label}:  min={s['min']:.4f}  avg={s['avg']:.4f}  max={s['max']:.4f}"
+            )
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         if passed:
             print("✓ ALL FAMILIES PASS — tokeniser reconstruction is sufficient")
         else:
             print("✗ SOME FAMILIES FAIL — tokeniser may need improvement")
             for failure in failures:
                 print(f"  • {failure}")
-        print(f"{'='*60}")
-
+        print(f"{'=' * 60}")
         return {
             "per_family": per_family,
             "overall": overall,
