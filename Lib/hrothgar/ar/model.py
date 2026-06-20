@@ -15,23 +15,24 @@ definition and the tensors needed for token- and pixel-level supervision.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from tqdm import tqdm
 
-from hrothgar.llamagen_cnn import Encoder as CNNEncoder
 from hrothgar.gtok.model import (
     GtokConfig,
     GtokModel,
 )
+from hrothgar.llamagen_cnn import Encoder as CNNEncoder
 from hrothgar.upstream.feature_fusion_module import FeatureFusionModule
-from hrothgar.upstream.gpt import GPTModelArgs, Transformer as GPTTransformer
+from hrothgar.upstream.gpt import GPTModelArgs
+from hrothgar.upstream.gpt import Transformer as GPTTransformer
 from hrothgar.utils import SaveLoadModel
-from tqdm import tqdm
 
 
 @dataclass
@@ -62,7 +63,7 @@ class ARModelConfig:
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
-    perturbation_probability: float = 0.05
+    perturbation_probability: float = 0.2
     reconstruction_temperature: float = 1.0
     num_multitoken_lookahead_steps: int = 2
 
@@ -959,7 +960,14 @@ class ARModel(SaveLoadModel):
         return content_features  # (B, C, H, W) — 2D preserved
 
     def encode_style(self, style_reference_images: torch.Tensor) -> torch.Tensor:
-        """Encode style references to a 2D feature map ``(B, n_ref, C, H, W)``."""
+        """Encode style references to a 2D feature map ``(B, n_ref, C, H, W)``.
+
+        Style images are normalised from ``[0, 1]`` to ``[-1, 1]`` before the
+        style encoder because the upstream GPT architecture (RoPE, RMSNorm,
+        SwiGLU) was designed and tuned for zero-centred image features.
+        The G-Tok content path stays at ``[0, 1]`` — its encoder was
+        pretrained on that range and is frozen during AR training.
+        """
         batch_size, num_references, channels, height, width = (
             style_reference_images.shape
         )
@@ -968,6 +976,8 @@ class ARModel(SaveLoadModel):
         flattened = style_reference_images.reshape(
             batch_size * num_references, channels, height, width
         )
+        # Normalise from [0, 1] to [-1, 1] — upstream GPT expects zero-centred features.
+        flattened = (flattened - 0.5) / 0.5
         encoded = self.style_encoder(flattened)
         _, feature_channels, feature_height, feature_width = encoded.shape
         if (
@@ -1216,7 +1226,13 @@ class ARModel(SaveLoadModel):
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
     ) -> ARModelOutput:
-        """Greedy autoregressive generation via PrefixLM."""
+        """Greedy autoregressive generation via PrefixLM.
+
+        Uses the *math* SDP backend during autoregressive sampling to match
+        the upstream GAR-Font inference path.  Flash / mem-efficient attention
+        can introduce subtle numerical differences in the causal mask that
+        accumulate over sequential steps and degrade token accuracy.
+        """
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
@@ -1229,10 +1245,13 @@ class ARModel(SaveLoadModel):
 
         generated_tokens: list[torch.Tensor] = []
         for _ in tqdm(range(self.sequence_length)):
-            logits, _ = self.token_decoder(
-                idx=idx,
-                imgs_feature_map=conditioning_map,
-            )
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False, enable_mem_efficient=False, enable_math=True
+            ):
+                logits, _ = self.token_decoder(
+                    idx=idx,
+                    imgs_feature_map=conditioning_map,
+                )
             # Last logit position predicts the next token.
             next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
             generated_tokens.append(next_token)
@@ -1300,9 +1319,12 @@ class ARModel(SaveLoadModel):
         )
         predicted_token_indices = []
         for _ in range(self.sequence_length):
-            logits_step = self.token_decoder(
-                generated_tokens, multimodal_conditioning_tokens
-            )
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False, enable_mem_efficient=False, enable_math=True
+            ):
+                logits_step = self.token_decoder(
+                    generated_tokens, multimodal_conditioning_tokens
+                )
             next_token = torch.argmax(logits_step[:, -1, :], dim=-1, keepdim=True)
             predicted_token_indices.append(next_token)
             generated_tokens = torch.cat([generated_tokens, next_token], dim=1)
