@@ -102,7 +102,7 @@ class SingleFontTokenDataset(torch.utils.data.Dataset):
                 "choose a different font."
             )
 
-        print(f"Font:   {font.family} ({font.style or 'regular'})")
+        print(f"Font:   {font.family}")
         print(f"Glyphs: {len(self.token_sequences)}")
         print(f"Tokens per glyph: {self.token_sequences[0].shape[0]}")
 
@@ -181,7 +181,6 @@ class OracleARProbe:
             )
         font = all_fonts[config.font_index]
         self._font_name = font.family
-        self._font_style = font.style or "regular"
 
         self.dataset = SingleFontTokenDataset(
             font, self.gtok, config.image_size, self.device
@@ -293,7 +292,7 @@ class OracleARProbe:
         print()
         print("=" * 56)
         print("=== Oracle AR Results ===")
-        print(f"Font:              {self._font_name} ({self._font_style})")
+        print(f"Font:              {self._font_name} (index {cfg.font_index})")
         print(f"Glyphs:            {len(self.dataset)}")
         print(f"Best token acc:    {best_acc:.4f}  ({best_acc / chance:.0f}× chance)")
         print(f"Random chance:     {chance:.4%}")
