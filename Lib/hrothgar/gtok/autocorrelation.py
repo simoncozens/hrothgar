@@ -28,7 +28,7 @@ import tqdm
 from torch.utils.data import DataLoader
 
 from hrothgar.googlefonts import Font, GoogleFonts
-from hrothgar.gtok.model import load_model
+from hrothgar.gtok.model import GtokModel, load_model
 from hrothgar.utils import torch_setup
 
 # ---------------------------------------------------------------------------
@@ -49,6 +49,8 @@ class AutocorrConfig:
     hidden_dim: int = 128
     max_samples: int = 50_000
     seed: int = 42
+    # Per-position analysis: report accuracy for these position groups.
+    per_position_buckets: tuple[int, ...] = (8,)
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +242,7 @@ class TokenAutocorrelation:
         )
 
         print(f"Vocabulary size:     {self.vocab_size}")
-        print(f"Random-chance acc:   {1/self.vocab_size:.4%}")
+        print(f"Random-chance acc:   {1 / self.vocab_size:.4%}")
         print(f"Train samples:       {len(self.train_dataset)}")
         print(f"Test samples:        {len(self.test_dataset)}")
 
@@ -278,7 +280,7 @@ class TokenAutocorrelation:
             total_loss = 0.0
             total_tokens = 0
 
-            for batch in tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+            for batch in tqdm.tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
                 token_indices = batch.to(self.device)  # (B, N)
                 B, N = token_indices.shape
 
@@ -315,15 +317,21 @@ class TokenAutocorrelation:
             best_acc = max(best_acc, acc)
             ratio = acc / chance if chance > 0 else float("inf")
             print(
-                f"  Epoch {epoch+1:2d}  "
+                f"  Epoch {epoch + 1:2d}  "
                 f"train loss: {total_loss / max(total_tokens, 1):.4f}  "
                 f"test acc: {acc:.4f}  (best: {best_acc:.4f})  "
                 f"×chance: {ratio:.1f}×"
             )
 
         print()
-        print(f"=== Results ===")
-        print(f"Next-token accuracy:  {best_acc:.4f}  ({best_acc/chance:.1f}× random)")
+        print("=== Results ===")
+        print(
+            f"Next-token accuracy:  {best_acc:.4f}  ({best_acc / chance:.1f}× random)"
+        )
+
+        # --- Per-position accuracy analysis ---
+        self._report_per_position_accuracy(probe, test_loader)
+
         if best_acc > chance * 100:
             print("✓ Strong sequential structure — AR generator should succeed")
         elif best_acc > chance * 10:
@@ -332,6 +340,103 @@ class TokenAutocorrelation:
             print("✗ Weak sequential structure — AR generator will likely fail")
 
         return best_acc
+
+    def _report_per_position_accuracy(
+        self,
+        probe: NextTokenProbe,
+        test_loader: DataLoader,
+    ) -> None:
+        """Log next-token accuracy broken down by position in the sequence.
+
+        The token grid is flattened in raster-scan order.  Positions are
+        bucketed by row (every ``grid_width`` tokens) to reveal whether
+        within-row transitions are more predictable than row boundaries.
+        """
+        grid_w = self.gtok.token_grid_width
+        bucket_size = self.config.per_position_buckets[0]
+
+        probe.eval()
+        correct_by_pos: dict[int, int] = {}
+        total_by_pos: dict[int, int] = {}
+
+        with torch.no_grad():
+            for batch in test_loader:
+                token_indices = batch.to(self.device)
+                B, N = token_indices.shape
+                logits = probe(token_indices)  # (B, N-1, vocab_size)
+                targets = token_indices[:, 1:]  # (B, N-1)
+                preds = torch.argmax(logits, dim=-1)  # (B, N-1)
+
+                for pos in range(N - 1):
+                    bucket = (pos // bucket_size) * bucket_size
+                    correct_by_pos.setdefault(bucket, 0)
+                    total_by_pos.setdefault(bucket, 0)
+                    correct_by_pos[bucket] += (
+                        (preds[:, pos] == targets[:, pos]).sum().item()
+                    )
+                    total_by_pos[bucket] += B
+
+        print()
+        print(f"=== Per-Position Accuracy  (bucket size = {bucket_size}) ===")
+        print(f"{'Bucket':>8s}  {'Positions':>12s}  {'Accuracy':>10s}  {'×Chance':>8s}")
+        print("-" * 48)
+        chance = 1.0 / self.vocab_size
+        for bucket in sorted(correct_by_pos.keys()):
+            acc = correct_by_pos[bucket] / total_by_pos[bucket]
+            start = bucket
+            end = min(bucket + bucket_size - 1, self.gtok.sequence_length - 2)
+            # Flag row boundaries: positions where index % grid_w == grid_w - 1
+            marker = " ← row start" if start % grid_w == 0 else ""
+            print(
+                f"{bucket:>4d}-{end:<4d}  "
+                f"{total_by_pos[bucket]:>8d}       "
+                f"{acc:>8.2%}     "
+                f"{acc / chance:>6.1f}×"
+                f"{marker}"
+            )
+
+        # Summary: within-row vs cross-row-boundary accuracy.
+        within_correct = 0
+        within_total = 0
+        cross_correct = 0
+        cross_total = 0
+        with torch.no_grad():
+            for batch in test_loader:
+                token_indices = batch.to(self.device)
+                B, N = token_indices.shape
+                logits = probe(token_indices)
+                targets = token_indices[:, 1:]
+                preds = torch.argmax(logits, dim=-1)
+
+                for pos in range(N - 1):
+                    is_cross = (
+                        pos + 1
+                    ) % grid_w == 0  # predicting first token of next row
+                    if is_cross:
+                        cross_correct += (preds[:, pos] == targets[:, pos]).sum().item()
+                        cross_total += B
+                    else:
+                        within_correct += (
+                            (preds[:, pos] == targets[:, pos]).sum().item()
+                        )
+                        within_total += B
+
+        within_acc = within_correct / max(within_total, 1)
+        cross_acc = cross_correct / max(cross_total, 1)
+        print()
+        print(
+            f"Within-row accuracy:     {within_acc:.2%}  ({within_acc / chance:.1f}×)"
+        )
+        print(f"Cross-row-boundary acc:  {cross_acc:.2%}  ({cross_acc / chance:.1f}×)")
+        if within_acc > 0 and cross_acc > 0:
+            ratio = within_acc / cross_acc
+            print(f"Within/cross ratio:      {ratio:.1f}×")
+            if ratio > 3:
+                print(
+                    "⚠  Strong positional dependence: row boundaries are much harder.\n"
+                    "   The tokenizer may have good local structure but weak global structure.\n"
+                    "   Visual conditioning in the full AR model should supply the global signal."
+                )
 
 
 # ---------------------------------------------------------------------------
