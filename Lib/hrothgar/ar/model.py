@@ -75,7 +75,7 @@ class ARModelConfig:
     # Content-only training: zero out the style-fused features with this
     # probability during training.  Forces the decoder to rely on content
     # features and token-level sequential structure.  Set to 0.0 to disable.
-    content_only_prob: float = 0.3
+    content_only_prob: float = 0.0
 
     freeze_gtok: bool = True
 
@@ -102,7 +102,7 @@ class ARModelConfig:
             n_layer=self.decoder_num_layers,
             n_head=self.decoder_num_heads,
             vocab_size=vocab_size,
-            img_feature_channel=self.encoder_feature_dim * 2,
+            img_feature_channel=self.encoder_feature_dim,
             img_feature_code_len=img_feature_code_len,
             target_token_len=target_token_len,
             token_dropout_p=self.decoder_dropout,
@@ -799,7 +799,10 @@ class ARModel(SaveLoadModel):
 
         # PrefixLM: image features are prepended to the code-token sequence.
         # The GPT uses self-attention over the full [img | code] sequence.
-        conditioning_dim = config.encoder_feature_dim * 2
+        # Only the fused (content+style) map is used; the raw content features
+        # are consumed as queries inside the aggregator and not passed directly
+        # to the GPT, forcing gradient flow through the style fusion path.
+        conditioning_dim = config.encoder_feature_dim
         gpt_config = GPTModelArgs(
             vocab_size=self.codebook_size,
             dim=config.decoder_hidden_dim,
@@ -1019,13 +1022,10 @@ class ARModel(SaveLoadModel):
     ) -> torch.Tensor:
         """Build the 2D conditioning feature map for PrefixLM.
 
-        Returns ``(B, 2*encoder_feature_dim, H, W)`` — content and
-        style-fused features concatenated along the channel axis.
-
-        During training, with probability ``content_only_prob`` the
-        style-fused features are zeroed out.  This tests whether the model
-        can generate from content + token structure alone, or whether it
-        relies on font-identifying shortcuts through the style path.
+        Returns ``(B, encoder_feature_dim, H, W)`` — the style-fused content
+        features.  Raw content features are consumed as queries inside the
+        ``FeatureFusionModule`` cross-attention and are not passed directly
+        to the GPT, so all gradient signal flows through the style path.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
         style_features = self.encode_style(
@@ -1044,7 +1044,7 @@ class ARModel(SaveLoadModel):
             fused = torch.zeros_like(fused)
             self._content_only_step = True
 
-        return torch.cat([content_features, fused], dim=1)  # (B, 2C, H, W)
+        return fused  # (B, C, H, W)
 
     # ------------------------------------------------------------------
     # Token decoding (PrefixLM: image features prepended to code tokens)
