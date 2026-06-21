@@ -34,11 +34,89 @@ from torch.utils.data import DataLoader
 
 from hrothgar.googlefonts import Font, GoogleFonts
 from hrothgar.gtok.model import GtokModel, load_model
-from hrothgar.upstream.gpt import GPTModelArgs
-from hrothgar.upstream.gpt import Transformer as GPTTransformer
 from hrothgar.utils import torch_setup
 
 # ---------------------------------------------------------------------------
+# Minimal decoder-only transformer (no conditioning path)
+# ---------------------------------------------------------------------------
+
+
+class CausalDecoder(nn.Module):
+    """A minimal decoder-only transformer for pure next-token prediction.
+
+    Uses ``nn.TransformerEncoder`` with a causal mask — the standard pattern
+    for a decoder-only GPT-style model.  No image features, no cross-attention,
+    no KV cache — just tokens in, logits out.
+    """
+
+    def __init__(
+        self,
+        vocab_size: int,
+        dim: int = 768,
+        n_layers: int = 12,
+        n_heads: int = 12,
+        max_seq_len: int = 256,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.dim = dim
+
+        self.token_embedding = nn.Embedding(vocab_size, dim)
+        self.position_embedding = nn.Embedding(max_seq_len, dim)
+        self.dropout = nn.Dropout(dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=dim,
+            nhead=n_heads,
+            dim_feedforward=dim * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.ln_f = nn.LayerNorm(dim)
+        self.head = nn.Linear(dim, vocab_size, bias=False)
+
+        # Zero-init output head (standard GPT practice).
+        nn.init.constant_(self.head.weight, 0)
+        self._init_weights()
+
+    def _init_weights(self) -> None:
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                module.weight.data.normal_(mean=0.0, std=0.02)
+                if module.bias is not None:
+                    module.bias.data.zero_()
+            elif isinstance(module, nn.Embedding):
+                module.weight.data.normal_(mean=0.0, std=0.02)
+
+    def forward(self, token_indices: torch.Tensor) -> torch.Tensor:
+        """Return logits predicting each token from preceding context.
+
+        Args:
+            token_indices: ``(B, N)`` integer tensor.
+
+        Returns:
+            Logits of shape ``(B, N, vocab_size)`` — at position ``i``,
+            logits predict the token at position ``i+1`` (shifted internally).
+        """
+        B, N = token_indices.shape
+        device = token_indices.device
+
+        positions = torch.arange(N, device=device).unsqueeze(0).expand(B, -1)
+        h = self.token_embedding(token_indices) + self.position_embedding(positions)
+        h = self.dropout(h)
+
+        causal_mask = nn.Transformer.generate_square_subsequent_mask(N, device=device)
+        h = self.transformer(h, mask=causal_mask, is_causal=True)
+        h = self.ln_f(h)
+        return self.head(h)
+
+
+# ---------------------------------------------------------------------------
+
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -195,21 +273,15 @@ class OracleARProbe:
             collate_fn=_collate_oracle,
         )
 
-        # Build a small GPT with NO conditioning path.
-        gpt_config = GPTModelArgs(
+        # Build a minimal decoder-only transformer with NO conditioning path.
+        self.model = CausalDecoder(
             vocab_size=config.vocab_size,
             dim=config.gpt_dim,
-            n_layer=config.gpt_layers,
-            n_head=config.gpt_heads,
-            img_feature_channel=0,  # No conditioning!
-            img_feature_code_len=0,
-            target_token_len=config.sequence_length,
-            token_dropout_p=0.1,
-            attn_dropout_p=0.0,
-            resid_dropout_p=0.1,
-            ffn_dropout_p=0.1,
-        )
-        self.model = GPTTransformer(gpt_config).to(self.device)
+            n_layers=config.gpt_layers,
+            n_heads=config.gpt_heads,
+            max_seq_len=config.sequence_length + 1,
+            dropout=0.1,
+        ).to(self.device)
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=config.learning_rate, betas=(0.9, 0.95)
         )
@@ -246,20 +318,12 @@ class OracleARProbe:
 
             token_indices = batch.to(self.device)  # (B, N)
 
-            # PrefixLM with empty conditioning.
-            idx = token_indices[:, :-1]
-            targets = token_indices
+            # Standard teacher forcing: input = tokens[0..N-1], target = tokens[1..N].
+            input_ids = token_indices[:, :-1]  # (B, N-1)
+            targets = token_indices[:, 1:]  # (B, N-1)
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # Pass empty conditioning map.
-                dummy_conditioning = torch.empty(
-                    token_indices.shape[0], 0, 0, device=self.device
-                )
-                logits, _loss = self.model(
-                    idx=idx,
-                    imgs_feature_map=dummy_conditioning,
-                    targets=targets,
-                )
+                logits = self.model(input_ids)  # (B, N-1, vocab_size)
 
             loss = loss_fn(
                 logits.reshape(-1, cfg.vocab_size),
