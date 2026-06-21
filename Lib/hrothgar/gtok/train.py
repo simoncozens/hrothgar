@@ -15,7 +15,7 @@ from hrothgar.gtok.config import GtokConfig, GtokLossWeights
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokModel
-from glyphloss import GlyphReconstructionLoss
+from hrothgar.gtok.vgg_loss import VGG
 from hrothgar.utils import TrainingLoop
 
 
@@ -104,7 +104,7 @@ class GtokTrainingLoop(TrainingLoop):
                     "Targeted validation families file did not match any test families; "
                     "skipping targeted validation."
                 )
-        self.glyphloss_fn = GlyphReconstructionLoss().to(self.device)
+        self.perceptual_loss_fn = VGG().to(self.device)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
         self.model = model
@@ -125,7 +125,7 @@ class GtokTrainingLoop(TrainingLoop):
             recon_images,
             gt_images,
             vq_loss_info,
-            glyphloss_fn=self.glyphloss_fn,
+            perceptual_loss_fn=self.perceptual_loss_fn,
             weights=self.loss_weights,
         )
         return loss, loss_info
