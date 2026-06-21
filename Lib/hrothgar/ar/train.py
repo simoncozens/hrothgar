@@ -175,13 +175,13 @@ class ARVisualTrainingLoop(TrainingLoop):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
         style_reference_images = batch["style_renderings"].to(self.device)
-        descriptions = batch.get("description")
-        # scheduled_sampling_probability = self._scheduled_sampling_probability()
+        target_codepoints = batch["char"].to(self.device)
 
         model_output = self.model(
             content_images,
             style_reference_images,
             target_images=target_images,
+            target_codepoints=target_codepoints,
             global_step=self.global_step,
         )
         loss, loss_info = compute_ar_loss(
@@ -294,13 +294,14 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_target_images = val_batch["target_rendering"].to(self.device)
                 val_content_images = val_batch["content_rendering"].to(self.device)
                 val_style_images = val_batch["style_renderings"].to(self.device)
-                val_descriptions = val_batch.get("description")
+                val_codepoints = val_batch["char"].to(self.device)
 
                 with self._autocast_context():
                     val_output = self.model(
                         val_content_images,
                         val_style_images,
                         target_images=val_target_images,
+                        target_codepoints=val_codepoints,
                     )
                 _val_loss, val_loss_info = compute_ar_loss(
                     val_output,
@@ -349,11 +350,13 @@ class ARVisualTrainingLoop(TrainingLoop):
                 val_target_images = val_batch["target_rendering"].to(self.device)
                 val_content_images = val_batch["content_rendering"].to(self.device)
                 val_style_images = val_batch["style_renderings"].to(self.device)
+                val_codepoints = val_batch["char"].to(self.device)
 
                 with self._autocast_context():
                     fr_output = self.model.generate(
                         content_images=val_content_images,
                         style_reference_images=val_style_images,
+                        target_codepoints=val_codepoints,
                     )
                 gt_token_indices = self.model.target_token_indices_from_images(
                     val_target_images,
@@ -399,16 +402,19 @@ class ARVisualTrainingLoop(TrainingLoop):
         val_target_images = val_batch["target_rendering"].to(self.device)
         val_content_images = val_batch["content_rendering"].to(self.device)
         val_style_images = val_batch["style_renderings"].to(self.device)
+        val_codepoints = val_batch["char"].to(self.device)
 
         with self._autocast_context():
             val_output = self.model(
                 val_content_images,
                 val_style_images,
                 target_images=val_target_images,
+                target_codepoints=val_codepoints,
             )
             autoregression_output = self.model.generate(
                 content_images=val_content_images,
                 style_reference_images=val_style_images,
+                target_codepoints=val_codepoints,
             )
 
         preview_count = min(8, val_target_images.shape[0])

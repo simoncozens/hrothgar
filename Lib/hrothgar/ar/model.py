@@ -73,9 +73,16 @@ class ARModelConfig:
     style_dropout: float = 0.3
 
     # Content-only training: zero out the style-fused features with this
-    # probability during training.  Forces the decoder to rely on content
-    # features and token-level sequential structure.  Set to 0.0 to disable.
+    # probability during training.  Forces the decoder to rely on codepoint
+    # identity and token-level sequential structure.  Set to 0.0 to disable.
     content_only_prob: float = 0.0
+
+    # Codepoint embedding: explicit character identity conditioning.
+    # Latin glyphs vary too much structurally for a reference image to
+    # reliably convey character identity, so we embed the Unicode codepoint
+    # directly and pass it alongside the style-fused features.
+    num_codepoints: int = 8192
+    codepoint_embedding_dim: int = 64
 
     freeze_gtok: bool = True
 
@@ -102,7 +109,7 @@ class ARModelConfig:
             n_layer=self.decoder_num_layers,
             n_head=self.decoder_num_heads,
             vocab_size=vocab_size,
-            img_feature_channel=self.encoder_feature_dim,
+            img_feature_channel=self.encoder_feature_dim * 2,
             img_feature_code_len=img_feature_code_len,
             target_token_len=target_token_len,
             token_dropout_p=self.decoder_dropout,
@@ -791,6 +798,12 @@ class ARModel(SaveLoadModel):
             downsample_ratio=style_downsample_ratio,
         )
         self.style_dropout = nn.Dropout2d(config.style_dropout)
+        self.codepoint_embedding = nn.Embedding(
+            config.num_codepoints, config.codepoint_embedding_dim
+        )
+        self.codepoint_projection = nn.Linear(
+            config.codepoint_embedding_dim, config.encoder_feature_dim
+        )
         self.aggregator = FeatureFusionModule(
             z_channel=config.encoder_feature_dim,
             n_heads=config.aggregator_num_heads,
@@ -799,10 +812,11 @@ class ARModel(SaveLoadModel):
 
         # PrefixLM: image features are prepended to the code-token sequence.
         # The GPT uses self-attention over the full [img | code] sequence.
-        # Only the fused (content+style) map is used; the raw content features
-        # are consumed as queries inside the aggregator and not passed directly
-        # to the GPT, forcing gradient flow through the style fusion path.
-        conditioning_dim = config.encoder_feature_dim
+        # Conditioning = [codepoint_embedding | style-fused features].
+        # The codepoint embedding provides explicit, font-agnostic character
+        # identity, which is critical for Latin glyphs whose structure varies
+        # too much across fonts for a reference image to be reliable.
+        conditioning_dim = config.encoder_feature_dim * 2
         gpt_config = GPTModelArgs(
             vocab_size=self.codebook_size,
             dim=config.decoder_hidden_dim,
@@ -1019,19 +1033,31 @@ class ARModel(SaveLoadModel):
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
+        target_codepoints: torch.Tensor,
     ) -> torch.Tensor:
         """Build the 2D conditioning feature map for PrefixLM.
 
-        Returns ``(B, encoder_feature_dim, H, W)`` — the style-fused content
-        features.  Raw content features are consumed as queries inside the
-        ``FeatureFusionModule`` cross-attention and are not passed directly
-        to the GPT, so all gradient signal flows through the style path.
+        Returns ``(B, 2*encoder_feature_dim, H, W)`` — codepoint identity
+        embedding projected to the feature dimension, and style-fused features
+        concatenated along the channel axis.
+
+        The codepoint embedding provides explicit, font-agnostic character
+        identity.  This replaces structural content images as the primary
+        signal, because Latin glyph structure varies too much across fonts for
+        a reference image to be reliable.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
         style_features = self.encode_style(
             style_reference_images
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
+
+        # Codepoint embedding: broadcast from (B, D) to (B, C, H, W).
+        codepoint_emb = self.codepoint_embedding(target_codepoints)  # (B, D)
+        codepoint_emb = self.codepoint_projection(codepoint_emb)  # (B, C)
+        codepoint_map = codepoint_emb[:, :, None, None].expand(
+            -1, -1, fused.shape[2], fused.shape[3]
+        )  # (B, C, H, W)
 
         # Content-only dropout: zero out style features with configured
         # probability during training.
@@ -1044,7 +1070,7 @@ class ARModel(SaveLoadModel):
             fused = torch.zeros_like(fused)
             self._content_only_step = True
 
-        return fused  # (B, C, H, W)
+        return torch.cat([codepoint_map, fused], dim=1)  # (B, 2C, H, W)
 
     # ------------------------------------------------------------------
     # Token decoding (PrefixLM: image features prepended to code tokens)
@@ -1167,12 +1193,26 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
+        target_codepoints: Optional[torch.Tensor] = None,
         global_step: int = 0,
     ) -> ARModelOutput:
-        """Run teacher-forced PrefixLM decoding for visual pretraining."""
+        """Run teacher-forced PrefixLM decoding for visual pretraining.
+
+        Args:
+            target_codepoints: ``(B,)`` integer tensor of Unicode codepoints
+                for the target glyphs.  Required when ``target_images`` are
+                provided (they carry no codepoint metadata) and strongly
+                recommended for Latin glyph generation.
+        """
+        if target_codepoints is None:
+            raise ValueError(
+                "target_codepoints is required — provide a (B,) integer tensor "
+                "of Unicode codepoints for the target glyphs"
+            )
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
+            target_codepoints=target_codepoints,
         )
 
         if target_token_indices is None:
@@ -1289,6 +1329,7 @@ class ARModel(SaveLoadModel):
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
+        target_codepoints: torch.Tensor,
     ) -> ARModelOutput:
         """Greedy autoregressive generation via PrefixLM.
 
@@ -1296,10 +1337,15 @@ class ARModel(SaveLoadModel):
         the upstream GAR-Font inference path.  Flash / mem-efficient attention
         can introduce subtle numerical differences in the causal mask that
         accumulate over sequential steps and degrade token accuracy.
+
+        Args:
+            target_codepoints: ``(B,)`` integer tensor of Unicode codepoints
+                identifying which glyph to generate.
         """
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
+            target_codepoints=target_codepoints,
         )
         batch_size = content_images.shape[0]
         device = content_images.device
