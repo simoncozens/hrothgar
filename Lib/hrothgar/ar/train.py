@@ -189,10 +189,10 @@ class ARVisualTrainingLoop(TrainingLoop):
             target_images,
             weights=self.loss_weights,
         )
-        # loss_info["scheduled_sampling_probability"] = torch.tensor(
-        #     scheduled_sampling_probability,
-        #     device=target_images.device,
-        # )
+        loss_info["content_only"] = torch.tensor(
+            float(self.model._content_only_step),
+            device=target_images.device,
+        )
         return loss, loss_info
 
     def train(self):

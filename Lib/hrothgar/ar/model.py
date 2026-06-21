@@ -72,6 +72,11 @@ class ARModelConfig:
     # Regularisation on the style encoding path.
     style_dropout: float = 0.3
 
+    # Content-only training: zero out the style-fused features with this
+    # probability during training.  Forces the decoder to rely on content
+    # features and token-level sequential structure.  Set to 0.0 to disable.
+    content_only_prob: float = 0.3
+
     freeze_gtok: bool = True
 
     def __post_init__(self) -> None:
@@ -825,6 +830,7 @@ class ARModel(SaveLoadModel):
             self.freeze_gtok()
 
         self._global_step: int = 0
+        self._content_only_step: bool = False
         self._nfa_mode: bool = False
 
     def freeze_gtok(self) -> None:
@@ -1015,12 +1021,29 @@ class ARModel(SaveLoadModel):
 
         Returns ``(B, 2*encoder_feature_dim, H, W)`` — content and
         style-fused features concatenated along the channel axis.
+
+        During training, with probability ``content_only_prob`` the
+        style-fused features are zeroed out.  This tests whether the model
+        can generate from content + token structure alone, or whether it
+        relies on font-identifying shortcuts through the style path.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
         style_features = self.encode_style(
             style_reference_images
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
+
+        # Content-only dropout: zero out style features with configured
+        # probability during training.
+        self._content_only_step = False
+        if (
+            self.training
+            and self.config.content_only_prob > 0
+            and torch.rand(1).item() < self.config.content_only_prob
+        ):
+            fused = torch.zeros_like(fused)
+            self._content_only_step = True
+
         return torch.cat([content_features, fused], dim=1)  # (B, 2C, H, W)
 
     # ------------------------------------------------------------------
