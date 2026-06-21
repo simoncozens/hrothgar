@@ -119,7 +119,8 @@ class GtokTrainingLoop(TrainingLoop):
 
     def train_step(self, batch):
         gt_images = batch["rendering"].to(self.device)
-        recon_images, vq_loss_info = self.model(gt_images)
+        codepoints = batch["char"].to(self.device)
+        recon_images, vq_loss_info = self.model(gt_images, codepoints=codepoints)
         loss, loss_info = compute_gtok_loss(
             recon_images,
             gt_images,

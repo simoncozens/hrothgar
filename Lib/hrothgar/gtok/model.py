@@ -16,22 +16,27 @@ References:
 import dataclasses
 import json
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.vision_transformer import Encoder, EncoderBlock
 
+from hrothgar.dataset import LATIN_CORE
+from hrothgar.gtok.config import GtokConfig
+from hrothgar.gtok.losses import GtokLossInfo
+from hrothgar.llamagen_cnn import (
+    Decoder as CNNDecoder,
+)
 from hrothgar.llamagen_cnn import (
     Encoder as CNNEncoder,
-    Decoder as CNNDecoder,
+)
+from hrothgar.llamagen_cnn import (
     VectorQuantizer,
 )
-from hrothgar.gtok.losses import GtokLossInfo
-from hrothgar.gtok.config import GtokConfig
-from hrothgar.upstream.tokenizer import ViTEncoder as UpstreamViTEncoder
 from hrothgar.upstream.tokenizer import ViTDecoder as UpstreamViTDecoder
+from hrothgar.upstream.tokenizer import ViTEncoder as UpstreamViTEncoder
 from hrothgar.utils import SaveLoadModel
 
 
@@ -57,12 +62,12 @@ def create_2d_sinusoidal_position_embeddings(
     Returns:
         Position embeddings of shape (sequence_length, embedding_dim)
     """
-    assert (
-        sequence_length == grid_height * grid_width
-    ), f"sequence_length ({sequence_length}) must equal grid_height * grid_width ({grid_height * grid_width})"
-    assert (
-        embedding_dim % 4 == 0
-    ), f"embedding_dim ({embedding_dim}) must be divisible by 4"
+    assert sequence_length == grid_height * grid_width, (
+        f"sequence_length ({sequence_length}) must equal grid_height * grid_width ({grid_height * grid_width})"
+    )
+    assert embedding_dim % 4 == 0, (
+        f"embedding_dim ({embedding_dim}) must be divisible by 4"
+    )
 
     # Create 1D sincos embedding helper
     def get_1d_sincos(pos: torch.Tensor, dim: int) -> torch.Tensor:
@@ -212,9 +217,9 @@ class ViTEncoder(nn.Module):
             where the first token is the class token.
         """
         batch_size, seq_length, _ = x.shape
-        assert (
-            seq_length == self.sequence_length
-        ), f"Input sequence length {seq_length} != expected {self.sequence_length}"
+        assert seq_length == self.sequence_length, (
+            f"Input sequence length {seq_length} != expected {self.sequence_length}"
+        )
 
         # Project to embedding dimension
         x = self.input_projection(x)  # (batch, seq_length, hidden_dim)
@@ -325,9 +330,9 @@ class CausalViTDecoder(nn.Module):
             Decoded tokens of shape (batch_size, sequence_length, output_dim)
         """
         _batch_size, seq_length, _hidden_dim = x.shape
-        assert (
-            seq_length == self.sequence_length
-        ), f"Input sequence length {seq_length} != expected {self.sequence_length}"
+        assert seq_length == self.sequence_length, (
+            f"Input sequence length {seq_length} != expected {self.sequence_length}"
+        )
 
         # Add position embeddings
         x = x + self.position_embeddings.unsqueeze(0)  # broadcast to batch
@@ -419,9 +424,13 @@ class GtokModel(SaveLoadModel):
 
         # Calculate derived parameters from the CNN pyramid.
         # Encoder downsamples at every level except the final one.
-        assert (
-            config.cnn_channel_multipliers is not None
-        ), "this can't happen, we set it in __post_init__, but mypy doesn't know that"
+        assert config.cnn_channel_multipliers is not None, (
+            "this can't happen, we set it in __post_init__, but mypy doesn't know that"
+        )
+        # Encoder downsamples at every level except the final one.
+        assert config.cnn_channel_multipliers is not None, (
+            "this can't happen, we set it in __post_init__, but mypy doesn't know that"
+        )
         self.num_downsampling_phases = len(config.cnn_channel_multipliers) - 1
         self.downsampling_factor = 2**self.num_downsampling_phases
         if config.image_size % self.downsampling_factor != 0:
@@ -510,14 +519,48 @@ class GtokModel(SaveLoadModel):
             aux_hidden_dim=128,
         )
 
+        # Character classifier: encourages codebook to organise by character.
+        # Takes mean-pooled quantized vectors and predicts LATIN_CORE class.
+        self._register_latincore_mapping()
+        latincore_size = len(LATIN_CORE)
+        self.character_classifier = nn.Sequential(
+            nn.Linear(config.quantizer_code_dim, 128),
+            nn.GELU(),
+            nn.Linear(128, latincore_size),
+        )
+
+    def _register_latincore_mapping(self) -> None:
+        max_cp = max(LATIN_CORE)
+        mapping = torch.full((max_cp + 1,), -1, dtype=torch.long)
+        for idx, cp in enumerate(LATIN_CORE):
+            mapping[cp] = idx
+        self.register_buffer("_latincore_map", mapping, persistent=False)
+
+    def _unicode_to_latincore(self, codepoints: torch.Tensor) -> torch.Tensor:
+        max_cp = self._latincore_map.shape[0] - 1  # type: ignore[attr-defined]
+        clamped = torch.clamp(codepoints, max=max_cp)
+        indices = self._latincore_map[clamped]  # type: ignore[attr-defined]
+        oob = indices < 0
+        if oob.any():
+            indices = torch.where(oob, torch.zeros_like(indices), indices)
+        return indices
+
+    def load(self, path: str, device: torch.device) -> None:
+        """Load weights with ``strict=False`` to tolerate new heads."""
+        state_dict = torch.load(path, map_location=device, weights_only=True)
+        self.load_state_dict(state_dict, strict=False)
+
     def encode(
         self,
         images: torch.Tensor,
+        codepoints: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Encode glyph images to quantized codes and compute VQ losses.
 
         Args:
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
+            codepoints: Optional (B,) LongTensor of Unicode codepoints for
+                character classification loss.
 
         Returns:
             Tuple of:
@@ -572,6 +615,19 @@ class GtokModel(SaveLoadModel):
                 ar_targets.reshape(-1),
             )
 
+        # Character classification: mean-pool quantized vectors and predict
+        # LATIN_CORE class.  Encourages the codebook to organise by character.
+        character_ce: Optional[torch.Tensor] = None
+        if (
+            hasattr(self, "character_classifier")
+            and codepoints is not None
+            and self.training
+        ):
+            latincore_idx = self._unicode_to_latincore(codepoints)
+            pooled = quantized.mean(dim=1)  # (B, code_dim)
+            char_logits = self.character_classifier(pooled)
+            character_ce = F.cross_entropy(char_logits, latincore_idx)
+
         loss_info = GtokLossInfo(
             vq_loss=raw_loss_info[0],
             commit_loss=raw_loss_info[1],
@@ -579,6 +635,7 @@ class GtokModel(SaveLoadModel):
             codebook_usage=raw_loss_info[3],
             perplexity=indices_info[0],
             aux_ar_loss=aux_ar_loss,
+            character_ce=character_ce,
         )
 
         return quantized, loss_info
@@ -619,18 +676,21 @@ class GtokModel(SaveLoadModel):
     def forward(
         self,
         images: torch.Tensor,
+        codepoints: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Forward pass: encode, quantize, and decode.
 
         Args:
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
+            codepoints: Optional (B,) LongTensor of Unicode codepoints for
+                character classification loss.
 
         Returns:
             Tuple of:
                 - reconstructed: Reconstructed images of shape (batch_size, 3, image_size, image_size)
                 - loss_info: VQ loss information tuple
         """
-        quantized, loss_info = self.encode(images)
+        quantized, loss_info = self.encode(images, codepoints=codepoints)
         reconstructed = self.decode(quantized)
         return reconstructed, loss_info
 

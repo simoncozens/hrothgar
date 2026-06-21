@@ -24,6 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from hrothgar.dataset import LATIN_CORE
 from hrothgar.gtok.model import (
     GtokConfig,
     GtokModel,
@@ -76,13 +77,6 @@ class ARModelConfig:
     # probability during training.  Forces the decoder to rely on codepoint
     # identity and token-level sequential structure.  Set to 0.0 to disable.
     content_only_prob: float = 0.0
-
-    # Codepoint embedding: explicit character identity conditioning.
-    # Latin glyphs vary too much structurally for a reference image to
-    # reliably convey character identity, so we embed the Unicode codepoint
-    # directly and pass it alongside the style-fused features.
-    num_codepoints: int = 8192
-    codepoint_embedding_dim: int = 64
 
     freeze_gtok: bool = True
 
@@ -773,7 +767,6 @@ class ARModel(SaveLoadModel):
         self.token_grid_width = self.gtok.token_grid_width
         self.codebook_size = self.gtok.config.quantizer_codebook_size
         self.codebook_dim = self.gtok.config.quantizer_code_dim
-        self.num_codepoints = config.num_codepoints
 
         # Compute the downsample ratio needed to match the G-Tok token grid.
         # The StyleEncoder halves spatial resolution ``log2(ratio)`` times,
@@ -799,12 +792,16 @@ class ARModel(SaveLoadModel):
             downsample_ratio=style_downsample_ratio,
         )
         self.style_dropout = nn.Dropout2d(config.style_dropout)
+
+        # Codepoint embedding: map Unicode codepoints → LATIN_CORE index →
+        # dense vector.  LATIN_CORE has ~264 entries, making the embedding
+        # compact and avoiding the sparsity of raw Unicode.
+        self._register_latincore_mapping()
+        latincore_size = len(LATIN_CORE)
         self.codepoint_embedding = nn.Embedding(
-            config.num_codepoints, config.codepoint_embedding_dim
+            latincore_size, config.encoder_feature_dim
         )
-        self.codepoint_projection = nn.Linear(
-            config.codepoint_embedding_dim, config.encoder_feature_dim
-        )
+
         self.aggregator = FeatureFusionModule(
             z_channel=config.encoder_feature_dim,
             n_heads=config.aggregator_num_heads,
@@ -850,6 +847,40 @@ class ARModel(SaveLoadModel):
         self._global_step: int = 0
         self._content_only_step: bool = False
         self._nfa_mode: bool = False
+
+    def _register_latincore_mapping(self) -> None:
+        """Build a buffer that maps Unicode codepoints → LATIN_CORE indices.
+
+        Creates a tensor of shape ``(max_unicode + 1,)`` where each entry is
+        either the LATIN_CORE index or -1 for codepoints not in LATIN_CORE.
+        """
+        max_cp = max(LATIN_CORE)
+        mapping = torch.full((max_cp + 1,), -1, dtype=torch.long)
+        for idx, cp in enumerate(LATIN_CORE):
+            mapping[cp] = idx
+        self.register_buffer("_latincore_map", mapping, persistent=False)
+
+    def _unicode_to_latincore(self, codepoints: torch.Tensor) -> torch.Tensor:
+        """Convert Unicode codepoint tensor to LATIN_CORE indices.
+
+        Args:
+            codepoints: ``(B,)`` LongTensor of Unicode codepoints.
+
+        Returns:
+            ``(B,)`` LongTensor of LATIN_CORE indices.  Codepoints not in
+            LATIN_CORE are mapped to 0 (first entry) with a warning.
+        """
+        max_cp = self._latincore_map.shape[0] - 1  # type: ignore[attr-defined]
+        clamped = torch.clamp(codepoints, max=max_cp)
+        indices = self._latincore_map[clamped]  # type: ignore[attr-defined]
+        oob = indices < 0
+        if oob.any():
+            print(
+                f"Warning: {oob.sum().item()} codepoint(s) not in LATIN_CORE; "
+                f"mapping to index 0"
+            )
+            indices = torch.where(oob, torch.zeros_like(indices), indices)
+        return indices
 
     def freeze_gtok(self) -> None:
         """Freeze G-Tok so the AR stage trains only its own modules."""
@@ -1034,7 +1065,7 @@ class ARModel(SaveLoadModel):
         self,
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
-        target_codepoints: torch.Tensor,
+        latincore_idx: torch.Tensor,
     ) -> torch.Tensor:
         """Build the 2D conditioning feature map for PrefixLM.
 
@@ -1053,13 +1084,8 @@ class ARModel(SaveLoadModel):
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
 
-        # Codepoint embedding: broadcast from (B, D) to (B, C, H, W).
-        # clamp codepoints
-        target_codepoints_clamped = torch.clamp(
-            target_codepoints, max=self.num_codepoints - 1
-        )
-        codepoint_emb = self.codepoint_embedding(target_codepoints_clamped)  # (B, D)
-        codepoint_emb = self.codepoint_projection(codepoint_emb)  # (B, C)
+        # Codepoint embedding from LATIN_CORE index.
+        codepoint_emb = self.codepoint_embedding(latincore_idx)  # (B, C)
         codepoint_map = codepoint_emb[:, :, None, None].expand(
             -1, -1, fused.shape[2], fused.shape[3]
         )  # (B, C, H, W)
@@ -1214,10 +1240,11 @@ class ARModel(SaveLoadModel):
                 "target_codepoints is required — provide a (B,) integer tensor "
                 "of Unicode codepoints for the target glyphs"
             )
+        target_latincore_idx = self._unicode_to_latincore(target_codepoints)
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
-            target_codepoints=target_codepoints,
+            latincore_idx=target_latincore_idx,
         )
 
         if target_token_indices is None:
@@ -1347,10 +1374,11 @@ class ARModel(SaveLoadModel):
             target_codepoints: ``(B,)`` integer tensor of Unicode codepoints
                 identifying which glyph to generate.
         """
+        latincore_idx = self._unicode_to_latincore(target_codepoints)
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
             style_reference_images=style_reference_images,
-            target_codepoints=target_codepoints,
+            latincore_idx=latincore_idx,
         )
         batch_size = content_images.shape[0]
         device = content_images.device
