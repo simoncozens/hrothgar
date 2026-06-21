@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -82,3 +82,4 @@ class GtokLossWeights:
     commit: float = 0.1
     entropy: float = 1.0
     aux_ar: float = 0.1  # Weight applied to loss_info.aux_ar_loss
+    character_ce: float = 1.0  # Weight applied to loss_info.character_ce

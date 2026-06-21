@@ -15,8 +15,9 @@ of individual terms for TensorBoard logging.
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple
 
-from hrothgar.gtok.config import GtokLossWeights
 import torch
+
+from hrothgar.gtok.config import GtokLossWeights
 
 
 @dataclass
@@ -27,6 +28,9 @@ class GtokLossInfo:
     codebook_usage: object  # Can be a scalar or tensor-like value
     perplexity: Optional[torch.Tensor] = None
     aux_ar_loss: Optional[torch.Tensor] = None  # Set by model when aux_ar_head exists
+    character_ce: Optional[torch.Tensor] = (
+        None  # Set by model when char classifier exists
+    )
 
 
 def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
@@ -111,6 +115,15 @@ def compute_gtok_loss(
     )
     weighted_aux_ar = weights.aux_ar * aux_ar_loss
 
+    # Character classification CE: encourages codebook to organise by character.
+    character_ce_raw = loss_info.character_ce
+    character_ce = (
+        character_ce_raw
+        if character_ce_raw is not None
+        else torch.zeros((), device=reconstructed_images.device)
+    )
+    weighted_character_ce = weights.character_ce * character_ce
+
     weighted_glyphloss = weights.glyphloss * glyphloss
     weighted_vq = weights.vq * vq_loss
     weighted_commit = weights.commit * commit_loss
@@ -122,6 +135,7 @@ def compute_gtok_loss(
         + weighted_commit
         + weighted_entropy
         + weighted_aux_ar
+        + weighted_character_ce
     )
 
     terms: Dict[str, torch.Tensor] = {
@@ -138,6 +152,8 @@ def compute_gtok_loss(
         "weighted_commit": weighted_commit,
         "weighted_entropy": weighted_entropy,
         "weighted_aux_ar": weighted_aux_ar,
+        "character_ce": character_ce,
+        "weighted_character_ce": weighted_character_ce,
     }
 
     return total_loss, terms

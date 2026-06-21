@@ -13,6 +13,9 @@ from hrothgar.googlefonts import GoogleFonts
 LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
 # Skip combining characters
 LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
+# Add the Rupee
+LATIN_CORE.append(0x20B9)
+
 
 LATIN_KERNEL = [x for x in unicodes_per_glyphset("GF_Latin_Kernel") if x != 32]
 # Skip combining characters
