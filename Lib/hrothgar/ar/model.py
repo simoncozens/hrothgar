@@ -773,6 +773,7 @@ class ARModel(SaveLoadModel):
         self.token_grid_width = self.gtok.token_grid_width
         self.codebook_size = self.gtok.config.quantizer_codebook_size
         self.codebook_dim = self.gtok.config.quantizer_code_dim
+        self.num_codepoints = config.num_codepoints
 
         # Compute the downsample ratio needed to match the G-Tok token grid.
         # The StyleEncoder halves spatial resolution ``log2(ratio)`` times,
@@ -1053,7 +1054,11 @@ class ARModel(SaveLoadModel):
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
 
         # Codepoint embedding: broadcast from (B, D) to (B, C, H, W).
-        codepoint_emb = self.codepoint_embedding(target_codepoints)  # (B, D)
+        # clamp codepoints
+        target_codepoints_clamped = torch.clamp(
+            target_codepoints, max=self.num_codepoints - 1
+        )
+        codepoint_emb = self.codepoint_embedding(target_codepoints_clamped)  # (B, D)
         codepoint_emb = self.codepoint_projection(codepoint_emb)  # (B, C)
         codepoint_map = codepoint_emb[:, :, None, None].expand(
             -1, -1, fused.shape[2], fused.shape[3]
