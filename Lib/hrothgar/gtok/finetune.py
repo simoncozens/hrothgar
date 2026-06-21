@@ -23,7 +23,6 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from glyphloss import GlyphReconstructionLoss
 from hrothgar.dataset import Dataset, LATIN_CORE
 from hrothgar.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.losses import GtokLossWeights, compute_gtok_loss
@@ -114,8 +113,6 @@ def fine_tune_gtok_decoder_only(
         lr=config.learning_rate,
     )
 
-    glyphloss_fn = GlyphReconstructionLoss().to(device)
-
     progress(
         "GTok decoder-only fine-tuning on "
         f"{len(dataset)} Latin Core glyphs for {config.epochs} epochs"
@@ -143,7 +140,7 @@ def fine_tune_gtok_decoder_only(
                 reconstructed_images,
                 images,
                 vq_loss_info,
-                glyphloss_fn=glyphloss_fn,
+                perceptual_loss_fn=None,
                 weights=config.loss_weights,
             )
             loss.backward()
