@@ -50,17 +50,27 @@ class ARModelConfig:
     aggregator_num_layers: int = 3
     aggregator_num_heads: int = 8
 
-    # GPT decoder (PrefixLM).
-    decoder_hidden_dim: int = 1024
-    decoder_num_layers: int = 24
+    # GPT decoder (PrefixLM).  ~141M-param configuration to reduce
+    # memorisation capacity and improve cross-font generalisation.
+    decoder_hidden_dim: int = 832
+    decoder_num_layers: int = 16
     decoder_num_heads: int = 16
-    decoder_mlp_dim: int = 2048
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
+    # Token perturbation for exposure-bias mitigation.
+    # When ``self_perturbation`` is True, perturbed tokens are replaced with
+    # the model's own argmax predictions; otherwise uniform-random tokens are
+    # used.  The probability ramps from 0 to ``perturbation_probability`` over
+    # ``perturbation_warmup_steps``.
     perturbation_probability: float = 0.2
+    self_perturbation: bool = True
+    perturbation_warmup_steps: int = 20_000
     reconstruction_temperature: float = 1.0
     num_multitoken_lookahead_steps: int = 2
+
+    # Regularisation on the style encoding path.
+    style_dropout: float = 0.3
 
     freeze_gtok: bool = True
 
@@ -775,6 +785,7 @@ class ARModel(SaveLoadModel):
             scale_var=True,
             downsample_ratio=style_downsample_ratio,
         )
+        self.style_dropout = nn.Dropout2d(config.style_dropout)
         self.aggregator = FeatureFusionModule(
             z_channel=config.encoder_feature_dim,
             n_heads=config.aggregator_num_heads,
@@ -813,6 +824,7 @@ class ARModel(SaveLoadModel):
         if config.freeze_gtok:
             self.freeze_gtok()
 
+        self._global_step: int = 0
         self._nfa_mode: bool = False
 
     def freeze_gtok(self) -> None:
@@ -978,6 +990,8 @@ class ARModel(SaveLoadModel):
         # Normalise from [0, 1] to [-1, 1] — upstream GPT expects zero-centred features.
         flattened = (flattened - 0.5) / 0.5
         encoded = self.style_encoder(flattened)
+        # Dropout on style features to reduce font-specific memorisation.
+        encoded = self.style_dropout(encoded)
         _, feature_channels, feature_height, feature_width = encoded.shape
         if (
             feature_height != self.token_grid_height
@@ -1017,26 +1031,52 @@ class ARModel(SaveLoadModel):
         self,
         conditioning_map: torch.Tensor,
         target_token_indices: torch.Tensor,
+        global_step: int = 0,
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        """Run PrefixLM teacher-forced decoding with token perturbation.
+        """Run PrefixLM teacher-forced decoding with scheduled token perturbation.
 
-        Randomly perturbs input tokens (with probability ``perturbation_probability``)
-        to mitigate the exposure bias inherent in PrefixLM, where the model sees
-        perfect code tokens during training but its own imperfect predictions
-        during free-running generation.
+        When ``self_perturbation`` is enabled, perturbed input tokens are
+        replaced with the model's own argmax predictions rather than uniform
+        random tokens.  This better simulates the error distribution the model
+        will encounter during free-running generation.
+
+        The perturbation probability ramps linearly from 0 to
+        ``perturbation_probability`` over ``perturbation_warmup_steps``, then
+        stays constant.
         """
         idx = target_token_indices[:, :-1]  # (B, N-1)
         targets = target_token_indices  # (B, N)
 
-        # Token perturbation: randomly replace some input tokens with random
-        # codebook entries to simulate free-running errors during training.
+        # Scheduled token perturbation.
         if self.training and self.config.perturbation_probability > 0:
-            mask = (
-                torch.rand_like(idx, dtype=torch.float)
-                < self.config.perturbation_probability
-            )
-            random_tokens = torch.randint_like(idx, low=0, high=self.codebook_size)
-            idx = torch.where(mask, random_tokens, idx)
+            warmup = self.config.perturbation_warmup_steps
+            if warmup > 0 and global_step < warmup:
+                prob = self.config.perturbation_probability * (global_step / warmup)
+            else:
+                prob = self.config.perturbation_probability
+
+            if prob > 0:
+                mask = torch.rand_like(idx, dtype=torch.float) < prob
+                if self.config.self_perturbation:
+                    # Use model's own predictions as replacement tokens.
+                    # First pass: get predictions with clean teacher-forced inputs.
+                    with torch.no_grad():
+                        clean_logits, _ = self.token_decoder(
+                            idx=idx,
+                            imgs_feature_map=conditioning_map,
+                            targets=targets,
+                        )
+                        # clean_logits[:, i, :] predicts targets[:, i].
+                        # We perturb idx[:, i] with the model's argmax.
+                        pred_tokens = torch.argmax(
+                            clean_logits[:, :-1, :], dim=-1
+                        )  # (B, N-1)
+                    idx = torch.where(mask, pred_tokens, idx)
+                else:
+                    random_tokens = torch.randint_like(
+                        idx, low=0, high=self.codebook_size
+                    )
+                    idx = torch.where(mask, random_tokens, idx)
 
         logits, _loss = self.token_decoder(
             idx=idx,
@@ -1104,6 +1144,7 @@ class ARModel(SaveLoadModel):
         *,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
+        global_step: int = 0,
     ) -> ARModelOutput:
         """Run teacher-forced PrefixLM decoding for visual pretraining."""
         conditioning_map = self.build_conditioning_map(
@@ -1124,6 +1165,7 @@ class ARModel(SaveLoadModel):
         logits, lookahead_logits = self._decode_prefix_lm(
             conditioning_map=conditioning_map,
             target_token_indices=target_token_indices,
+            global_step=global_step,
         )
 
         soft_token_embeddings, reconstructed_images = self.soft_decode(

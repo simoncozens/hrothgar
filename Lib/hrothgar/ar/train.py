@@ -182,7 +182,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             content_images,
             style_reference_images,
             target_images=target_images,
-            # scheduled_sampling_probability=scheduled_sampling_probability,
+            global_step=self.global_step,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
