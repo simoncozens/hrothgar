@@ -44,9 +44,9 @@ class GtokConfig:
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
         if self.image_size == 128:
-            return 16
+            return 32
         elif self.image_size == 64:
-            return 8
+            return 16
         else:
             raise ValueError(
                 f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
@@ -81,7 +81,7 @@ class GtokLossWeights:
     perceptual: float = 0.1
     edge: float = 2.0
     vq: float = 1.0
-    commit: float = 0.1
-    entropy: float = 1.0
-    aux_ar: float = 0.1  # Weight applied to loss_info.aux_ar_loss
+    commit: float = 0.25
+    entropy: float = 2.0
+    aux_ar: float = 0.075  # Weight applied to loss_info.aux_ar_loss
     character_ce: float = 1.0  # Weight applied to loss_info.character_ce
