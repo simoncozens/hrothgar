@@ -75,11 +75,15 @@ class GtokConfig:
 
 @dataclass(frozen=True)
 class GtokLossWeights:
-    """Weights applied to each loss term in ``compute_gtok_loss``."""
+    """Weights applied to each loss term in ``compute_gtok_loss``.
+
+    Commit and entropy losses are already scaled by
+    ``GtokConfig.quantizer_beta`` and
+    ``GtokConfig.quantizer_entropy_loss_ratio`` inside the
+    ``VectorQuantizer``, so no additional weights are needed here.
+    The VQ loss is always zero with EMA codebook updates.
+    """
 
     glyphloss: float = 1.0
-    vq: float = 1.0
-    commit: float = 0.25
-    entropy: float = 2.0
-    aux_ar: float = 0.075  # Weight applied to loss_info.aux_ar_loss
-    character_ce: float = 1.0  # Weight applied to loss_info.character_ce
+    aux_ar: float = 0.075
+    character_ce: float = 1.0
