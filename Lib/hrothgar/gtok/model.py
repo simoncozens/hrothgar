@@ -629,7 +629,6 @@ class GtokModel(SaveLoadModel):
             character_ce = F.cross_entropy(char_logits, latincore_idx)
 
         loss_info = GtokLossInfo(
-            vq_loss=raw_loss_info[0],
             commit_loss=raw_loss_info[1],
             entropy_loss=raw_loss_info[2],
             codebook_usage=raw_loss_info[3],

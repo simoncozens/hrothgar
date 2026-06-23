@@ -22,15 +22,12 @@ from hrothgar.gtok.config import GtokLossWeights
 
 @dataclass
 class GtokLossInfo:
-    vq_loss: Optional[torch.Tensor]
     commit_loss: Optional[torch.Tensor]
     entropy_loss: Optional[torch.Tensor]
-    codebook_usage: object  # Can be a scalar or tensor-like value
+    codebook_usage: object
     perplexity: Optional[torch.Tensor] = None
-    aux_ar_loss: Optional[torch.Tensor] = None  # Set by model when aux_ar_head exists
-    character_ce: Optional[torch.Tensor] = (
-        None  # Set by model when char classifier exists
-    )
+    aux_ar_loss: Optional[torch.Tensor] = None
+    character_ce: Optional[torch.Tensor] = None
 
 
 def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
@@ -48,112 +45,41 @@ def compute_gtok_loss(
     glyphloss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
     weights: GtokLossWeights = GtokLossWeights(),
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """Compute the full G-Tok training loss and return logging terms.
-
-    Args:
-            reconstructed_images: Model reconstruction output, shape ``(B, C, H, W)``.
-            target_images: Ground-truth target images, shape ``(B, C, H, W)``.
-            loss_info: ``GtokLossInfo`` object containing VQ-related losses and metrics.
-            glyphloss_fn: Callable that takes ``(reconstructed_images, target_images)``
-                    and returns a scalar glyph reconstruction loss tensor.  Typically
-                    ``GlyphReconstructionLoss`` from the ``glyphloss`` package or the
-                    standalone ``glyph_reconstruction_loss`` function.
-            weights: Coefficients for each term in the final weighted sum.
-
-    Returns:
-            Tuple ``(total_loss, terms)`` where:
-            - ``total_loss`` is the weighted scalar loss tensor for backpropagation.
-            - ``terms`` contains scalar tensors for individual components and weighted
-              values, suitable for TensorBoard logging.
-    """
+    """Compute the full G-Tok training loss and return logging terms."""
     glyphloss = glyphloss_fn(reconstructed_images, target_images)
 
-    (
-        vq_loss_raw,
-        commit_loss_raw,
-        entropy_loss_raw,
-        codebook_usage_raw,
-        perplexity_raw,
-    ) = (
-        loss_info.vq_loss,
-        loss_info.commit_loss,
-        loss_info.entropy_loss,
-        loss_info.codebook_usage,
-        loss_info.perplexity,
-    )
+    def _or_zero(t: Optional[torch.Tensor]) -> torch.Tensor:
+        return (
+            t if t is not None else torch.zeros((), device=reconstructed_images.device)
+        )
 
-    vq_loss = (
-        vq_loss_raw
-        if vq_loss_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
-    commit_loss = (
-        commit_loss_raw
-        if commit_loss_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
-    entropy_loss = (
-        entropy_loss_raw
-        if entropy_loss_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
+    commit_loss = _or_zero(loss_info.commit_loss)
+    entropy_loss = _or_zero(loss_info.entropy_loss)
+    aux_ar_loss = _or_zero(loss_info.aux_ar_loss)
+    character_ce = _or_zero(loss_info.character_ce)
+
     codebook_usage = _as_scalar_tensor(
-        codebook_usage_raw, device=reconstructed_images.device
+        loss_info.codebook_usage, device=reconstructed_images.device
     )
-    perplexity = (
-        perplexity_raw
-        if perplexity_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
-
-    # Auxiliary AR loss from the model's next-token prediction head
-    aux_ar_loss_raw = loss_info.aux_ar_loss
-    aux_ar_loss = (
-        aux_ar_loss_raw
-        if aux_ar_loss_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
-    weighted_aux_ar = weights.aux_ar * aux_ar_loss
-
-    # Character classification CE: encourages codebook to organise by character.
-    character_ce_raw = loss_info.character_ce
-    character_ce = (
-        character_ce_raw
-        if character_ce_raw is not None
-        else torch.zeros((), device=reconstructed_images.device)
-    )
-    weighted_character_ce = weights.character_ce * character_ce
-
-    weighted_glyphloss = weights.glyphloss * glyphloss
-    weighted_vq = weights.vq * vq_loss
-    weighted_commit = weights.commit * commit_loss
-    weighted_entropy = weights.entropy * entropy_loss
+    perplexity = _or_zero(loss_info.perplexity)
 
     total_loss = (
-        weighted_glyphloss
-        + weighted_vq
-        + weighted_commit
-        + weighted_entropy
-        + weighted_aux_ar
-        + weighted_character_ce
+        weights.glyphloss * glyphloss
+        + commit_loss
+        + entropy_loss
+        + weights.aux_ar * aux_ar_loss
+        + weights.character_ce * character_ce
     )
 
     terms: Dict[str, torch.Tensor] = {
         "total": total_loss,
         "glyphloss": glyphloss,
-        "vq": vq_loss,
         "commit": commit_loss,
         "entropy": entropy_loss,
         "aux_ar": aux_ar_loss,
+        "character_ce": character_ce,
         "codebook_usage": codebook_usage,
         "perplexity": perplexity,
-        "weighted_glyphloss": weighted_glyphloss,
-        "weighted_vq": weighted_vq,
-        "weighted_commit": weighted_commit,
-        "weighted_entropy": weighted_entropy,
-        "weighted_aux_ar": weighted_aux_ar,
-        "character_ce": character_ce,
-        "weighted_character_ce": weighted_character_ce,
     }
 
     return total_loss, terms
