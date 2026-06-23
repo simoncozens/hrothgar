@@ -85,5 +85,5 @@ class GtokLossWeights:
     """
 
     glyphloss: float = 1.0
-    aux_ar: float = 0.075
-    character_ce: float = 0.75
+    aux_ar: float = 0.05
+    character_ce: float = 0.5
