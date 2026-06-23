@@ -6,19 +6,21 @@ Loads the Google Fonts repository and produces batches of
 
 from __future__ import annotations
 
-from collections import Counter
 import math
 import random
+from collections import Counter
 from typing import Iterable, List, Sequence
 
 import torch
 from torch.utils.data import (
     BatchSampler,
-    Dataset as TorchDataset,
     WeightedRandomSampler,
 )
+from torch.utils.data import (
+    Dataset as TorchDataset,
+)
 
-from hrothgar.dataset import DatasetMaker, LATIN_CORE
+from hrothgar.dataset import LATIN_CORE, DatasetMaker
 
 # Dataset-level oversampling policy for underperforming style buckets.
 # Keep this in source (not CLI args) so training setup is reproducible from code.
@@ -214,6 +216,7 @@ class GTokDatasetMaker(DatasetMaker):
         self.axis_splits = kwargs.pop("axis_splits", 3)
         self.max_axis_positions_per_font = kwargs.pop("max_axis_positions_per_font", 24)
         self.class_balanced = kwargs.pop("class_balanced", False)
+        self.max_display_score = kwargs.pop("max_display_score", 0)
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
@@ -237,6 +240,18 @@ class GTokDatasetMaker(DatasetMaker):
                 or any("Special use" in k for k in font.tags().keys())
             )
         ]
+        # Filter out highly display-oriented fonts.
+        if self.max_display_score > 0:
+            before = len(self.googlefonts.fonts)
+            self.googlefonts.fonts = [
+                f
+                for f in self.googlefonts.fonts
+                if f.display_score() <= self.max_display_score
+            ]
+            print(
+                f"Display filter (max_score={self.max_display_score}): "
+                f"{before} → {len(self.googlefonts.fonts)} fonts"
+            )
 
     def train_set(self):
         return GTokAxisDataset(
