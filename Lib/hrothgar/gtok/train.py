@@ -6,6 +6,7 @@ from typing import Dict, Optional, Set
 import torch
 import torchvision
 import tqdm
+from glyphloss import GlyphReconstructionLoss
 from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
@@ -15,7 +16,6 @@ from hrothgar.gtok.config import GtokConfig, GtokLossWeights
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokModel
-from glyphloss import GlyphReconstructionLoss
 from hrothgar.utils import TrainingLoop
 
 
@@ -56,6 +56,7 @@ class GtokTrainingLoop(TrainingLoop):
             batch_size=16,
             image_size=config.image_size,
             class_balanced=True,
+            max_display_score=train_args.max_display_score,
         )
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -281,6 +282,16 @@ if __name__ == "__main__":
             "Optional path to a newline-delimited text file of font family names. "
             "When provided, logs additional targeted validation metrics and "
             "reconstruction previews using only these families."
+        ),
+    )
+    parser.add_argument(
+        "--max-display-score",
+        type=int,
+        default=50,
+        help=(
+            "Exclude fonts with display_score() above this threshold. "
+            "Display fonts have extreme stylistic variation that a shared "
+            "codebook struggles to represent.  Set to 0 to disable."
         ),
     )
     args = parser.parse_args()
