@@ -21,6 +21,15 @@ LATIN_KERNEL = [x for x in unicodes_per_glyphset("GF_Latin_Kernel") if x != 32]
 # Skip combining characters
 LATIN_KERNEL = [x for x in LATIN_KERNEL if not (0x0300 <= x <= 0x036F)]
 
+LGC_ALL = set(
+    [x for x in unicodes_per_glyphset("GF_Latin_Core") if x != 32]
+    + [x for x in unicodes_per_glyphset("GF_Latin_Plus") if x != 32]
+    + [x for x in unicodes_per_glyphset("GF_Latin_African") if x != 32]
+    + [x for x in unicodes_per_glyphset("GF_Cyrillic_Core") if x != 32]
+    + [x for x in unicodes_per_glyphset("GF_Greek_Core") if x != 32]
+)
+LGC_ALL = [x for x in LGC_ALL if not (0x0300 <= x <= 0x036F)]
+
 
 def _has_non_empty_outline(extents) -> bool:
     """Return True when HarfBuzz extents indicate drawable geometry."""
