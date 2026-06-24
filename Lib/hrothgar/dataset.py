@@ -65,12 +65,6 @@ class DatasetMaker:
         having_filter: Optional[Set[int]] = None
         if having is not None:
             having_filter = set(having)
-        if self.target_codepoints is not None:
-            having_filter = (
-                set(self.target_codepoints)
-                if having_filter is None
-                else having_filter | self.target_codepoints
-            )
 
         self.googlefonts = GoogleFonts(repo_url, having=having_filter)
         self.filter_fonts()
