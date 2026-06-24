@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from hrothgar.dataset import LATIN_CORE
+from hrothgar.dataset import LGC_ALL
 
 
 @dataclass
@@ -11,7 +11,7 @@ class GtokConfig:
     """Configuration for the G-Tok tokenizer."""
 
     image_size: int = 128
-    character_set: List[int] = field(default_factory=lambda: list(LATIN_CORE))
+    character_set: List[int] = field(default_factory=lambda: list(LGC_ALL))
 
     # CNN encoder/decoder parameters (from LlamaGen)
     cnn_base_channels: int = 128
