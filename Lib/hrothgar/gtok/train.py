@@ -310,7 +310,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-display-score",
         type=int,
-        default=100,
+        default=50,
         help=(
             "Exclude fonts with display_score() above this threshold. "
             "Display fonts have extreme stylistic variation that a shared "
