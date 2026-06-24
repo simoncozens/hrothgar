@@ -12,7 +12,7 @@ from typing import Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from hrothgar.dataset import Dataset, DatasetMaker, LATIN_KERNEL
+from hrothgar.dataset import Dataset, DatasetMaker, LATIN_CORE, LATIN_KERNEL
 from torch.utils.data import BatchSampler, DataLoader
 
 
@@ -203,6 +203,9 @@ class ARPhase1DatasetMaker(DatasetMaker):
         if self.target_only:
             return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().train_codepoint_filter(font_codepoints)
+        # Restrict to LATIN_CORE — _unicode_to_latincore can only handle these,
+        # and fonts often include Cyrillic, Greek, symbols, etc. outside this set.
+        chars = set(chars) & set(LATIN_CORE)
         if self.extra_target_codepoints is None:
             return chars
         return set(chars) | (set(font_codepoints) & self.extra_target_codepoints)
@@ -211,6 +214,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
         if self.target_only:
             return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().test_codepoint_filter(font_codepoints)
+        # Restrict to LATIN_CORE — _unicode_to_latincore can only handle these.
+        chars = set(chars) & set(LATIN_CORE)
         if self.extra_target_codepoints is None:
             return chars
         return set(chars) | (set(font_codepoints) & self.extra_target_codepoints)

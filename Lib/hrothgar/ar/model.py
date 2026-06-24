@@ -877,6 +877,7 @@ class ARModel(SaveLoadModel):
         if oob.any():
             print(
                 f"Warning: {oob.sum().item()} codepoint(s) not in LATIN_CORE; "
+                f"{codepoints[oob].tolist()}"
                 f"mapping to index 0"
             )
             indices = torch.where(oob, torch.zeros_like(indices), indices)
