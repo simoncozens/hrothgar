@@ -28,7 +28,7 @@ class GtokConfig:
     vit_attention_dropout: float = 0.0
 
     # Quantization parameters
-    quantizer_codebook_size: int = 8192  # Size of the codebook
+    quantizer_codebook_size: int = 16384  # Size of the codebook
     quantizer_beta: float = 0.5  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
 

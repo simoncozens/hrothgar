@@ -62,7 +62,7 @@ class GtokTrainingLoop(TrainingLoop):
             gtok_config=config,
         )
         self._maker = maker
-        self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        self.optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4)
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
         self.targeted_test_loader = None
