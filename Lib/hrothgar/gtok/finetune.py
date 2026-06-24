@@ -23,15 +23,21 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from hrothgar.dataset import Dataset, LATIN_CORE
+from hrothgar.dataset import LATIN_CORE, Dataset
 from hrothgar.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.losses import GtokLossWeights, compute_gtok_loss
 from hrothgar.gtok.model import GtokModel, load_model
 from hrothgar.utils import pick_device
 
 
-def _latin_core_filter(font_codepoints: set[int]) -> set[int]:
-    return set(font_codepoints) & set(LATIN_CORE)
+def _create_codepoint_filter(
+    character_set: list[int] | None = None,
+) -> Callable[[set[int]], set[int]]:
+    """Create a filter function for the configured character set."""
+    if character_set is None:
+        character_set = LATIN_CORE
+    chars = set(character_set)
+    return lambda font_codepoints: set(font_codepoints) & chars
 
 
 def _collate_gtok_batch(batch: list[dict], image_size: int) -> dict[str, torch.Tensor]:
@@ -92,10 +98,12 @@ def fine_tune_gtok_decoder_only(
     description: str | None = None,
     progress: Callable[[str], None] = print,
 ) -> None:
-    """Adapt only the G-Tok decoder path on Latin Core glyphs from one font."""
-    dataset = Dataset([font], codepoint_filter_fn=_latin_core_filter)
+    """Adapt only the G-Tok decoder path on configured character set glyphs from one font."""
+    dataset = Dataset(
+        [font], codepoint_filter_fn=_create_codepoint_filter(model.config.character_set)
+    )
     if len(dataset) == 0:
-        raise ValueError("Latin Core dataset is empty; cannot fine-tune G-Tok.")
+        raise ValueError("Character set dataset is empty; cannot fine-tune G-Tok.")
 
     trainable_names = configure_decoder_only_finetuning(model)
     if not trainable_names:
@@ -115,7 +123,7 @@ def fine_tune_gtok_decoder_only(
 
     progress(
         "GTok decoder-only fine-tuning on "
-        f"{len(dataset)} Latin Core glyphs for {config.epochs} epochs"
+        f"{len(dataset)} glyphs for {config.epochs} epochs"
     )
     for epoch in range(config.epochs):
         model.train()

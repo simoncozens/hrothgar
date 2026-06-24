@@ -104,6 +104,7 @@ class NFADatasetMaker:
         style_extra_per_epoch: int = 0,
         style_schedule_seed: int = 1234,
         target_codepoints: Optional[Sequence[int]] = None,
+        character_set: Optional[Sequence[int]] = None,
     ) -> None:
         self.font = font
         self.batch_size = batch_size
@@ -136,9 +137,11 @@ class NFADatasetMaker:
                 cp for cp in target_codepoints if font.has_codepoint(cp)
             ]
         else:
+            if character_set is None:
+                character_set = LATIN_CORE
             candidate_codepoints = [
                 cp
-                for cp in LATIN_CORE
+                for cp in character_set
                 if font.has_codepoint(cp) and _has_non_empty_glyph(font, cp)
             ]
 

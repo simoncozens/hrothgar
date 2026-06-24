@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Callable, Optional, Set
+from typing import Callable, Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
@@ -47,8 +47,12 @@ class DatasetMaker:
         canary_size: Optional[int] = None,
         image_size: int = 128,
         split_seed: int = 1234,
+        character_set: Optional[Sequence[int]] = None,
     ):
         self.target_codepoints = set(target_codepoints) if target_codepoints else None
+        if character_set is None:
+            character_set = LATIN_CORE
+        self._character_set: list[int] = sorted(set(character_set))
         having_filter: Optional[Set[int]] = None
         if having is not None:
             having_filter = set(having)
@@ -70,9 +74,9 @@ class DatasetMaker:
         self._test_loader_generator = torch.Generator()
         self._test_loader_generator.manual_seed(self.split_seed + 2)
 
-        # Test chars are a random split from GF Latin Core.
-        _, self.test_latincore_chars = train_test_split(
-            LATIN_CORE,
+        # Test chars are a random split from the character set.
+        _, self.test_codepoints = train_test_split(
+            self._character_set,
             random_state=self.split_seed,
         )
 
@@ -133,12 +137,12 @@ class DatasetMaker:
     def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
         if self.target_codepoints is not None:
             return set(font_codepoints) & self.target_codepoints
-        return set(font_codepoints) - set(self.test_latincore_chars)
+        return set(font_codepoints) - set(self.test_codepoints)
 
     def test_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
         if self.target_codepoints is not None:
             return set(font_codepoints) & self.target_codepoints
-        return set(font_codepoints) & set(self.test_latincore_chars)
+        return set(font_codepoints) & set(self.test_codepoints)
 
     def train_loader(self):
         return DataLoader(

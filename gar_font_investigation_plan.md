@@ -138,6 +138,14 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - Robust reconstruction under local noise
   - [x] Added optional Flan-T5 text conditioning path in G-Tok and threaded dataset descriptions into tokenizer training.
   - [x] Added fixed dataset-level 2x oversampling for `DISPLAY` and `DISPLAY_HANDWRITING` buckets in `hrothgar.gtok.dataset`.
+  - [x] Integrated inline health checks (linear probing, autocorrelation, oracle AR) into the G-Tok training loop via `hrothgar.gtok.health`. Logs to TensorBoard under `Health/*` at configurable intervals.
+
+- [ ] **Investigation: font-style representation**
+  - Linear probing shows 98.7% char accuracy but only 48.1% font-family accuracy
+  - Tokenizer codes are character-structured but style-weak — bottleneck for AR generator
+  - Increased `max_display_score` to 100 (removed filter), halved `character_ce` weight
+  - Consider: larger codebook (16384), lower entropy loss, more training steps with expanded style distribution
+  - Monitor health metrics during training to track font-accuracy improvement
 
 - [x] **Key decision: resolution**
   - Initial 64×64 runs train stably and validate the architecture direction
