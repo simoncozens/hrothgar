@@ -55,7 +55,7 @@ class HealthCheckConfig:
     # ---- Autocorrelation (next-token prediction with 1-layer probe) ----
     autocorr_every: int = 5_000
     autocorr_epochs: int = 5
-    autocorr_max_samples: int = 100
+    autocorr_max_samples: int = 1_000
     autocorr_batch_size: int = 64
     autocorr_lr: float = 1e-3
     autocorr_hidden_dim: int = 128
