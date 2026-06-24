@@ -14,6 +14,7 @@ from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok import compute_gtok_loss
 from hrothgar.gtok.config import GtokConfig, GtokLossWeights
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
+from hrothgar.gtok.health import GtokHealthCheck, HealthCheckConfig
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokModel
 from hrothgar.gtok.vgg_loss import VGG
@@ -118,6 +119,16 @@ class GtokTrainingLoop(TrainingLoop):
 
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
         self.validation_direction = "higher"  # We want to maximize SSIM
+
+        # Health checks — disabled in canary mode to keep it fast.
+        if train_args.canary == 0:
+            self.health_check = GtokHealthCheck(
+                HealthCheckConfig(
+                    dataset_path=train_args.dataset_path,
+                )
+            )
+        else:
+            self.health_check = None
 
     def train_step(self, batch):
         gt_images = batch["rendering"].to(self.device)
@@ -226,6 +237,16 @@ class GtokTrainingLoop(TrainingLoop):
                     metric_prefix="Validation/Targeted",
                     recon_image_tag="Reconstruction/Targeted_GT_vs_Recon",
                 )
+        # Health checks (linear probing, autocorrelation, oracle AR).
+        # These run at their own configured intervals and may switch the
+        # model between train/eval modes internally.
+        if self.health_check is not None:
+            self.health_check.maybe_run(
+                gtok=self.model,
+                image_size=self.model.config.image_size,
+                global_step=self.global_step,
+                writer=self.writer,
+            )
         self.model.train()
 
     def visualize(self, loader, image_tag: str):
