@@ -212,7 +212,12 @@ class GTokDatasetMaker(DatasetMaker):
     def __init__(self, repo_url: str, batch_size: int, **kwargs):
         target = kwargs.pop("target_codepoints", None)
         if target is None:
-            target = set(LATIN_CORE)
+            # Use the G-Tok config's character set if provided, else LATIN_CORE.
+            gtok_config = kwargs.pop("gtok_config", None)
+            if gtok_config is not None:
+                target = set(gtok_config.character_set)
+            else:
+                target = set(LATIN_CORE)
         self.axis_splits = kwargs.pop("axis_splits", 3)
         self.max_axis_positions_per_font = kwargs.pop("max_axis_positions_per_font", 24)
         self.class_balanced = kwargs.pop("class_balanced", False)
@@ -224,6 +229,7 @@ class GTokDatasetMaker(DatasetMaker):
             target_codepoints=target,
             canary_size=kwargs.pop("canary_size", None),
             image_size=kwargs.pop("image_size", 128),
+            character_set=list(target) if target else None,
             **kwargs,
         )
 

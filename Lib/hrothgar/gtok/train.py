@@ -59,6 +59,7 @@ class GtokTrainingLoop(TrainingLoop):
             image_size=config.image_size,
             class_balanced=True,
             max_display_score=train_args.max_display_score,
+            gtok_config=config,
         )
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)

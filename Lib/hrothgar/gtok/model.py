@@ -23,7 +23,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.vision_transformer import Encoder, EncoderBlock
 
-from hrothgar.dataset import LATIN_CORE
 from hrothgar.gtok.config import GtokConfig
 from hrothgar.gtok.losses import GtokLossInfo
 from hrothgar.llamagen_cnn import (
@@ -520,26 +519,26 @@ class GtokModel(SaveLoadModel):
         )
 
         # Character classifier: encourages codebook to organise by character.
-        # Takes mean-pooled quantized vectors and predicts LATIN_CORE class.
-        self._register_latincore_mapping()
-        latincore_size = len(LATIN_CORE)
+        # Takes mean-pooled quantized vectors and predicts class within the character set.
+        self._register_codepoint_mapping()
+        latincore_size = len(config.character_set)
         self.character_classifier = nn.Sequential(
             nn.Linear(config.quantizer_code_dim, 128),
             nn.GELU(),
             nn.Linear(128, latincore_size),
         )
 
-    def _register_latincore_mapping(self) -> None:
-        max_cp = max(LATIN_CORE)
+    def _register_codepoint_mapping(self) -> None:
+        max_cp = max(self.config.character_set)
         mapping = torch.full((max_cp + 1,), -1, dtype=torch.long)
-        for idx, cp in enumerate(LATIN_CORE):
+        for idx, cp in enumerate(self.config.character_set):
             mapping[cp] = idx
-        self.register_buffer("_latincore_map", mapping, persistent=False)
+        self.register_buffer("_codepoint_map", mapping, persistent=False)
 
     def _unicode_to_latincore(self, codepoints: torch.Tensor) -> torch.Tensor:
-        max_cp = self._latincore_map.shape[0] - 1  # type: ignore[attr-defined]
+        max_cp = self._codepoint_map.shape[0] - 1  # type: ignore[attr-defined]
         clamped = torch.clamp(codepoints, max=max_cp)
-        indices = self._latincore_map[clamped]  # type: ignore[attr-defined]
+        indices = self._codepoint_map[clamped]  # type: ignore[attr-defined]
         oob = indices < 0
         if oob.any():
             indices = torch.where(oob, torch.zeros_like(indices), indices)
