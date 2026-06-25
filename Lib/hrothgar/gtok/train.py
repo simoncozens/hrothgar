@@ -12,12 +12,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok import compute_gtok_loss
-from hrothgar.gtok.config import (
-    GtokConfig,
-    GtokLossWeights,
-    GtokLossWeightsPhase1,
-    GtokLossWeightsPhase2,
-)
+from hrothgar.gtok.config import GtokConfig, GtokLossWeights
 from hrothgar.gtok.dataset import GTokAxisDataset, GTokDatasetMaker
 from hrothgar.gtok.health import GtokHealthCheck, HealthCheckConfig
 from hrothgar.gtok.llamagen_lpips import LPIPS
@@ -48,18 +43,6 @@ def _read_targeted_validation_families(path: Optional[str]) -> Set[str]:
 
 
 class GtokTrainingLoop(TrainingLoop):
-    """Two-phase GTok training.
-
-    Phase 1 (0–PHASE1_STEPS): build the codebook for visual quality and
-    character alignment.  Auxiliary AR loss is disabled.
-
-    Phase 2 (PHASE1_STEPS+): freeze the codebook embedding and add
-    sequential structure via aux_ar, letting the ViT encoder learn to
-    route vectors through the existing codes.
-    """
-
-    PHASE1_STEPS: int = 20_000
-
     def post_init(self, train_args):
         gtok_config_kwargs = {
             "image_size": train_args.image_size,
@@ -68,8 +51,7 @@ class GtokTrainingLoop(TrainingLoop):
         config.save_sidecar(train_args.model_path)
 
         model = GtokModel(config).to(self.device)
-        self.loss_weights: GtokLossWeights = GtokLossWeightsPhase1
-        self._phase: int = 1
+        self.loss_weights = GtokLossWeights()
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
             train_args.dataset_path,
@@ -149,23 +131,7 @@ class GtokTrainingLoop(TrainingLoop):
         else:
             self.health_check = None
 
-    def _maybe_advance_phase(self) -> None:
-        """Check whether to transition from phase 1 to phase 2."""
-        if self._phase == 1 and self.global_step >= self.PHASE1_STEPS:
-            self._phase = 2
-            self.loss_weights = GtokLossWeightsPhase2
-            # Freeze the codebook — sequential structure is learned by the
-            # ViT encoder routing through the fixed codes.
-            self.model.quantizer.embedding.weight.requires_grad = False
-            print(
-                f"\n=== Phase 2 at step {self.global_step} ===\n"
-                f"  Codebook frozen ({self.model.quantizer.embedding.weight.shape[0]} entries)\n"
-                f"  aux_ar = {GtokLossWeightsPhase2.aux_ar}\n"
-                f"  character_ce = {GtokLossWeightsPhase2.character_ce}\n"
-            )
-
     def train_step(self, batch):
-        self._maybe_advance_phase()
         gt_images = batch["rendering"].to(self.device)
         codepoints = batch["char"].to(self.device)
         recon_images, vq_loss_info = self.model(gt_images, codepoints=codepoints)
