@@ -62,7 +62,7 @@ class GtokTrainingLoop(TrainingLoop):
             gtok_config=config,
         )
         self._maker = maker
-        self.optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4)
+        self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
         self.targeted_test_loader = None
@@ -252,10 +252,10 @@ class GtokTrainingLoop(TrainingLoop):
         # model between train/eval modes internally.
         if self.health_check is not None:
             self.health_check.maybe_run(
-                 gtok=self.model,
-                 image_size=self.model.config.image_size,
-                 global_step=self.global_step,
-                 writer=self.writer,
+                gtok=self.model,
+                image_size=self.model.config.image_size,
+                global_step=self.global_step,
+                writer=self.writer,
             )
         self.model.train()
 
