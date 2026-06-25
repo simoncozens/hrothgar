@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from hrothgar.gtok.model import GtokConfig, GtokModel
@@ -87,6 +88,11 @@ class HealthCheckConfig:
     _last_autocorr_step: int = field(default=-1, init=False)
     _last_oracle_ar_step: int = field(default=-1, init=False)
     _last_linear_probe_step: int = field(default=-1, init=False)
+    _last_codebook_sim_step: int = field(default=-1, init=False)
+
+    # ---- Codebook diagnostics ----
+    codebook_sim_every: int = 2_000
+    grad_norm_every: int = 100
 
 
 @dataclass
@@ -110,6 +116,9 @@ class HealthCheckResults:
     # Linear probing
     linear_probe_char_acc: Optional[float] = None
     linear_probe_font_acc: Optional[float] = None
+
+    # Codebook diagnostics
+    codebook_mean_similarity: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +212,14 @@ class GtokHealthCheck:
             )
             results.linear_probe_char_acc = char_acc
             results.linear_probe_font_acc = font_acc
+
+        # --- Codebook similarity ---
+        if (
+            self.config.codebook_sim_every > 0
+            and global_step % self.config.codebook_sim_every == 0
+        ):
+            sim = self._run_codebook_similarity(gtok, writer, global_step)
+            results.codebook_mean_similarity = sim
 
         return results
 
@@ -751,3 +768,71 @@ class GtokHealthCheck:
         if self._device is None:
             self._device = next(gtok.parameters()).device
         return self._device
+
+    # ------------------------------------------------------------------
+    # Codebook diagnostics
+    # ------------------------------------------------------------------
+
+    def _run_codebook_similarity(
+        self,
+        gtok: GtokModel,
+        writer: SummaryWriter,
+        global_step: int,
+    ) -> float:
+        """Compute mean pairwise cosine similarity of codebook entries.
+
+        High similarity (>0.7) means entries are redundant — the codebook
+        isn't using its capacity effectively.  Low similarity (<0.3) means
+        entries are diverse.
+        """
+        weight = gtok.quantizer.embedding.weight  # (N, D)
+        weight_norm = F.normalize(weight, dim=-1)
+        # Pairwise cosine similarity matrix: (N, N)
+        sim_matrix = weight_norm @ weight_norm.T
+        # Exclude self-similarity (diagonal = 1.0)
+        n = sim_matrix.shape[0]
+        mask = ~torch.eye(n, dtype=torch.bool, device=sim_matrix.device)
+        mean_sim = sim_matrix[mask].mean().item()
+
+        writer.add_scalar(
+            "Health/Codebook/MeanPairwiseSimilarity", mean_sim, global_step
+        )
+        return mean_sim
+
+    @staticmethod
+    def log_gradient_norms(
+        gtok: GtokModel,
+        writer: SummaryWriter,
+        global_step: int,
+    ) -> None:
+        """Log L2 gradient norms of encoder vs codebook parameters.
+
+        Called from the training loop after ``loss.backward()`` but before
+        ``optimizer.zero_grad()``.  A collapse in encoder gradient norm
+        relative to codebook gradient norm indicates the straight-through
+        estimator is stalling — the quantizer is rejecting encoder updates.
+        """
+        encoder_norm_sq = 0.0
+        vit_norm_sq = 0.0
+
+        for name, param in gtok.named_parameters():
+            if param.grad is None:
+                continue
+            gn = param.grad.data.norm(2).item() ** 2
+            if "quantizer.embedding" in name:
+                codebook_norm_sq += gn
+            elif "vit_encoder" in name or "vit_encoder_to_quantizer" in name:
+                vit_norm_sq += gn
+            elif "cnn_encoder" in name:
+                encoder_norm_sq += gn
+
+        cnn_grad = encoder_norm_sq**0.5
+        vit_grad = vit_norm_sq**0.5
+
+        writer.add_scalar("Health/GradNorm/CNN_Encoder", cnn_grad, global_step)
+        writer.add_scalar("Health/GradNorm/ViT_Encoder", vit_grad, global_step)
+        writer.add_scalar(
+            "Health/GradNorm/Encoder_Total",
+            (encoder_norm_sq + vit_norm_sq) ** 0.5,
+            global_step,
+        )
