@@ -101,11 +101,11 @@ class GtokLossWeights:
 # Loss weights for each phase of two-phase GTok training.
 # Phase 1: build the codebook for visual quality + character structure.
 # Phase 2: freeze codebook, add sequential structure via aux_ar.
-GTokLossWeightsPhase1 = GtokLossWeights(
+GtokLossWeightsPhase1 = GtokLossWeights(
     aux_ar=0.0,
     character_ce=1.0,
 )
-GTokLossWeightsPhase2 = GtokLossWeights(
+GtokLossWeightsPhase2 = GtokLossWeights(
     aux_ar=0.1,
     character_ce=0.1,
 )
