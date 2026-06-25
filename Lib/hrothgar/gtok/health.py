@@ -92,7 +92,7 @@ class HealthCheckConfig:
 
     # ---- Codebook diagnostics ----
     codebook_sim_every: int = 2_000
-    grad_norm_every: int = 100
+    grad_norm_every: int = 1_000
 
 
 @dataclass
