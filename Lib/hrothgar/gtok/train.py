@@ -254,6 +254,15 @@ class GtokTrainingLoop(TrainingLoop):
         return avg_ssim
 
     def post_train_step(self):
+        # Log encoder/codebook gradient norms if due.
+        if (
+            self.health_check is not None
+            and self.global_step % self.health_check.config.grad_norm_every == 0
+        ):
+            GtokHealthCheck.log_gradient_norms(
+                self.model, self.writer, self.global_step
+            )
+
         # Do some validation every 1000 steps
         if self.global_step % 1000 != 0:
             return
