@@ -286,10 +286,10 @@ class GtokTrainingLoop(TrainingLoop):
         # model between train/eval modes internally.
         if self.health_check is not None:
             self.health_check.maybe_run(
-                gtok=self.model,
-                image_size=self.model.config.image_size,
-                global_step=self.global_step,
-                writer=self.writer,
+                 gtok=self.model,
+                 image_size=self.model.config.image_size,
+                 global_step=self.global_step,
+                 writer=self.writer,
             )
         self.model.train()
 

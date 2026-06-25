@@ -136,8 +136,9 @@ class FrozenGtokFeatureExtractor:
         self.config = config
         self.device = device
         self.model.eval()
-        for param in self.model.parameters():
-            param.requires_grad = False
+        # NOTE: do NOT set requires_grad = False here — the @torch.no_grad()
+        # decorator on extract() already prevents gradient flow, and setting
+        # requires_grad = False would permanently disable training.
 
         self.downsampling_factor = 2 ** (len(config.cnn_channel_multipliers or []) - 1)
         self.grid_h = config.image_size // self.downsampling_factor
@@ -394,7 +395,7 @@ class GtokLinearProbe:
             total_loss = 0.0
             total_samples = 0
 
-            for batch in tqdm.tqdm(train_loader, desc=f"{desc} epoch {epoch+1}"):
+            for batch in tqdm.tqdm(train_loader, desc=f"{desc} epoch {epoch + 1}"):
                 images = batch["images"].to(self.device)
                 labels = batch[label_key].to(self.device)
 
@@ -426,7 +427,7 @@ class GtokLinearProbe:
             acc = correct / total if total > 0 else 0.0
             best_acc = max(best_acc, acc)
             print(
-                f"  {desc}  epoch {epoch+1:2d}  "
+                f"  {desc}  epoch {epoch + 1:2d}  "
                 f"train loss: {total_loss / max(total_samples, 1):.4f}  "
                 f"test acc: {acc:.4f}  (best: {best_acc:.4f})"
             )
