@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from hrothgar.dataset import LGC_ALL, LATIN_CORE
+from hrothgar.dataset import LATIN_CORE, LGC_ALL
 
 
 @dataclass
@@ -96,16 +96,3 @@ class GtokLossWeights:
     entropy: float = 2.0
     aux_ar: float = 0.01
     character_ce: float = 0.5
-
-
-# Loss weights for each phase of two-phase GTok training.
-# Phase 1: build the codebook for visual quality + character structure.
-# Phase 2: freeze codebook, add sequential structure via aux_ar.
-GtokLossWeightsPhase1 = GtokLossWeights(
-    aux_ar=0.0,
-    character_ce=1.0,
-)
-GtokLossWeightsPhase2 = GtokLossWeights(
-    aux_ar=0.1,
-    character_ce=0.1,
-)
