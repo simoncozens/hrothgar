@@ -31,6 +31,7 @@ class GtokConfig:
     quantizer_codebook_size: int = 16384  # Size of the codebook
     quantizer_beta: float = 0.5  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
+    quantizer_ema_decay: float = 0.97
 
     def __post_init__(self):
         """Set defaults for list parameters."""
@@ -93,5 +94,5 @@ class GtokLossWeights:
     vq: float = 1.0
     commit: float = 0.25
     entropy: float = 2.0
-    aux_ar: float = 0.0
+    aux_ar: float = 0.01
     character_ce: float = 0.5

@@ -479,7 +479,7 @@ class GtokModel(SaveLoadModel):
             entropy_loss_ratio=config.quantizer_entropy_loss_ratio,
             l2_norm=True,
             show_usage=True,
-            ema_decay=0.95,
+            ema_decay=config.quantizer_ema_decay,
         )
 
         # Projection from quantizer to ViT decoder input
