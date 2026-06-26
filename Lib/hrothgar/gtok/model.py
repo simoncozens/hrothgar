@@ -560,9 +560,9 @@ class GtokModel(SaveLoadModel):
         self._font_class_map = {name: i for i, name in enumerate(unique)}
         num_classes = len(unique)
         self.font_classifier = nn.Sequential(
-            nn.Linear(self.config.quantizer_code_dim, 128),
+            nn.Linear(self.config.vit_hidden_dim, 256),
             nn.GELU(),
-            nn.Linear(128, num_classes),
+            nn.Linear(256, num_classes),
         ).to(next(self.parameters()).device)
         print(f"Font classifier: {num_classes} classes — {unique}")
 
@@ -652,7 +652,7 @@ class GtokModel(SaveLoadModel):
             char_logits = self.character_classifier(pooled)
             character_ce = F.cross_entropy(char_logits, latincore_idx)
 
-        # Font classification: mean-pool quantized vectors and predict
+        # Font classification: mean-pool vit encoder features and predict
         # coarse style category (SERIF, SANS_SERIF, etc.).
         font_ce: Optional[torch.Tensor] = None
         if (
@@ -660,7 +660,7 @@ class GtokModel(SaveLoadModel):
             and font_labels is not None
             and self.training
         ):
-            pooled = quantized.mean(dim=1)  # (B, code_dim)
+            pooled = vit_out.mean(dim=1)  # (B, vit_hidden_dim)
             font_logits = self.font_classifier(pooled)
             font_ce = F.cross_entropy(font_logits, font_labels)
 
