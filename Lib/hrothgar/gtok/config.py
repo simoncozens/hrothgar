@@ -50,7 +50,7 @@ class GtokConfig:
         if self.image_size == 128:
             return 32
         elif self.image_size == 64:
-            return 32
+            return 16
         else:
             raise ValueError(
                 f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
