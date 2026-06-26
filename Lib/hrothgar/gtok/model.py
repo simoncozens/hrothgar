@@ -528,6 +528,12 @@ class GtokModel(SaveLoadModel):
             nn.Linear(128, latincore_size),
         )
 
+        # Font classifier: predicts coarse style category from quantized
+        # vectors.  Built lazily via register_font_classes() once the
+        # training loop has enumerated all unique classification strings.
+        self.font_classifier: Optional[nn.Sequential] = None
+        self._font_class_map: dict[str, int] = {}
+
     def _register_codepoint_mapping(self) -> None:
         max_cp = max(self.config.character_set)
         mapping = torch.full((max_cp + 1,), -1, dtype=torch.long)
@@ -544,6 +550,22 @@ class GtokModel(SaveLoadModel):
             indices = torch.where(oob, torch.zeros_like(indices), indices)
         return indices
 
+    def register_font_classes(self, class_names: list[str]) -> None:
+        """Build the font classifier from a list of unique classification strings.
+
+        Must be called once before training starts.  The classifier takes
+        mean-pooled quantized vectors and predicts the font style category.
+        """
+        unique = sorted(set(class_names))
+        self._font_class_map = {name: i for i, name in enumerate(unique)}
+        num_classes = len(unique)
+        self.font_classifier = nn.Sequential(
+            nn.Linear(self.config.quantizer_code_dim, 128),
+            nn.GELU(),
+            nn.Linear(128, num_classes),
+        ).to(next(self.parameters()).device)
+        print(f"Font classifier: {num_classes} classes — {unique}")
+
     def load(self, path: str, device: torch.device) -> None:
         """Load weights with ``strict=False`` to tolerate new heads."""
         state_dict = torch.load(path, map_location=device, weights_only=True)
@@ -553,6 +575,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         codepoints: Optional[torch.Tensor] = None,
+        font_labels: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Encode glyph images to quantized codes and compute VQ losses.
 
@@ -560,6 +583,8 @@ class GtokModel(SaveLoadModel):
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
             codepoints: Optional (B,) LongTensor of Unicode codepoints for
                 character classification loss.
+            font_labels: Optional (B,) LongTensor of font class indices for
+                font style classification loss.
 
         Returns:
             Tuple of:
@@ -627,6 +652,18 @@ class GtokModel(SaveLoadModel):
             char_logits = self.character_classifier(pooled)
             character_ce = F.cross_entropy(char_logits, latincore_idx)
 
+        # Font classification: mean-pool quantized vectors and predict
+        # coarse style category (SERIF, SANS_SERIF, etc.).
+        font_ce: Optional[torch.Tensor] = None
+        if (
+            self.font_classifier is not None
+            and font_labels is not None
+            and self.training
+        ):
+            pooled = quantized.mean(dim=1)  # (B, code_dim)
+            font_logits = self.font_classifier(pooled)
+            font_ce = F.cross_entropy(font_logits, font_labels)
+
         loss_info = GtokLossInfo(
             commit_loss=raw_loss_info[1],
             entropy_loss=raw_loss_info[2],
@@ -634,6 +671,7 @@ class GtokModel(SaveLoadModel):
             perplexity=indices_info[0],
             aux_ar_loss=aux_ar_loss,
             character_ce=character_ce,
+            font_ce=font_ce,
         )
 
         return quantized, loss_info
@@ -675,6 +713,7 @@ class GtokModel(SaveLoadModel):
         self,
         images: torch.Tensor,
         codepoints: Optional[torch.Tensor] = None,
+        font_labels: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, GtokLossInfo]:
         """Forward pass: encode, quantize, and decode.
 
@@ -682,13 +721,17 @@ class GtokModel(SaveLoadModel):
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
             codepoints: Optional (B,) LongTensor of Unicode codepoints for
                 character classification loss.
+            font_labels: Optional (B,) LongTensor of font class indices for
+                font style classification loss.
 
         Returns:
             Tuple of:
                 - reconstructed: Reconstructed images of shape (batch_size, 3, image_size, image_size)
                 - loss_info: VQ loss information tuple
         """
-        quantized, loss_info = self.encode(images, codepoints=codepoints)
+        quantized, loss_info = self.encode(
+            images, codepoints=codepoints, font_labels=font_labels
+        )
         reconstructed = self.decode(quantized)
         return reconstructed, loss_info
 

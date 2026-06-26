@@ -63,6 +63,7 @@ class GtokLossInfo:
     perplexity: Optional[torch.Tensor] = None
     aux_ar_loss: Optional[torch.Tensor] = None
     character_ce: Optional[torch.Tensor] = None
+    font_ce: Optional[torch.Tensor] = None
 
 
 def _as_scalar_tensor(value: object, *, device: torch.device) -> torch.Tensor:
@@ -119,6 +120,8 @@ def compute_gtok_loss(
     aux_ar_loss = _or_zero(loss_info.aux_ar_loss)
     character_ce = _or_zero(loss_info.character_ce)
 
+    font_ce = _or_zero(loss_info.font_ce)
+
     codebook_usage = _as_scalar_tensor(
         loss_info.codebook_usage, device=reconstructed_images.device
     )
@@ -132,6 +135,7 @@ def compute_gtok_loss(
     character_ce = _or_zero(loss_info.character_ce)
 
     weighted_character_ce = weights.character_ce * character_ce
+    weighted_font_ce = weights.font_ce * font_ce
     weighted_l1 = weights.l1 * l1_loss
     weighted_perceptual = weights.perceptual * perceptual_loss
     weighted_edge = weights.edge * edge_loss
@@ -146,6 +150,7 @@ def compute_gtok_loss(
         + weighted_entropy
         + weighted_aux_ar
         + weighted_character_ce
+        + weighted_font_ce
     )
 
     terms: Dict[str, torch.Tensor] = {
@@ -166,6 +171,8 @@ def compute_gtok_loss(
         "weighted_entropy": weighted_entropy,
         "weighted_aux_ar": weighted_aux_ar,
         "weighted_character_ce": weighted_character_ce,
+        "font_ce": font_ce,
+        "weighted_font_ce": weighted_font_ce,
     }
 
     return total_loss, terms

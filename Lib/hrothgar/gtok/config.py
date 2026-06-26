@@ -96,3 +96,4 @@ class GtokLossWeights:
     entropy: float = 2.0
     aux_ar: float = 0.01
     character_ce: float = 0.5
+    font_ce: float = 1.0
