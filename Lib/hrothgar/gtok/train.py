@@ -63,6 +63,11 @@ class GtokTrainingLoop(TrainingLoop):
         )
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+
+        # Register font classes from the dataset for the font classifier head.
+        font_classes = sorted({f.classification() for f in maker.googlefonts.fonts})
+        model.register_font_classes(font_classes)
+
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
         self.targeted_test_loader = None
@@ -134,7 +139,17 @@ class GtokTrainingLoop(TrainingLoop):
     def train_step(self, batch):
         gt_images = batch["rendering"].to(self.device)
         codepoints = batch["char"].to(self.device)
-        recon_images, vq_loss_info = self.model(gt_images, codepoints=codepoints)
+        font_labels = None
+        if self.model._font_class_map:
+            fm = self.model._font_class_map
+            font_labels = torch.tensor(
+                [fm.get(c, 0) for c in batch["classification"]],
+                device=self.device,
+                dtype=torch.long,
+            )
+        recon_images, vq_loss_info = self.model(
+            gt_images, codepoints=codepoints, font_labels=font_labels
+        )
         loss, loss_info = compute_gtok_loss(
             recon_images,
             gt_images,
