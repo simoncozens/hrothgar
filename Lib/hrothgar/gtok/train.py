@@ -256,6 +256,10 @@ class GtokTrainingLoop(TrainingLoop):
             )
             if avg_ssim is not None:
                 self.checkpoint_if_best(avg_ssim)
+            if self.global_step % 10_000 == 0:
+                self.model.save(
+                    self.model_path.replace(".pth", f"_step{self.global_step}.pth")
+                )
             if self.targeted_test_loader is not None:
                 self._run_validation_pass(
                     self.targeted_test_loader,
