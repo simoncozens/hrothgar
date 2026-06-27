@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from hrothgar.dataset import LGC_ALL
+from hrothgar.dataset import LATIN_CORE, LGC_ALL
 
 
 @dataclass
@@ -11,7 +11,7 @@ class GtokConfig:
     """Configuration for the G-Tok tokenizer."""
 
     image_size: int = 128
-    character_set: List[int] = field(default_factory=lambda: list(LGC_ALL))
+    character_set: List[int] = field(default_factory=lambda: list(LATIN_CORE))
 
     # CNN encoder/decoder parameters (from LlamaGen)
     cnn_base_channels: int = 128
@@ -29,7 +29,7 @@ class GtokConfig:
 
     # Quantization parameters
     quantizer_codebook_size: int = 4096  # Size of the codebook
-    quantizer_beta: float = 5.0  # Commitment loss weight
+    quantizer_beta: float = 0.5  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
     quantizer_ema_decay: float = 0.97
 
@@ -50,7 +50,7 @@ class GtokConfig:
         if self.image_size == 128:
             return 32
         elif self.image_size == 64:
-            return 32
+            return 16
         else:
             raise ValueError(
                 f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
@@ -88,11 +88,11 @@ class GtokLossWeights:
     The VQ loss is always zero with EMA codebook updates.
     """
 
-    l1: float = 10.0
-    perceptual: float = 0.5
-    edge: float = 10.0
+    l1: float = 1.0
+    perceptual: float = 0.1
+    edge: float = 2.0
     vq: float = 1.0
-    commit: float = 1.0
+    commit: float = 0.25
     entropy: float = 2.0
     aux_ar: float = 0.01
     character_ce: float = 0.5
