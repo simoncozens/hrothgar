@@ -30,6 +30,8 @@ LGC_ALL = set(
 )
 LGC_ALL = [x for x in LGC_ALL if not (0x0300 <= x <= 0x036F)]
 
+CAPS_ONLY = [ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$₹"]
+
 
 def _has_non_empty_outline(extents) -> bool:
     """Return True when HarfBuzz extents indicate drawable geometry."""
