@@ -222,6 +222,11 @@ class GTokDatasetMaker(DatasetMaker):
         self.max_axis_positions_per_font = kwargs.pop("max_axis_positions_per_font", 24)
         self.class_balanced = kwargs.pop("class_balanced", False)
         self.max_display_score = kwargs.pop("max_display_score", 0)
+        self.render_time_augmentation = kwargs.pop("render_time_augmentation", False)
+        if self.render_time_augmentation:
+            # One entry per font — augmentation happens at render time.
+            self.axis_splits = 1
+            self.max_axis_positions_per_font = 1
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
@@ -305,18 +310,32 @@ class GTokDatasetMaker(DatasetMaker):
 
     def collate_fn(self, batch):
         chars = torch.tensor([item["char"] for item in batch])
-        renderings = torch.stack(
-            [
+        renderings = []
+        for item in batch:
+            font = item["font"]
+            axis_pos = item["axis_position"]
+            if (
+                self.render_time_augmentation
+                and axis_pos is not None
+                and len(axis_pos) > 0
+            ):
+                # Sample a random axis position each time this font is seen.
+                # Static fonts have axis_position=[] (or [[]]), so they are
+                # unaffected.
+                all_positions = font.sample_axis_positions(splits=5)
+                all_positions = _limit_axis_positions(
+                    all_positions, self.max_axis_positions_per_font
+                )
+                if all_positions:
+                    axis_pos = random.choice(all_positions)
+            renderings.append(
                 torch.tensor(
-                    item["font"].render(
-                        item["char"],
-                        size=self.image_size,
-                        axis_position=item["axis_position"],
+                    font.render(
+                        item["char"], size=self.image_size, axis_position=axis_pos
                     )
                 )
-                for item in batch
-            ]
-        )
+            )
+        renderings = torch.stack(renderings)
         descriptions = [
             item["font"].description_with_tags_and_display() for item in batch
         ]
