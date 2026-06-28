@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from hrothgar.dataset import CAPS_ONLY, LATIN_CORE
+from hrothgar.dataset import LGC_ALL
 
 
 @dataclass
@@ -11,7 +11,7 @@ class GtokConfig:
     """Configuration for the G-Tok tokenizer."""
 
     image_size: int = 128
-    character_set: List[int] = field(default_factory=lambda: list(CAPS_ONLY))
+    character_set: List[int] = field(default_factory=lambda: list(LGC_ALL))
 
     # CNN encoder/decoder parameters (from LlamaGen)
     cnn_base_channels: int = 128
@@ -48,9 +48,9 @@ class GtokConfig:
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
         if self.image_size == 128:
-            return 32
+            return 64
         elif self.image_size == 64:
-            return 16
+            return 32
         else:
             raise ValueError(
                 f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
@@ -92,7 +92,7 @@ class GtokLossWeights:
     perceptual: float = 0.1
     edge: float = 2.0
     vq: float = 1.0
-    commit: float = 0.25
+    commit: float = 0.5
     entropy: float = 2.0
     aux_ar: float = 0.01
     character_ce: float = 0.5
