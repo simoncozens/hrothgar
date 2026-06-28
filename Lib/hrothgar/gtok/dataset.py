@@ -314,18 +314,11 @@ class GTokDatasetMaker(DatasetMaker):
         for item in batch:
             font = item["font"]
             axis_pos = item["axis_position"]
-            if (
-                self.render_time_augmentation
-                and axis_pos is not None
-                and len(axis_pos) > 0
-            ):
+            if self.render_time_augmentation:
                 # Sample a random axis position each time this font is seen.
                 # Static fonts have axis_position=[] (or [[]]), so they are
                 # unaffected.
                 all_positions = font.sample_axis_positions(splits=5)
-                all_positions = _limit_axis_positions(
-                    all_positions, self.max_axis_positions_per_font
-                )
                 if all_positions:
                     axis_pos = random.choice(all_positions)
             renderings.append(
