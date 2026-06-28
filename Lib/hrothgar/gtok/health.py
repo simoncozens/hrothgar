@@ -89,10 +89,18 @@ class HealthCheckConfig:
     _last_oracle_ar_step: int = field(default=-1, init=False)
     _last_linear_probe_step: int = field(default=-1, init=False)
     _last_codebook_sim_step: int = field(default=-1, init=False)
+    _last_code_entropy_step: int = field(default=-1, init=False)
 
     # ---- Codebook diagnostics ----
     codebook_sim_every: int = 2_000
     grad_norm_every: int = 1_000
+
+    # ---- Code entropy (per-code font entropy) ----
+    code_entropy_every: int = 2_000
+    code_entropy_num_fonts: int = 100
+    code_entropy_max_samples: int = 10_000
+    code_entropy_batch_size: int = 64
+    code_entropy_seed: int = 42
 
 
 @dataclass
@@ -119,6 +127,13 @@ class HealthCheckResults:
 
     # Codebook diagnostics
     codebook_mean_similarity: Optional[float] = None
+
+    # Code entropy
+    code_entropy_mean: Optional[float] = None
+    code_entropy_median: Optional[float] = None
+    code_entropy_active_codes: Optional[int] = None
+    code_entropy_high_frac: Optional[float] = None
+    code_entropy_low_frac: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +166,7 @@ class GtokHealthCheck:
         self._autocorr_cache: Optional[dict] = None
         self._oracle_ar_cache: Optional[dict] = None
         self._linear_probe_cache: Optional[dict] = None
+        self._code_entropy_cache: Optional[dict] = None
 
     def maybe_run(
         self,
@@ -220,6 +236,22 @@ class GtokHealthCheck:
         ):
             sim = self._run_codebook_similarity(gtok, writer, global_step)
             results.codebook_mean_similarity = sim
+
+        # --- Code entropy ---
+        if (
+            self.config.code_entropy_every > 0
+            and global_step % self.config.code_entropy_every == 0
+        ):
+            if self._code_entropy_cache is None:
+                self._code_entropy_cache = self._build_code_entropy(gtok, image_size)
+            ent_results = self._run_code_entropy(gtok, writer, global_step)
+            (
+                results.code_entropy_mean,
+                results.code_entropy_median,
+                results.code_entropy_active_codes,
+                results.code_entropy_high_frac,
+                results.code_entropy_low_frac,
+            ) = ent_results
 
         return results
 
@@ -798,6 +830,239 @@ class GtokHealthCheck:
             "Health/Codebook/MeanPairwiseSimilarity", mean_sim, global_step
         )
         return mean_sim
+
+    # ------------------------------------------------------------------
+    # Code entropy (per-code font entropy)
+    # ------------------------------------------------------------------
+
+    def _build_code_entropy(self, gtok: GtokModel, image_size: int) -> dict:
+        """Pre-build a dataset for per-code font entropy computation.
+
+        Samples glyphs from many font families and builds a DataLoader that
+        yields ``(image_batch, font_index_batch)`` pairs.  Font identities
+        are tracked so we can count which fonts use each codebook entry.
+        """
+        import numpy as np
+        from torch.utils.data import DataLoader, Dataset
+
+        from hrothgar.googlefonts import GoogleFonts
+
+        cfg = self.config
+        rng = np.random.RandomState(cfg.code_entropy_seed)
+
+        gf = GoogleFonts(cfg.dataset_path)
+        all_fonts = list(gf.fonts)
+        rng.shuffle(all_fonts)
+
+        # Group by family, then select the first N families.
+        family_to_fonts: dict[str, list] = {}
+        for font in all_fonts:
+            family_to_fonts.setdefault(font.family, []).append(font)
+
+        families = sorted(family_to_fonts.keys())
+        if cfg.code_entropy_num_fonts > 0:
+            families = families[: cfg.code_entropy_num_fonts]
+
+        font_to_index = {fam: i for i, fam in enumerate(families)}
+
+        # Build sample list: (font, cp, font_index) for each glyph.
+        probe_chars = [
+            ord(c)
+            for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        ]
+        samples: list[tuple] = []
+        for fam in families:
+            f_idx = font_to_index[fam]
+            for font in family_to_fonts[fam]:
+                available = probe_chars  # simplified: try all, let render handle misses
+                for cp in available:
+                    if font.has_codepoint(cp):
+                        samples.append((font, cp, f_idx))
+
+        if (
+            cfg.code_entropy_max_samples > 0
+            and len(samples) > cfg.code_entropy_max_samples
+        ):
+            indices = rng.choice(
+                len(samples), cfg.code_entropy_max_samples, replace=False
+            )
+            samples = [samples[i] for i in indices]
+
+        print(
+            f"[CodeEntropy] Built dataset: {len(samples)} samples "
+            f"across {len(families)} font families"
+        )
+
+        device = self._resolve_device(gtok)
+
+        class _EntropyDataset(Dataset):
+            """Dataset that renders glyphs and returns (image, font_index)."""
+
+            def __init__(self, samples, image_size):
+                self.samples = samples
+                self.image_size = image_size
+
+            def __len__(self):
+                return len(self.samples)
+
+            def __getitem__(self, idx):
+                font, cp, f_idx = self.samples[idx]
+                image = torch.tensor(
+                    font.render(cp, size=self.image_size), dtype=torch.float32
+                )
+                return image, f_idx
+
+        def _collate(batch):
+            images = torch.stack([item[0] for item in batch])
+            font_indices = torch.tensor([item[1] for item in batch], dtype=torch.long)
+            return {"image": images, "font_idx": font_indices}
+
+        dataset = _EntropyDataset(samples, image_size)
+        loader = DataLoader(
+            dataset,
+            batch_size=cfg.code_entropy_batch_size,
+            shuffle=True,
+            drop_last=False,
+            collate_fn=_collate,
+            num_workers=4,
+            pin_memory=True,
+        )
+
+        return {
+            "loader": loader,
+            "num_fonts": len(families),
+            "num_samples": len(samples),
+        }
+
+    def _run_code_entropy(
+        self,
+        gtok: GtokModel,
+        writer: SummaryWriter,
+        global_step: int,
+    ) -> Tuple[float, float, int, float, float]:
+        """Compute per-code font entropy and log to TensorBoard.
+
+        For each code in the codebook, we compute the entropy of the
+        distribution of fonts that use it:
+
+            H(code) = -Σ p(font | code) * log₂(p(font | code))
+
+        where p(font | code) is estimated from code usage counts across a
+        diverse validation set.  High entropy means the code is shared across
+        many fonts (good for generalization); low entropy means the code is
+        specific to one or a few fonts (bad — the tokenizer is overfitting to
+        font identity).
+
+        Returns:
+            Tuple of (mean_entropy_normalised, median_entropy_normalised,
+                      active_codes, high_entropy_fraction, low_entropy_fraction).
+        """
+        import math
+
+        cache = self._code_entropy_cache
+        assert cache is not None
+
+        device = self._resolve_device(gtok)
+        loader = cache["loader"]
+        num_fonts = cache["num_fonts"]
+        codebook_size = gtok.config.quantizer_codebook_size
+        seq_len = gtok.sequence_length
+
+        # Accumulator: count[code, font] — how many times each code was
+        # assigned to a glyph from each font.
+        count = torch.zeros(codebook_size, num_fonts, dtype=torch.long, device=device)
+
+        was_training = gtok.training
+        gtok.eval()
+
+        try:
+            with torch.no_grad():
+                for batch in loader:
+                    images = batch["image"].to(device)  # (B, 3, H, W)
+                    font_indices = batch["font_idx"].to(device)  # (B,)
+                    B = images.shape[0]
+
+                    # Run the encoder manually, following the same pattern as
+                    # ``TokenSequenceDataset`` in ``autocorrelation.py``, to
+                    # extract discrete code indices.
+                    cnn_out = gtok.cnn_encoder(images)
+                    tokens = gtok.proj_patch(cnn_out).flatten(2).transpose(1, 2)
+                    vit_out = gtok.vit_encoder(tokens)
+                    pre_quant = gtok.vit_encoder_to_quantizer(vit_out)
+                    _, _channels, _h, _w = cnn_out.shape
+                    pre_quant_4d = pre_quant.reshape(B, _h, _w, -1).permute(0, 3, 1, 2)
+                    _, _, indices_info = gtok.quantizer(pre_quant_4d)
+                    code_indices = indices_info[2].view(B, seq_len)  # (B, N)
+
+                    # Accumulate counts.
+                    for b in range(B):
+                        for n in range(seq_len):
+                            code = code_indices[b, n]
+                            fnt = font_indices[b]
+                            count[code, fnt] += 1
+
+            # --- Compute per-code entropy ---
+            code_totals = count.sum(dim=1)  # (codebook_size,)
+            active_mask = code_totals > 0
+            num_active = int(active_mask.sum().item())
+
+            if num_active == 0:
+                writer.add_scalar("Health/CodeEntropy/Mean", 0.0, global_step)
+                writer.add_scalar("Health/CodeEntropy/ActiveCodes", 0, global_step)
+                return 0.0, 0.0, 0, 0.0, 0.0
+
+            active_count = count[active_mask].float()  # (A, F)
+            active_totals = code_totals[active_mask].float()  # (A,)
+
+            # p(font | code) = count[code, font] / total[code]
+            p = active_count / active_totals.unsqueeze(1)  # (A, F)
+
+            # Entropy in bits: H = -Σ p log₂ p
+            # Add tiny epsilon to avoid log₂(0) = -inf (happens when a code
+            # was never used for a particular font).
+            entropy = -torch.sum(p * torch.log2(p + 1e-12), dim=1)  # (A,)
+
+            # Normalize by maximum possible entropy (log₂(num_fonts)) so the
+            # value is in [0, 1].  1.0 = perfect uniformity across all fonts.
+            max_entropy = math.log2(max(num_fonts, 1))
+            if max_entropy > 0:
+                norm_entropy = entropy / max_entropy
+            else:
+                norm_entropy = entropy
+
+            mean_ent = float(norm_entropy.mean().item())
+            median_ent = float(norm_entropy.median().item())
+
+            # Fraction of active codes that are "general" (entropy > 0.5 of max)
+            # and "font-specific" (entropy < 0.1 of max).
+            high_frac = float((norm_entropy > 0.5).float().mean().item())
+            low_frac = float((norm_entropy < 0.1).float().mean().item())
+
+            # --- Log to TensorBoard ---
+            writer.add_scalar("Health/CodeEntropy/Mean", mean_ent, global_step)
+            writer.add_scalar("Health/CodeEntropy/Median", median_ent, global_step)
+            writer.add_scalar("Health/CodeEntropy/ActiveCodes", num_active, global_step)
+            writer.add_scalar(
+                "Health/CodeEntropy/FractionHighEntropy",
+                high_frac,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/FractionLowEntropy",
+                low_frac,
+                global_step,
+            )
+            writer.add_histogram(
+                "Health/CodeEntropy/Distribution",
+                norm_entropy.cpu(),
+                global_step,
+            )
+
+            return mean_ent, median_ent, num_active, high_frac, low_frac
+
+        finally:
+            if was_training:
+                gtok.train()
 
     @staticmethod
     def log_gradient_norms(
