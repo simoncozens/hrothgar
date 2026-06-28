@@ -6,10 +6,10 @@ from typing import Dict, Optional, Set
 import torch
 import torchvision
 import tqdm
-from glyphloss import GlyphReconstructionLoss
 from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
+from glyphloss import GlyphReconstructionLoss
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok import compute_gtok_loss
 from hrothgar.gtok.config import GtokConfig, GtokLossWeights
@@ -115,6 +115,7 @@ class GtokTrainingLoop(TrainingLoop):
                     "skipping targeted validation."
                 )
         self.perceptual_loss_fn = VGG().to(self.device)
+        self.glyphloss_fn = GlyphReconstructionLoss(lambda_pixel=0.0).to(self.device)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
         self.model = model
@@ -156,6 +157,7 @@ class GtokTrainingLoop(TrainingLoop):
             gt_images,
             vq_loss_info,
             perceptual_loss_fn=self.perceptual_loss_fn,
+            glyphloss_fn=self.glyphloss_fn,
             weights=self.loss_weights,
         )
         return loss, loss_info
