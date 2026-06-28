@@ -7,23 +7,11 @@ from Torch/data pipeline code so it can be tested in isolation.
 from __future__ import annotations
 
 import argparse
-import math
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import freetype
 import numpy as np
-from PIL import Image
-
-__all__ = [
-    "_bitmap_to_array",
-    "_paste_bitmap_onto_canvas",
-    "_fit_bitmap_to_canvas",
-    "_glyph_bounds_in_font_units",
-    "_estimate_ppem_for_canvas",
-    "render_gid",
-    "is_blank_rendering",
-]
 
 
 def _bitmap_to_array(bitmap: Any) -> np.ndarray:
@@ -88,97 +76,13 @@ def _paste_bitmap_onto_canvas(
     canvas[dst_y0_clamped:dst_y1_clamped, dst_x0_clamped:dst_x1_clamped] = 255 - src
 
 
-def _fit_bitmap_to_canvas(
-    bitmap_array: np.ndarray,
-    size: int,
-    trim_to_rsb: bool,
-    border: int = 1,
-    allow_upscale: bool = False,
-) -> np.ndarray:
-    """Scale a glyph bitmap to fill the canvas while preserving aspect ratio."""
-    if bitmap_array.size == 0:
-        width = size if not trim_to_rsb else max(1, 2 * border + 1)
-        return np.full((size, width), 255, dtype=np.uint8)
+# from matrix_disk_cache import MatrixDiskCache
 
-    src_height, src_width = bitmap_array.shape
-    available_height = max(1, size - 2 * border)
-    if trim_to_rsb:
-        scale = available_height / src_height
-        target_height = available_height
-        target_width = max(1, int(round(src_width * scale)))
-        canvas_width = target_width + 2 * border
-    else:
-        available_width = max(1, size - 2 * border)
-        scale = min(available_width / src_width, available_height / src_height)
-        target_width = max(1, min(available_width, int(round(src_width * scale))))
-        target_height = max(1, min(available_height, int(round(src_height * scale))))
-        canvas_width = size
-
-    if not allow_upscale and scale > 1.0:
-        raise ValueError("bitmap would need upscaling to fit target canvas")
-
-    if target_width == src_width and target_height == src_height:
-        resized_bitmap = bitmap_array
-    else:
-        resized_bitmap = np.asarray(
-            Image.fromarray(bitmap_array).resize(
-                (target_width, target_height),
-                resample=Image.Resampling.LANCZOS,
-            ),
-            dtype=np.uint8,
-        )
-
-    canvas = np.full((size, canvas_width), 255, dtype=np.uint8)
-    offset_x = max(border, (canvas_width - target_width) // 2)
-    offset_y = max(border, (size - target_height) // 2)
-    canvas[offset_y : offset_y + target_height, offset_x : offset_x + target_width] = (
-        255 - resized_bitmap
-    )
-    return canvas
+# Initialize the cache with an optional maxsize
+# cache = MatrixDiskCache(cache_dir="image_cache")
 
 
-def _glyph_bounds_in_font_units(face: freetype.Face, gid: int) -> tuple[int, int]:
-    """Return glyph bounds in font units for ppem estimation."""
-    face.load_glyph(
-        gid,
-        freetype.FT_LOAD_FLAGS["FT_LOAD_NO_SCALE"]
-        | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
-    )
-    outline = face.glyph.outline
-    if outline.n_points > 0:
-        bbox = outline.get_bbox()
-        width = max(0, int(bbox.xMax) - int(bbox.xMin))
-        height = max(0, int(bbox.yMax) - int(bbox.yMin))
-    else:
-        metrics = face.glyph.metrics
-        width = max(0, int(metrics.width))
-        height = max(0, int(metrics.height))
-    return width, height
-
-
-def _estimate_ppem_for_canvas(
-    face: freetype.Face,
-    gid: int,
-    size: int,
-    trim_to_rsb: bool,
-    border: int = 1,
-) -> int:
-    """Choose a ppem that should produce a bitmap large enough to downsample."""
-    width_units, height_units = _glyph_bounds_in_font_units(face, gid)
-    if width_units <= 0 or height_units <= 0:
-        return max(1, int(round(size / 1.5)))
-
-    upem = int(face.units_per_EM)
-    available_height = max(1, size - 2 * border)
-    height_ppem = math.ceil(available_height * upem / height_units)
-    if trim_to_rsb:
-        return max(1, height_ppem)
-
-    available_width = max(1, size - 2 * border)
-    width_ppem = math.ceil(available_width * upem / width_units)
-    return max(1, height_ppem, width_ppem)
-
-
+# @cache.cache
 def render_gid(
     font_path: str | Path,
     gid: int,
@@ -191,15 +95,13 @@ def render_gid(
     Args:
         font_path: Path to the font file.
         gid: Glyph index (GID) to render.
-        size: Output image height. The glyph is scaled to fit within the
-            canvas with a 1-pixel border while preserving aspect ratio.
-        trim_to_rsb: If True, return a variable-width output cropped to the
-            fitted glyph width plus border padding on each side.
+        size: Output image size. Output is (3, size, size).
+        trim_to_rsb: If True, trim the output to the right sidebearing instead of the full square. This can be useful for certain applications but may produce variable-width outputs.
         axis_position: Optional in-order list of variable-font user-space
             design coordinates (matching fvar axis order).
 
     Returns:
-        Float32 image in [0, 1], shaped (3, size, width).
+        Float32 image in [0, 1], shaped (3, size, size).
     """
     if size <= 0:
         raise ValueError("size must be positive")
@@ -214,46 +116,38 @@ def render_gid(
     if upem <= 0:
         raise ValueError(f"Font has invalid units-per-em: {upem}")
 
-    ppem = _estimate_ppem_for_canvas(face, gid, size, trim_to_rsb=trim_to_rsb)
-    for ppem_adjustment in range(4):
-        face.set_pixel_sizes(0, ppem + ppem_adjustment)
-        face.load_glyph(
-            gid,
-            freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
-            | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
-            # Hinting failures can cause segfaults we can't catch
-        )
+    # Match the existing project convention: 1 upem ascent above baseline and
+    # 0.5 upem descent below baseline in the output square.
+    ppem = max(1, int(round(size / 1.5)))
+    face.set_pixel_sizes(0, ppem)
+    face.load_glyph(
+        gid,
+        freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
+        | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
+        # Hinting failures can cause segfaults we can't catch
+    )
 
-        bitmap_array = _bitmap_to_array(face.glyph.bitmap)
-        try:
-            image = _fit_bitmap_to_canvas(
-                bitmap_array,
-                size=size,
-                trim_to_rsb=trim_to_rsb,
-                allow_upscale=False,
-            )
-            break
-        except ValueError:
-            if ppem_adjustment == 3:
-                raise RuntimeError("unable to rasterize glyph without upscaling")
+    glyph_slot = face.glyph
+    actual_width = glyph_slot.linearHoriAdvance / 65536
+    bitmap_array = _bitmap_to_array(glyph_slot.bitmap)
+    if trim_to_rsb:
+        image = np.full((size, int(np.ceil(actual_width))), 255, dtype=np.uint8)
     else:
-        raise RuntimeError("unreachable ppem selection failure")
+        image = np.full((size, size), 255, dtype=np.uint8)
+    baseline_y = int(size * 0.66)
+    _paste_bitmap_onto_canvas(
+        canvas=image,
+        bitmap_array=bitmap_array,
+        bitmap_left=int(glyph_slot.bitmap_left),
+        bitmap_top=int(glyph_slot.bitmap_top),
+        baseline_y=baseline_y,
+    )
 
     out = image.astype(np.float32) / 255.0
     return np.stack([out, out, out], axis=0)
 
 
-def is_blank_rendering(rendered) -> bool:
-    """Return True when a rendered image is uniformly white or black."""
-    max_val = float(rendered.max())
-    min_val = float(rendered.min())
-    # Real blank glyph rasters are typically all-white (1.0) and occasionally
-    # all-black (0.0) in this pipeline.
-    return max_val == min_val and (max_val == 1.0 or max_val == 0.0)
-
-
 def _parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for the render-module debug entry point."""
     parser = argparse.ArgumentParser(description="Render a font glyph by GID")
     parser.add_argument("font", type=Path, help="Path to font file")
     parser.add_argument("gid", type=int, help="Glyph ID to render")
