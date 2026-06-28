@@ -141,17 +141,42 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
   - [x] Integrated inline health checks (linear probing, autocorrelation, oracle AR) into the G-Tok training loop via `hrothgar.gtok.health`. Logs to TensorBoard under `Health/*` at configurable intervals.
 
 - [ ] **Investigation: font-style representation**
-  - Linear probing shows 98.7% char accuracy but only 48.1% font-family accuracy
+  - Linear probing shows 98.7% char accuracy but only ~50% font-family accuracy
   - Tokenizer codes are character-structured but style-weak — bottleneck for AR generator
-  - Increased `max_display_score` to 100 (removed filter), halved `character_ce` weight
-  - Consider: larger codebook (16384), lower entropy loss, more training steps with expanded style distribution
-  - Monitor health metrics during training to track font-accuracy improvement
+  - Added font classification CE loss on pre-quantization ViT features to encourage
+    font-aware codebook organisation
+  - **Key finding:** Font probe accuracy is a *canary* — it rises after ~20k steps as
+    the tokenizer begins learning font-specific codes. The linear probe asks an
+    impossible question (categorise a font from one glyph) that the actual style
+    transfer task doesn't require (it sees 8+ reference glyphs).
+  - Font CE descends during training but linear probe accuracy lags because
+    quantization collapses font-distinctive ViT features. Higher β helps marginally.
+  - **Current approach:** Rely on cross-font code sharing (smaller codebook) and
+    designspace augmentation rather than explicit font classification.
 
 - [x] **Key decision: resolution**
   - Initial 64×64 runs train stably and validate the architecture direction
   - 64×64 reconstructions are not sufficient for downstream vectorization quality
   - Move G-Tok to 128×128 with an 8x downsampling tokenizer grid, yielding 16×16 = 256 tokens
   - Re-run tokenizer training and validation at 128×128 before adding probing/noise studies
+
+- [ ] **Key discovery: the reconstruction–generalization trade-off**
+  - At 10k tokenizer steps: coarse codes, cross-font consistent. AR generator achieves
+    train 0.67 / teacher-forced 0.38 / free-running 0.10 and rising.
+  - At 60k tokenizer steps: fine codes, font-specific. All health metrics improve
+    (autocorrelation 140→1600×, font probe 47→55%, visual metrics lower) but AR
+    performance *degrades* to train 0.64 / TF 0.30 / FR 0.05 and falling.
+  - **Root cause:** Better tokenizer reconstruction produces font-specific codes.
+    The AR model maps "style features → unique font codes" instead of
+    "style features → general character-part codes," causing overfitting.
+  - **Mitigations in progress:**
+    - Reduced codebook from 4096→2048 to force cross-font code sharing
+    - Render-time designspace augmentation: variable fonts sampled at random
+      axis positions each time they appear, teaching cross-font consistency
+    - Zoom-and-center renderer at 128×128 to maximise signal per token
+    - Early stopping tokenizer at ~15k steps (the sweet spot)
+    - Font classification CE as a regularizer to encourage style-aware codes
+      without font-specific over-specialization
 
 ### Phase 2: AR Generator — Visual Only (Weeks 4-8)
 
@@ -303,8 +328,9 @@ Several aspects of GAR-Font align exceptionally well; others need modification:
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
+| **Reconstruction–generalization trade-off** — better tokenizer VQ reconstruction produces font-specific codes that the AR model can't generalize across | High | High | Early-stopping tokenizer at ~15k steps; smaller codebook (2048); render-time designspace augmentation; zoom-and-center renderer for higher signal density |
 | **CNN architecture mismatch** — LlamaGen CNN doesn't match GAR-Font's intent | Medium | Medium | LlamaGen is explicitly cited as the baseline. Parameter counts should match. If not, adjust channel counts. |
-| **Non-Chinese generalization** — model trained on Chinese may not transfer to Latin/etc. | Low | High | We're training from scratch on our multi-script data. The architecture is script-agnostic. |
+| **Non-Chinese generalization** — model trained on Chinese may not transfer to Latin/etc. | High | High | Confirmed: Latin glyphs have lower style-signal density and higher structural variation. Mitigations: codepoint embedding for character identity, zoom-and-center renderer, expanded style reference count, restricted glyphset (capitals) for proof-of-concept. |
 | **Resolution bottleneck** — 64×64 too low for vectorization | High | High | Addressed in Phase 5 SR and Phase 6 vectorization handoff. Fallback: train at 128×128 from the start with 256 tokens. |
 | **Training cost** — 314M Transformer + 1M iterations is expensive | Medium | Medium | Start with small dataset (400 fonts). Single A100 should suffice for the tokenizer; need 2-4 for the generator. |
 | **Vectorization quality** — separate pipeline introduces artifacts | Medium | Medium | Your existing vectorization work should handle this. Joint training is the stretch goal. |
