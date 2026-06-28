@@ -90,7 +90,7 @@ class GtokLossWeights:
 
     l1: float = 1.0
     perceptual: float = 0.1
-    edge: float = 2.0
+    glyphloss: float = 2.0
     vq: float = 1.0
     commit: float = 0.5
     entropy: float = 2.0
