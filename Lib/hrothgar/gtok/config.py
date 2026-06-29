@@ -31,7 +31,7 @@ class GtokConfig:
     quantizer_codebook_size: int = 16384  # Size of the codebook
     quantizer_beta: float = 0.25  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
-    quantizer_ema_decay: float = 0.9
+    quantizer_ema_decay: float = 0.99
 
     def __post_init__(self):
         """Set defaults for list parameters."""
@@ -48,7 +48,7 @@ class GtokConfig:
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
         if self.image_size == 128:
-            return 8
+            return 16
         elif self.image_size == 64:
             return 8
         else:
