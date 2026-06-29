@@ -118,7 +118,7 @@ def render_gid(
 
     # Match the existing project convention: 1 upem ascent above baseline and
     # 0.5 upem descent below baseline in the output square.
-    ppem = max(1, int(round(size / 1.5)))
+    ppem = size
     face.set_pixel_sizes(0, ppem)
     face.load_glyph(
         gid,
@@ -134,7 +134,7 @@ def render_gid(
         image = np.full((size, int(np.ceil(actual_width))), 255, dtype=np.uint8)
     else:
         image = np.full((size, size), 255, dtype=np.uint8)
-    baseline_y = int(size * 0.66)
+    baseline_y = int(size * 1.0)
     _paste_bitmap_onto_canvas(
         canvas=image,
         bitmap_array=bitmap_array,
