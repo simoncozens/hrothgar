@@ -315,12 +315,7 @@ class GTokDatasetMaker(DatasetMaker):
             font = item["font"]
             axis_pos = item["axis_position"]
             if self.render_time_augmentation:
-                # Sample a random axis position each time this font is seen.
-                # Static fonts have axis_position=[] (or [[]]), so they are
-                # unaffected.
-                all_positions = font.sample_axis_positions(splits=5)
-                if all_positions:
-                    axis_pos = random.choice(all_positions)
+                axis_pos = font.random_axis_position()
             renderings.append(
                 torch.tensor(
                     font.render(
