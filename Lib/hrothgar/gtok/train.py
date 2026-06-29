@@ -55,7 +55,7 @@ class GtokTrainingLoop(TrainingLoop):
         # Batch size 16 / LR 1e-4 / AdamW are specified in paper, don't mess with them.
         maker = GTokDatasetMaker(
             train_args.dataset_path,
-            batch_size=16,
+            batch_size=32,
             image_size=config.image_size,
             class_balanced=True,
             max_display_score=train_args.max_display_score,
