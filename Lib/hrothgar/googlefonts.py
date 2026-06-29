@@ -1,14 +1,14 @@
-from functools import cached_property
 import itertools
+from functools import cached_property
 from pathlib import Path
 from typing import Dict, List, Optional, Self, Set, Union
 
-from hrothgar.render import render_gid
-
 import numpy as np
 import uharfbuzz as hb
-from gftools.util.google_fonts import Metadata
 from fontTools.ttLib import TTFont
+from gftools.util.google_fonts import Metadata
+
+from hrothgar.render import render_gid
 
 
 class Font:
@@ -74,6 +74,17 @@ class Font:
         instances = itertools.product(*axes.values())
         instances = [[instance[ix] for ix in tags] for instance in instances]
         return [[]] + instances
+
+    def random_axis_position(self) -> List[float]:
+        """Return a random axis position for this font. If the font has no variable axes, returns an empty list."""
+        if "fvar" not in self.hb_face.table_tags:
+            return []
+        ttfont = TTFont(self.path)
+        axes = [
+            np.random.uniform(axis.minValue, axis.maxValue)
+            for axis in ttfont["fvar"].axes
+        ]
+        return axes
 
 
 class GoogleFonts:

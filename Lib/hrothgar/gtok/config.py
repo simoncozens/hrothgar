@@ -28,8 +28,8 @@ class GtokConfig:
     vit_attention_dropout: float = 0.0
 
     # Quantization parameters
-    quantizer_codebook_size: int = 2048  # Size of the codebook
-    quantizer_beta: float = 0.5  # Commitment loss weight
+    quantizer_codebook_size: int = 16384  # Size of the codebook
+    quantizer_beta: float = 0.25  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
     quantizer_ema_decay: float = 0.9
 
@@ -48,9 +48,9 @@ class GtokConfig:
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
         if self.image_size == 128:
-            return 64
+            return 8
         elif self.image_size == 64:
-            return 32
+            return 8
         else:
             raise ValueError(
                 f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
