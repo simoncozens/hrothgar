@@ -17,15 +17,15 @@ class GtokConfig:
     cnn_base_channels: int = 128
     cnn_num_residual_blocks: int = 2
     cnn_latent_channels: int = 256
-    cnn_dropout: float = 0.0
+    cnn_dropout: float = 0.2
 
     # ViT parameters
     vit_hidden_dim: int = 384  # Dimensionality of transformer embeddings
     vit_num_layers: int = 6  # Number of transformer layers
     vit_num_heads: int = 8  # Number of attention heads
     vit_mlp_dim: int = 512  # Dimensionality of feedforward networks
-    vit_dropout: float = 0.0
-    vit_attention_dropout: float = 0.0
+    vit_dropout: float = 0.2
+    vit_attention_dropout: float = 0.2
 
     # Quantization parameters
     quantizer_codebook_size: int = 16384  # Size of the codebook
@@ -95,5 +95,5 @@ class GtokLossWeights:
     commit: float = 0.5
     entropy: float = 2.0
     aux_ar: float = 0.01
-    character_ce: float = 0.5
-    font_ce: float = 1.0
+    character_ce: float = 0.1
+    font_ce: float = 0.1
