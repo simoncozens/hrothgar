@@ -53,9 +53,9 @@ class ARModelConfig:
 
     # GPT decoder (PrefixLM).  ~141M-param configuration to reduce
     # memorisation capacity and improve cross-font generalisation.
-    decoder_hidden_dim: int = 4096
-    decoder_num_layers: int = 32
-    decoder_num_heads: int = 32
+    decoder_hidden_dim: int = 832
+    decoder_num_layers: int = 16
+    decoder_num_heads: int = 16
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
@@ -76,7 +76,7 @@ class ARModelConfig:
     # Content-only training: zero out the style-fused features with this
     # probability during training.  Forces the decoder to rely on codepoint
     # identity and token-level sequential structure.  Set to 0.0 to disable.
-    content_only_prob: float = 0.1
+    content_only_prob: float = 0.0
 
     # Perceptual loss via Gumbel-softmax straight-through decoding.
     # When > 0, the AR logits are sampled via Gumbel-softmax at this
