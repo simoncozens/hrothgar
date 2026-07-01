@@ -1,8 +1,7 @@
 """Tests for AR visual-pretraining loss utilities."""
 
-import torch
 import pytest
-
+import torch
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModelOutput
 
@@ -16,14 +15,12 @@ def _dummy_output() -> ARModelOutput:
         dtype=torch.float32,
     )
     reconstructed = torch.zeros((2, 3, 4, 4), dtype=torch.float32)
-    conditioning = torch.zeros((2, 2, 8), dtype=torch.float32)
     soft_embeddings = torch.zeros((2, 2, 8), dtype=torch.float32)
     targets = torch.tensor([[0, 1], [2, 0]], dtype=torch.long)
     return ARModelOutput(
         logits=logits,
         reconstructed_images=reconstructed,
         soft_token_embeddings=soft_embeddings,
-        conditioning_tokens=conditioning,
         target_token_indices=targets,
     )
 
@@ -65,7 +62,6 @@ def test_compute_ar_loss_requires_targets() -> None:
         logits=output.logits,
         reconstructed_images=output.reconstructed_images,
         soft_token_embeddings=output.soft_token_embeddings,
-        conditioning_tokens=output.conditioning_tokens,
         target_token_indices=None,
     )
     target_images = torch.ones((2, 3, 4, 4), dtype=torch.float32)

@@ -444,6 +444,7 @@ class ARNFATrainingLoop(TrainingLoop):
             model_output,
             target_images,
             weights=self.loss_weights,
+            lpips_metric=self.lpips,
         )
         return loss, loss_info
 

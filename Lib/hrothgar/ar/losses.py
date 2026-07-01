@@ -16,6 +16,7 @@ class ARLossWeights:
     token_cross_entropy: float = 1.0
     pixel_l1: float = 1.0
     lookahead_cross_entropy: float = 0.1
+    perceptual_lpips: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -34,11 +35,18 @@ def compute_ar_loss(
     *,
     target_token_indices: Optional[torch.Tensor] = None,
     weights: ARLossWeights = ARLossWeights(),
+    lpips_metric: Optional[object] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """Compute AR visual-pretraining loss and loggable terms.
 
     The paper objective for this stage combines token-level cross-entropy and
     pixel-level L1 reconstruction.
+
+    When ``model_output.perceptual_recon`` is provided and
+    ``weights.perceptual_lpips > 0``, an auxiliary LPIPS loss is computed
+    between the Gumbel-softmax decoded image and the ground truth.  This
+    directly addresses the many-to-one mapping problem by teaching the model
+    that different code sequences are valid if they decode to the same image.
 
     Args:
         model_output: Output from ``ARModel.forward``.
@@ -46,6 +54,9 @@ def compute_ar_loss(
         target_token_indices: Optional explicit token targets. If omitted, this
             function uses ``model_output.target_token_indices``.
         weights: Weights for token and pixel loss terms.
+        lpips_metric: Optional LPIPS module instance. Required when
+            ``weights.perceptual_lpips > 0`` and
+            ``model_output.perceptual_recon`` is not None.
 
     Returns:
         ``(total_loss, terms)`` where terms is suitable for TensorBoard logging.
@@ -85,15 +96,30 @@ def compute_ar_loss(
 
     pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
 
+    # Perceptual LPIPS loss on Gumbel-softmax sampled reconstruction.
+    perceptual_lpips = torch.tensor(0.0, device=token_targets.device)
+    if weights.perceptual_lpips > 0 and model_output.perceptual_recon is not None:
+        if lpips_metric is None:
+            raise ValueError(
+                "lpips_metric is required when perceptual_lpips > 0 "
+                "and perceptual_recon is provided"
+            )
+        # Clamp to [0, 1] for LPIPS (decoder output can drift slightly).
+        perceptual_recon_clamped = torch.clamp(model_output.perceptual_recon, 0.0, 1.0)
+        target_clamped = torch.clamp(target_images, 0.0, 1.0)
+        perceptual_lpips = lpips_metric(perceptual_recon_clamped, target_clamped).mean()
+
     weighted_token_cross_entropy = weights.token_cross_entropy * token_cross_entropy
     weighted_lookahead_cross_entropy = (
         weights.lookahead_cross_entropy * lookahead_cross_entropy
     )
     weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
+    weighted_perceptual_lpips = weights.perceptual_lpips * perceptual_lpips
     total_loss = (
         weighted_token_cross_entropy
         + weighted_lookahead_cross_entropy
         + weighted_pixel_l1
+        + weighted_perceptual_lpips
     )
 
     token_predictions = torch.argmax(model_output.logits, dim=-1)
@@ -104,10 +130,12 @@ def compute_ar_loss(
         "token_cross_entropy": token_cross_entropy,
         "lookahead_cross_entropy": lookahead_cross_entropy,
         "pixel_l1": pixel_l1,
+        "perceptual_lpips": perceptual_lpips,
         "token_accuracy": token_accuracy,
         "weighted_token_cross_entropy": weighted_token_cross_entropy,
         "weighted_lookahead_cross_entropy": weighted_lookahead_cross_entropy,
         "weighted_pixel_l1": weighted_pixel_l1,
+        "weighted_perceptual_lpips": weighted_perceptual_lpips,
     }
 
     return total_loss, terms

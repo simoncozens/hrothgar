@@ -78,6 +78,15 @@ class ARModelConfig:
     # identity and token-level sequential structure.  Set to 0.0 to disable.
     content_only_prob: float = 0.1
 
+    # Perceptual loss via Gumbel-softmax straight-through decoding.
+    # When > 0, the AR logits are sampled via Gumbel-softmax at this
+    # temperature, decoded through the frozen G-Tok decoder, and compared
+    # against the ground-truth image via LPIPS.  This directly addresses the
+    # many-to-one mapping problem by teaching the model that different code
+    # sequences are valid if they decode to the same image.  Set to 0 to
+    # disable (the decode and LPIPS computation are skipped).
+    perceptual_temperature: float = 0.5
+
     freeze_gtok: bool = True
 
     def __post_init__(self) -> None:
@@ -121,6 +130,7 @@ class ARModelOutput:
     reconstructed_images: torch.Tensor
     soft_token_embeddings: torch.Tensor
     target_token_indices: Optional[torch.Tensor]
+    perceptual_recon: Optional[torch.Tensor] = None
     lookahead_logits: Optional[list[torch.Tensor]] = None
 
 
@@ -1188,6 +1198,35 @@ class ARModel(SaveLoadModel):
         reconstructed_images = self.gtok.decode(soft_token_embeddings)
         return soft_token_embeddings, reconstructed_images
 
+    def gumbel_softmax_decode(
+        self,
+        logits: torch.Tensor,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """Decode logits to images via Gumbel-softmax straight-through sampling.
+
+        Unlike ``soft_decode`` (which produces a blurry reconstruction by
+        soft-averaging the entire codebook), this method samples hard codes
+        via the Gumbel-softmax straight-through estimator.  The forward pass
+        uses one-hot argmax codes, producing sharp, realistic images.  The
+        backward pass propagates gradients through the softmax, teaching the
+        AR model that any code decoding to the right image is valid.
+
+        Args:
+            logits: AR model output of shape ``(B, N, vocab_size)``.
+            temperature: Gumbel-softmax temperature.  Lower = harder samples.
+
+        Returns:
+            Reconstructed images of shape ``(B, 3, H, W)``.
+        """
+        hard_one_hot = F.gumbel_softmax(
+            logits, tau=temperature, hard=True, dim=-1
+        )  # (B, N, K)
+        hard_embeddings = torch.matmul(
+            hard_one_hot, self.codebook_embeddings()
+        )  # (B, N, D)
+        return self.gtok.decode(hard_embeddings)
+
     def target_token_indices_from_images(
         self,
         target_images: torch.Tensor,
@@ -1269,11 +1308,20 @@ class ARModel(SaveLoadModel):
             temperature=self.config.reconstruction_temperature,
         )
 
+        # Perceptual reconstruction via Gumbel-softmax straight-through.
+        perceptual_recon: Optional[torch.Tensor] = None
+        if self.training and self.config.perceptual_temperature > 0:
+            perceptual_recon = self.gumbel_softmax_decode(
+                logits,
+                temperature=self.config.perceptual_temperature,
+            )
+
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
             target_token_indices=target_token_indices,
+            perceptual_recon=perceptual_recon,
             lookahead_logits=lookahead_logits,
         )
 

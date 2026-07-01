@@ -188,6 +188,7 @@ class ARVisualTrainingLoop(TrainingLoop):
             model_output,
             target_images,
             weights=self.loss_weights,
+            lpips_metric=self.lpips,
         )
         loss_info["content_only"] = torch.tensor(
             float(self.model._content_only_step),
