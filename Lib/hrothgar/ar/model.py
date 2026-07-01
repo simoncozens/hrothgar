@@ -86,7 +86,7 @@ class ARModelConfig:
     # Number of steps before the perceptual loss activates.  The model first
     # learns plausible token predictions from CE + L1 before the harder
     # Gumbel-softmax sampling objective is introduced.
-    perceptual_warmup_steps: int = 5_000
+    perceptual_warmup_steps: int = 0
 
     # Free-running training: with this probability, a training step replaces
     # teacher-forcing with full autoregressive generation.  The model
@@ -94,7 +94,7 @@ class ARModelConfig:
     # receives LPIPS loss only — no token CE.  This directly addresses
     # exposure bias by training on the model's own error distribution.
     # Set to 0.0 to disable (teacher-forcing only).
-    free_running_prob: float = 0.1
+    free_running_prob: float = 0.0
 
     freeze_gtok: bool = True
 
@@ -1219,6 +1219,7 @@ class ARModel(SaveLoadModel):
         """
         batch_size = conditioning_map.shape[0]
         device = conditioning_map.device
+        print("Free running phase!")
 
         # Step 1: autoregressive generation (no gradient through recurrence).
         idx = torch.empty(batch_size, 0, dtype=torch.long, device=device)
