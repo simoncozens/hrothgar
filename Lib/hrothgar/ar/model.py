@@ -53,7 +53,7 @@ class ARModelConfig:
 
     # GPT decoder (PrefixLM).  ~141M-param configuration to reduce
     # memorisation capacity and improve cross-font generalisation.
-    decoder_hidden_dim: int = 2048
+    decoder_hidden_dim: int = 4096
     decoder_num_layers: int = 32
     decoder_num_heads: int = 32
     decoder_dropout: float = 0.1
