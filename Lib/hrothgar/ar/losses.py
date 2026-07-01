@@ -13,10 +13,10 @@ from hrothgar.ar.model import ARAdaptationOutput, ARModelOutput
 class ARLossWeights:
     """Weights for the AR visual-pretraining objectives."""
 
-    token_cross_entropy: float = 1.0
+    token_cross_entropy: float = 0.3
     pixel_l1: float = 1.0
     lookahead_cross_entropy: float = 0.1
-    perceptual_lpips: float = 0.1
+    perceptual_lpips: float = 2.0
 
 
 @dataclass(frozen=True)
