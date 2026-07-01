@@ -56,7 +56,8 @@ def test_compute_ar_loss_with_explicit_targets_and_weights() -> None:
     assert torch.isclose(terms["weighted_pixel_l1"], 0.5 * terms["pixel_l1"])
 
 
-def test_compute_ar_loss_requires_targets() -> None:
+def test_compute_ar_loss_accepts_none_targets() -> None:
+    """Free-running steps have no token targets — loss should still compute."""
     output = _dummy_output()
     output = ARModelOutput(
         logits=output.logits,
@@ -66,8 +67,11 @@ def test_compute_ar_loss_requires_targets() -> None:
     )
     target_images = torch.ones((2, 3, 4, 4), dtype=torch.float32)
 
-    with pytest.raises(ValueError):
-        compute_ar_loss(output, target_images)
+    total, terms = compute_ar_loss(output, target_images)
+    assert terms["token_cross_entropy"].item() == 0.0
+    assert terms["token_accuracy"].item() == 0.0
+    # L1 should still be computed (all-ones target vs all-zeros recon = 1.0)
+    assert torch.isclose(terms["pixel_l1"], torch.tensor(1.0))
 
 
 def test_compute_ar_loss_validates_shapes() -> None:

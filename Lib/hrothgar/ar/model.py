@@ -88,6 +88,14 @@ class ARModelConfig:
     # Gumbel-softmax sampling objective is introduced.
     perceptual_warmup_steps: int = 5_000
 
+    # Free-running training: with this probability, a training step replaces
+    # teacher-forcing with full autoregressive generation.  The model
+    # generates tokens freely (as at inference), decodes the image, and
+    # receives LPIPS loss only — no token CE.  This directly addresses
+    # exposure bias by training on the model's own error distribution.
+    # Set to 0.0 to disable (teacher-forcing only).
+    free_running_prob: float = 0.1
+
     freeze_gtok: bool = True
 
     def __post_init__(self) -> None:
@@ -1187,6 +1195,67 @@ class ARModel(SaveLoadModel):
 
         return logits, lookahead_logits
 
+    def _decode_free_running(
+        self,
+        conditioning_map: torch.Tensor,
+        global_step: int = 0,
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        """Generate tokens autoregressively, then re-encode for gradient.
+
+        Step 1 (no_grad): autoregressive generation — the model produces
+        tokens in exactly the same way as inference.  This creates the
+        error-distribution context the model will encounter during
+        free-running.
+
+        Step 2 (with grad): feed the generated tokens through a single
+        teacher-forced decoder pass.  The resulting logits carry gradients
+        that flow back through the Gumbel-softmax perceptual loss, teaching
+        the model to recover from its own errors.
+
+        Token CE is NOT used for this path (targets are synthetic).
+
+        Returns:
+            ``(logits, lookahead_logits)`` — logits shape ``(B, N, K)``.
+        """
+        batch_size = conditioning_map.shape[0]
+        device = conditioning_map.device
+
+        # Step 1: autoregressive generation (no gradient through recurrence).
+        idx = torch.empty(batch_size, 0, dtype=torch.long, device=device)
+        generated: list[torch.Tensor] = []
+        with torch.no_grad():
+            for _ in range(self.sequence_length):
+                logits_step, _ = self.token_decoder(
+                    idx=idx,
+                    imgs_feature_map=conditioning_map,
+                )
+                next_token = torch.argmax(logits_step[:, -1, :], dim=-1, keepdim=True)
+                generated.append(next_token)
+                idx = torch.cat([idx, next_token], dim=1)
+
+        predicted = torch.cat(generated, dim=1)  # (B, N)
+
+        # Step 2: teacher-forced pass through the generated sequence.
+        # Gradients flow from this pass back to the model parameters.
+        input_ids = predicted[:, :-1]  # (B, N-1)
+        targets = predicted  # (B, N)
+        logits, _loss = self.token_decoder(
+            idx=input_ids,
+            imgs_feature_map=conditioning_map,
+            targets=targets,
+        )
+
+        lookahead_logits: list[torch.Tensor] = []
+        for decoder in self.lookahead_decoders:
+            la_logits, _ = decoder(
+                idx=input_ids,
+                imgs_feature_map=conditioning_map,
+                targets=targets,
+            )
+            lookahead_logits.append(la_logits)
+
+        return logits, lookahead_logits
+
     def soft_decode(
         self,
         logits: torch.Tensor,
@@ -1288,21 +1357,37 @@ class ARModel(SaveLoadModel):
             latincore_idx=target_latincore_idx,
         )
 
-        if target_token_indices is None:
-            if target_images is None:
-                raise ValueError(
-                    "Either target_token_indices or target_images must be provided"
-                )
-            with torch.no_grad():
-                target_token_indices = self.target_token_indices_from_images(
-                    target_images,
-                )
-
-        logits, lookahead_logits = self._decode_prefix_lm(
-            conditioning_map=conditioning_map,
-            target_token_indices=target_token_indices,
-            global_step=global_step,
+        # Decide between teacher-forcing and free-running for this step.
+        use_free_running = (
+            self.training
+            and self.config.free_running_prob > 0
+            and torch.rand(1).item() < self.config.free_running_prob
         )
+
+        if use_free_running:
+            # Free-running mode: generate autoregressively, then re-encode.
+            # No token targets — the perceptual loss provides the gradient.
+            logits, lookahead_logits = self._decode_free_running(
+                conditioning_map=conditioning_map,
+                global_step=global_step,
+            )
+            target_token_indices = None
+        else:
+            if target_token_indices is None:
+                if target_images is None:
+                    raise ValueError(
+                        "Either target_token_indices or target_images must be provided"
+                    )
+                with torch.no_grad():
+                    target_token_indices = self.target_token_indices_from_images(
+                        target_images,
+                    )
+
+            logits, lookahead_logits = self._decode_prefix_lm(
+                conditioning_map=conditioning_map,
+                target_token_indices=target_token_indices,
+                global_step=global_step,
+            )
 
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
