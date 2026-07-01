@@ -64,40 +64,42 @@ def compute_ar_loss(
     token_targets = target_token_indices
     if token_targets is None:
         token_targets = model_output.target_token_indices
-    if token_targets is None:
-        raise ValueError(
-            "target_token_indices must be provided either explicitly or via ARModelOutput"
+
+    # Free-running steps have no token targets — skip token CE and lookahead.
+    has_token_targets = token_targets is not None
+
+    if has_token_targets:
+        if model_output.logits.shape[:2] != token_targets.shape:
+            raise ValueError(
+                "Logit and target token shapes must match in batch and sequence dimensions "
+                f"(got logits {tuple(model_output.logits.shape[:2])}, targets {tuple(token_targets.shape)})"
+            )
+
+        token_cross_entropy = F.cross_entropy(
+            model_output.logits.reshape(-1, model_output.logits.shape[-1]),
+            token_targets.reshape(-1),
         )
 
-    if model_output.logits.shape[:2] != token_targets.shape:
-        raise ValueError(
-            "Logit and target token shapes must match in batch and sequence dimensions "
-            f"(got logits {tuple(model_output.logits.shape[:2])}, targets {tuple(token_targets.shape)})"
-        )
-
-    token_cross_entropy = F.cross_entropy(
-        model_output.logits.reshape(-1, model_output.logits.shape[-1]),
-        token_targets.reshape(-1),
-    )
-
-    lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
-    if model_output.lookahead_logits:
-        for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
-            # l_logits[:, t] predicts token_targets[:, t+k]
-            valid_len = token_targets.shape[1] - k
-            if valid_len > 0:
-                lookahead_cross_entropy = lookahead_cross_entropy + F.cross_entropy(
-                    l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
-                    token_targets[:, k:].reshape(-1),
-                )
-        lookahead_cross_entropy = lookahead_cross_entropy / len(
-            model_output.lookahead_logits
-        )
+        lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
+        if model_output.lookahead_logits:
+            for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
+                valid_len = token_targets.shape[1] - k
+                if valid_len > 0:
+                    lookahead_cross_entropy = lookahead_cross_entropy + F.cross_entropy(
+                        l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
+                        token_targets[:, k:].reshape(-1),
+                    )
+            lookahead_cross_entropy = lookahead_cross_entropy / len(
+                model_output.lookahead_logits
+            )
+    else:
+        token_cross_entropy = torch.tensor(0.0, device=target_images.device)
+        lookahead_cross_entropy = torch.tensor(0.0, device=target_images.device)
 
     pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
 
     # Perceptual LPIPS loss on Gumbel-softmax sampled reconstruction.
-    perceptual_lpips = torch.tensor(0.0, device=token_targets.device)
+    perceptual_lpips = torch.tensor(0.0, device=target_images.device)
     if weights.perceptual_lpips > 0 and model_output.perceptual_recon is not None:
         if lpips_metric is None:
             raise ValueError(
@@ -122,8 +124,10 @@ def compute_ar_loss(
         + weighted_perceptual_lpips
     )
 
-    token_predictions = torch.argmax(model_output.logits, dim=-1)
-    token_accuracy = (token_predictions == token_targets).float().mean()
+    token_accuracy = torch.tensor(0.0, device=target_images.device)
+    if has_token_targets:
+        token_predictions = torch.argmax(model_output.logits, dim=-1)
+        token_accuracy = (token_predictions == token_targets).float().mean()
 
     terms: Dict[str, torch.Tensor] = {
         "total": total_loss,
