@@ -81,11 +81,12 @@ class ARModelConfig:
     # Perceptual loss via Gumbel-softmax straight-through decoding.
     # When > 0, the AR logits are sampled via Gumbel-softmax at this
     # temperature, decoded through the frozen G-Tok decoder, and compared
-    # against the ground-truth image via LPIPS.  This directly addresses the
-    # many-to-one mapping problem by teaching the model that different code
-    # sequences are valid if they decode to the same image.  Set to 0 to
-    # disable (the decode and LPIPS computation are skipped).
+    # against the ground-truth image via LPIPS.  Set to 0 to disable.
     perceptual_temperature: float = 0.5
+    # Number of steps before the perceptual loss activates.  The model first
+    # learns plausible token predictions from CE + L1 before the harder
+    # Gumbel-softmax sampling objective is introduced.
+    perceptual_warmup_steps: int = 5_000
 
     freeze_gtok: bool = True
 
@@ -1310,7 +1311,11 @@ class ARModel(SaveLoadModel):
 
         # Perceptual reconstruction via Gumbel-softmax straight-through.
         perceptual_recon: Optional[torch.Tensor] = None
-        if self.training and self.config.perceptual_temperature > 0:
+        if (
+            self.training
+            and self.config.perceptual_temperature > 0
+            and global_step >= self.config.perceptual_warmup_steps
+        ):
             perceptual_recon = self.gumbel_softmax_decode(
                 logits,
                 temperature=self.config.perceptual_temperature,
