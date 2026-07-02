@@ -49,7 +49,14 @@ class ARVisualTrainingLoop(TrainingLoop):
     """
 
     def post_init(self, train_args):
-        config = ARModelConfig(image_size=train_args.image_size)
+        config = ARModelConfig(
+            image_size=train_args.image_size,
+            use_maskgit=getattr(train_args, "use_maskgit", False),
+            maskgit_num_inference_steps=getattr(
+                train_args, "maskgit_num_inference_steps", 8
+            ),
+            maskgit_temperature=getattr(train_args, "maskgit_temperature", 1.0),
+        )
         gtok, _gtok_config = load_gtok_model(
             Path(train_args.gtok_model_path),
             device=self.device,
@@ -450,7 +457,14 @@ class ARMultimodalTrainingLoop(TrainingLoop):
     """
 
     def post_init(self, train_args):
-        config = ARModelConfig(image_size=train_args.image_size)
+        config = ARModelConfig(
+            image_size=train_args.image_size,
+            use_maskgit=getattr(train_args, "use_maskgit", False),
+            maskgit_num_inference_steps=getattr(
+                train_args, "maskgit_num_inference_steps", 8
+            ),
+            maskgit_temperature=getattr(train_args, "maskgit_temperature", 1.0),
+        )
         gtok, _gtok_config = load_gtok_model(
             Path(train_args.gtok_model_path),
             device=self.device,
@@ -1170,6 +1184,28 @@ if __name__ == "__main__":
             "stricter setting to test the model's ability to learn from limited "
             "examples of target characters."
         ),
+    )
+    parser.add_argument(
+        "--use-maskgit",
+        action="store_true",
+        help=(
+            "Use MaskGIT (bidirectional masked token prediction) instead of "
+            "autoregressive generation.  Eliminates exposure bias by training "
+            "and evaluating on masked inputs, and generates tokens in parallel "
+            "during inference with a confidence-based iterative schedule."
+        ),
+    )
+    parser.add_argument(
+        "--maskgit-num-inference-steps",
+        type=int,
+        default=8,
+        help="Number of iterative decoding steps for MaskGIT inference (default: 8)",
+    )
+    parser.add_argument(
+        "--maskgit-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature for MaskGIT confidence-based token selection (default: 1.0)",
     )
 
     args = parser.parse_args()

@@ -7,6 +7,13 @@ from hrothgar.ar.losses import (
     compute_ar_adaptation_loss,
     compute_ar_loss,
 )
+from hrothgar.ar.maskgit import (
+    MaskGITConfig,
+    MaskGITDecoder,
+    MaskGITLossWeights,
+    MaskGITTransformer,
+    compute_maskgit_loss,
+)
 from hrothgar.ar.model import (
     ARAdaptationOutput,
     ARModel,
@@ -45,4 +52,9 @@ __all__ = [
     "NFADatasetMaker",
     "NFAGlyphDataset",
     "ARVisualTrainingLoop",
+    "MaskGITConfig",
+    "MaskGITDecoder",
+    "MaskGITLossWeights",
+    "MaskGITTransformer",
+    "compute_maskgit_loss",
 ]

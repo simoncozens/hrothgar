@@ -24,6 +24,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from hrothgar.ar.maskgit import (
+    MaskGITConfig,
+    MaskGITDecoder,
+    MaskGITTransformer,
+)
 from hrothgar.dataset import LATIN_CORE
 from hrothgar.gtok.model import (
     GtokConfig,
@@ -36,7 +41,6 @@ from hrothgar.upstream.style_encoder import StyleEncoder
 from hrothgar.utils import SaveLoadModel
 
 
-@dataclass
 @dataclass
 class ARModelConfig:
     """Configuration for the visual-pretraining AR generator (PrefixLM design)."""
@@ -105,6 +109,15 @@ class ARModelConfig:
 
     freeze_gtok: bool = True
 
+    # --- MaskGIT mode --------------------------------------------------
+    # When True, replaces the causal AR decoder with a bidirectional
+    # MaskGIT transformer.  This eliminates exposure bias entirely.
+    use_maskgit: bool = False
+    # Number of iterative decoding steps at inference.
+    maskgit_num_inference_steps: int = 8
+    # Temperature for confidence-based token selection during inference.
+    maskgit_temperature: float = 1.0
+
     def __post_init__(self) -> None:
         if self.image_size <= 0:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
@@ -148,6 +161,9 @@ class ARModelOutput:
     target_token_indices: Optional[torch.Tensor]
     perceptual_recon: Optional[torch.Tensor] = None
     lookahead_logits: Optional[list[torch.Tensor]] = None
+    # MaskGIT: boolean mask indicating which positions were masked during
+    # training (and should contribute to the token CE loss).  None for AR.
+    token_mask: Optional[torch.Tensor] = None
 
 
 @dataclass
@@ -854,13 +870,25 @@ class ARModel(SaveLoadModel):
             resid_dropout_p=config.decoder_dropout,
             ffn_dropout_p=config.decoder_dropout,
         )
-        self.token_decoder = GPTTransformer(gpt_config)
-        self.lookahead_decoders = nn.ModuleList(
-            [
-                GPTTransformer(gpt_config)
-                for _ in range(config.num_multitoken_lookahead_steps)
-            ]
-        )
+        if config.use_maskgit:
+            # MaskGIT mode: bidirectional transformer, no lookahead.
+            maskgit_transformer = MaskGITTransformer(gpt_config)
+            maskgit_config = MaskGITConfig(
+                num_inference_steps=config.maskgit_num_inference_steps,
+                temperature=config.maskgit_temperature,
+            )
+            self.maskgit_decoder = MaskGITDecoder(maskgit_transformer, maskgit_config)
+            self.token_decoder = None  # type: ignore[assignment]
+            self.lookahead_decoders = nn.ModuleList()
+        else:
+            self.token_decoder = GPTTransformer(gpt_config)
+            self.maskgit_decoder = None
+            self.lookahead_decoders = nn.ModuleList(
+                [
+                    GPTTransformer(gpt_config)
+                    for _ in range(config.num_multitoken_lookahead_steps)
+                ]
+            )
         self.language_adapter: Optional[nn.Module] = None
         if language_adapter is not None:
             self.set_language_adapter(language_adapter)
@@ -962,7 +990,16 @@ class ARModel(SaveLoadModel):
         ``parameters()``.
 
         May only be called once per model instance.
+
+        Raises:
+            RuntimeError: If the model is in MaskGIT mode (NFA requires the
+                autoregressive token decoder).
         """
+        if self.config.use_maskgit:
+            raise RuntimeError(
+                "NFA mode is not compatible with MaskGIT.  "
+                "NFA requires the autoregressive token decoder for LoRA injection."
+            )
         if self._nfa_mode:
             raise RuntimeError(
                 "Model is already in NFA mode.  "
@@ -1007,7 +1044,15 @@ class ARModel(SaveLoadModel):
         a different rank.
 
         May only be called once per model instance.
+
+        Raises:
+            RuntimeError: If the model is in MaskGIT mode.
         """
+        if self.config.use_maskgit:
+            raise RuntimeError(
+                "Composed NFA mode is not compatible with MaskGIT.  "
+                "NFA requires the autoregressive token decoder for LoRA injection."
+            )
         if self._nfa_mode:
             raise RuntimeError(
                 "Model is already in NFA mode.  "
@@ -1360,7 +1405,11 @@ class ARModel(SaveLoadModel):
         target_codepoints: Optional[torch.Tensor] = None,
         global_step: int = 0,
     ) -> ARModelOutput:
-        """Run teacher-forced PrefixLM decoding for visual pretraining.
+        """Run teacher-forced decoding for visual pretraining.
+
+        When ``use_maskgit`` is enabled, uses masked token prediction
+        (BERT-style) during training and full bidirectional prediction
+        during evaluation.  Otherwise uses PrefixLM autoregressive decoding.
 
         Args:
             target_codepoints: ``(B,)`` integer tensor of Unicode codepoints
@@ -1380,22 +1429,10 @@ class ARModel(SaveLoadModel):
             latincore_idx=target_latincore_idx,
         )
 
-        # Decide between teacher-forcing and free-running for this step.
-        use_free_running = (
-            self.training
-            and self.config.free_running_prob > 0
-            and torch.rand(1).item() < self.config.free_running_prob
-        )
+        token_mask: Optional[torch.Tensor] = None
 
-        if use_free_running:
-            # Free-running mode: generate autoregressively, then re-encode.
-            # No token targets — the perceptual loss provides the gradient.
-            logits, lookahead_logits = self._decode_free_running(
-                conditioning_map=conditioning_map,
-                global_step=global_step,
-            )
-            target_token_indices = None
-        else:
+        if self.config.use_maskgit:
+            # --- MaskGIT path ---------------------------------------------
             if target_token_indices is None:
                 if target_images is None:
                     raise ValueError(
@@ -1406,11 +1443,53 @@ class ARModel(SaveLoadModel):
                         target_images,
                     )
 
-            logits, lookahead_logits = self._decode_prefix_lm(
-                conditioning_map=conditioning_map,
-                target_token_indices=target_token_indices,
-                global_step=global_step,
+            if self.training:
+                # Training: randomly mask tokens and predict them.
+                logits, token_mask = self.maskgit_decoder.forward_train(
+                    target_token_indices=target_token_indices,
+                    conditioning_map=conditioning_map,
+                )
+            else:
+                # Eval: full bidirectional prediction with all tokens visible.
+                # This is the MaskGIT equivalent of teacher-forcing — it
+                # measures how well the model predicts each token given
+                # perfect bidirectional context.
+                logits = self.maskgit_decoder.transformer(
+                    idx=target_token_indices,
+                    imgs_feature_map=conditioning_map,
+                )
+            lookahead_logits: list[torch.Tensor] = []
+        else:
+            # --- AR path -------------------------------------------------
+            # Decide between teacher-forcing and free-running for this step.
+            use_free_running = (
+                self.training
+                and self.config.free_running_prob > 0
+                and torch.rand(1).item() < self.config.free_running_prob
             )
+
+            if use_free_running:
+                logits, lookahead_logits = self._decode_free_running(
+                    conditioning_map=conditioning_map,
+                    global_step=global_step,
+                )
+                target_token_indices = None
+            else:
+                if target_token_indices is None:
+                    if target_images is None:
+                        raise ValueError(
+                            "Either target_token_indices or target_images must be provided"
+                        )
+                    with torch.no_grad():
+                        target_token_indices = self.target_token_indices_from_images(
+                            target_images,
+                        )
+
+                logits, lookahead_logits = self._decode_prefix_lm(
+                    conditioning_map=conditioning_map,
+                    target_token_indices=target_token_indices,
+                    global_step=global_step,
+                )
 
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
@@ -1436,6 +1515,7 @@ class ARModel(SaveLoadModel):
             target_token_indices=target_token_indices,
             perceptual_recon=perceptual_recon,
             lookahead_logits=lookahead_logits,
+            token_mask=token_mask,
         )
 
     def forward_adaptation(
@@ -1525,7 +1605,10 @@ class ARModel(SaveLoadModel):
         style_reference_images: torch.Tensor,
         target_codepoints: torch.Tensor,
     ) -> ARModelOutput:
-        """Greedy autoregressive generation via PrefixLM.
+        """Generate target glyph tokens.
+
+        In AR mode: greedy autoregressive PrefixLM generation.
+        In MaskGIT mode: iterative confidence-based parallel decoding.
 
         Uses the *math* SDP backend during autoregressive sampling to match
         the upstream GAR-Font inference path.  Flash / mem-efficient attention
@@ -1542,34 +1625,46 @@ class ARModel(SaveLoadModel):
             style_reference_images=style_reference_images,
             latincore_idx=latincore_idx,
         )
-        batch_size = content_images.shape[0]
-        device = content_images.device
 
-        # Start with empty idx — the GPT prepends image features automatically.
-        idx = torch.empty(batch_size, 0, dtype=torch.long, device=device)
+        if self.config.use_maskgit:
+            # MaskGIT iterative parallel decoding.
+            predicted = self.maskgit_decoder.generate(
+                conditioning_map=conditioning_map,
+            )  # (B, N)
+            # Re-run through the transformer for soft decoding logits.
+            logits = self.maskgit_decoder.transformer(
+                idx=predicted,
+                imgs_feature_map=conditioning_map,
+            )
+        else:
+            # AR greedy generation (existing path).
+            batch_size = content_images.shape[0]
+            device = content_images.device
 
-        generated_tokens: list[torch.Tensor] = []
-        for _ in tqdm(range(self.sequence_length)):
-            with torch.backends.cuda.sdp_kernel(
-                enable_flash=False, enable_mem_efficient=False, enable_math=True
-            ):
-                logits, _ = self.token_decoder(
-                    idx=idx,
-                    imgs_feature_map=conditioning_map,
-                )
-            # Last logit position predicts the next token.
-            next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-            generated_tokens.append(next_token)
-            idx = torch.cat([idx, next_token], dim=1)
+            idx = torch.empty(batch_size, 0, dtype=torch.long, device=device)
 
-        predicted = torch.cat(generated_tokens, dim=1)  # (B, N)
+            generated_tokens: list[torch.Tensor] = []
+            for _ in tqdm(range(self.sequence_length)):
+                with torch.backends.cuda.sdp_kernel(
+                    enable_flash=False, enable_mem_efficient=False, enable_math=True
+                ):
+                    logits_step, _ = self.token_decoder(
+                        idx=idx,
+                        imgs_feature_map=conditioning_map,
+                    )
+                next_token = torch.argmax(logits_step[:, -1, :], dim=-1, keepdim=True)
+                generated_tokens.append(next_token)
+                idx = torch.cat([idx, next_token], dim=1)
 
-        # Re-run with teacher forcing on the predicted tokens to get proper
-        # logits for soft decoding.
-        logits, _ = self._decode_prefix_lm(
-            conditioning_map=conditioning_map,
-            target_token_indices=predicted,
-        )
+            predicted = torch.cat(generated_tokens, dim=1)  # (B, N)
+
+            # Re-run with teacher forcing on the predicted tokens to get proper
+            # logits for soft decoding.
+            logits, _ = self._decode_prefix_lm(
+                conditioning_map=conditioning_map,
+                target_token_indices=predicted,
+            )
+
         soft_token_embeddings, reconstructed_images = self.soft_decode(
             logits,
             temperature=self.config.reconstruction_temperature,
@@ -1746,17 +1841,26 @@ class ARModel(SaveLoadModel):
 
     def parameter_counts(self) -> Dict[str, int]:
         """Return parameter counts for the main AR components."""
-        return {
+        counts: Dict[str, int] = {
             "content_encoder": sum(
                 p.numel() for p in self.content_encoder.parameters()
             ),
             "style_encoder": sum(p.numel() for p in self.style_encoder.parameters()),
             "aggregator": sum(p.numel() for p in self.aggregator.parameters()),
-            "token_decoder": sum(p.numel() for p in self.token_decoder.parameters()),
-            "lookahead_decoders": sum(
-                p.numel() for p in self.lookahead_decoders.parameters()
-            ),
             "total_trainable": sum(
                 p.numel() for p in self.parameters() if p.requires_grad
             ),
         }
+        if self.config.use_maskgit and self.maskgit_decoder is not None:
+            counts["maskgit_decoder"] = sum(
+                p.numel() for p in self.maskgit_decoder.parameters()
+            )
+        else:
+            counts["token_decoder"] = sum(
+                p.numel()
+                for p in self.token_decoder.parameters()  # type: ignore[union-attr]
+            )
+            counts["lookahead_decoders"] = sum(
+                p.numel() for p in self.lookahead_decoders.parameters()
+            )
+        return counts

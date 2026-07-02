@@ -68,6 +68,10 @@ def compute_ar_loss(
     # Free-running steps have no token targets — skip token CE and lookahead.
     has_token_targets = token_targets is not None
 
+    # MaskGIT: token_mask indicates which positions were masked during
+    # training (and should contribute to CE loss).
+    maskgit_mask = model_output.token_mask
+
     if has_token_targets:
         if model_output.logits.shape[:2] != token_targets.shape:
             raise ValueError(
@@ -75,10 +79,21 @@ def compute_ar_loss(
                 f"(got logits {tuple(model_output.logits.shape[:2])}, targets {tuple(token_targets.shape)})"
             )
 
-        token_cross_entropy = F.cross_entropy(
-            model_output.logits.reshape(-1, model_output.logits.shape[-1]),
-            token_targets.reshape(-1),
-        )
+        if maskgit_mask is not None:
+            # MaskGIT: CE computed only on masked positions.
+            n_masked = maskgit_mask.sum()
+            if n_masked > 0:
+                masked_logits = model_output.logits[maskgit_mask]
+                masked_targets = token_targets[maskgit_mask]
+                token_cross_entropy = F.cross_entropy(masked_logits, masked_targets)
+            else:
+                token_cross_entropy = torch.tensor(0.0, device=token_targets.device)
+        else:
+            # AR: CE computed on all positions.
+            token_cross_entropy = F.cross_entropy(
+                model_output.logits.reshape(-1, model_output.logits.shape[-1]),
+                token_targets.reshape(-1),
+            )
 
         lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
         if model_output.lookahead_logits:
@@ -127,7 +142,16 @@ def compute_ar_loss(
     token_accuracy = torch.tensor(0.0, device=target_images.device)
     if has_token_targets:
         token_predictions = torch.argmax(model_output.logits, dim=-1)
-        token_accuracy = (token_predictions == token_targets).float().mean()
+        if maskgit_mask is not None:
+            # Accuracy on masked positions only.
+            if maskgit_mask.sum() > 0:
+                token_accuracy = (
+                    (token_predictions[maskgit_mask] == token_targets[maskgit_mask])
+                    .float()
+                    .mean()
+                )
+        else:
+            token_accuracy = (token_predictions == token_targets).float().mean()
 
     terms: Dict[str, torch.Tensor] = {
         "total": total_loss,
@@ -141,6 +165,8 @@ def compute_ar_loss(
         "weighted_pixel_l1": weighted_pixel_l1,
         "weighted_perceptual_lpips": weighted_perceptual_lpips,
     }
+    if maskgit_mask is not None:
+        terms["n_masked"] = maskgit_mask.sum().float()
 
     return total_loss, terms
 
