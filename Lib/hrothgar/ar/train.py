@@ -194,6 +194,10 @@ class ARVisualTrainingLoop(TrainingLoop):
             float(self.model._content_only_step),
             device=target_images.device,
         )
+        loss_info["style_only"] = torch.tensor(
+            float(self.model._style_only_step),
+            device=target_images.device,
+        )
         return loss, loss_info
 
     def train(self):
