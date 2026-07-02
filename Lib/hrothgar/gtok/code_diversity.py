@@ -126,6 +126,7 @@ def _run_intra_image_diversity(
 
     # Metrics.
     invariant_fractions: list[float] = []
+    all_n_unique: list[torch.Tensor] = []  # per-glyph (seq_len,) tensors
     all_pairwise_ssim: list[float] = []
     all_pairwise_lpips: list[float] = []
 
@@ -168,6 +169,9 @@ def _run_intra_image_diversity(
         invariant_frac = (n_unique == 1).float().mean().item()
         invariant_fractions.append(invariant_frac)
 
+        # Accumulate per-position uniqueness for spatial analysis.
+        all_n_unique.append(n_unique)  # list of (seq_len,) tensors
+
         # --- Visual pairwise consistency ---
         img_stack = torch.stack(all_images, dim=0)  # (K, 3, H, W)
         for i in range(config.num_perturbations):
@@ -182,6 +186,15 @@ def _run_intra_image_diversity(
     avg_ssim = sum(all_pairwise_ssim) / max(len(all_pairwise_ssim), 1)
     avg_lpips = sum(all_pairwise_lpips) / max(len(all_pairwise_lpips), 1)
 
+    # Spatial invariance map: average n_unique per position, reshaped to grid.
+    spatial_map: list[list[float]] = []
+    if all_n_unique:
+        mean_n_unique = torch.stack(all_n_unique).float().mean(dim=0)  # (seq_len,)
+        # sequence_length should be a perfect square for the token grid.
+        grid_size = int(config.sequence_length**0.5)
+        if grid_size * grid_size == config.sequence_length:
+            spatial_map = mean_n_unique.reshape(grid_size, grid_size).tolist()
+
     return {
         "n_samples": n_valid,
         "n_perturbations": config.num_perturbations,
@@ -189,6 +202,7 @@ def _run_intra_image_diversity(
         "avg_invariant_fraction": avg_invariant,
         "avg_pairwise_ssim": avg_ssim,
         "avg_pairwise_lpips": avg_lpips,
+        "spatial_n_unique": spatial_map,
         "all_invariant_fractions": invariant_fractions,
     }
 
@@ -344,7 +358,29 @@ def _print_results_1(results: dict) -> None:
         print("    → Many distinct code sequences decode to perceptually")
         print("    identical images. Token CE is punishing the AR model for")
         print("    picking tokens that are actually fine.")
-    print()
+
+    # Spatial heatmap: mean unique codes per position (1.0 = invariant).
+    spatial = results.get("spatial_n_unique", [])
+    if spatial:
+        print()
+        print("  Spatial invariance map (mean unique codes per position):")
+        print("  Lower = more ambiguous.  1.0 = always same code.")
+        grid_h = len(spatial)
+        grid_w = len(spatial[0]) if spatial else 0
+        # Compact ASCII heatmap.
+        # Shade: ░ = high variance (low invariance), █ = fully invariant.
+        shades = " ░▒▓█"
+        for row in spatial:
+            row_str = "  "
+            for val in row:
+                # val ranges from 1.0 (invariant) to num_perturbations (max variance).
+                # Map to 0–1 where 0 = invariant, 1 = high variance.
+                norm = min((val - 1.0) / (results["n_perturbations"] - 1.0), 1.0)
+                idx = int(norm * (len(shades) - 1))
+                row_str += shades[idx]
+                row_str += f"{val:.2f} " if grid_w <= 16 else ""
+            print(row_str)
+        print()
 
 
 def _print_results_2(results: dict) -> None:

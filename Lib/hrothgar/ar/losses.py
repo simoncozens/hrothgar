@@ -16,7 +16,7 @@ class ARLossWeights:
     token_cross_entropy: float = 0.3
     pixel_l1: float = 1.0
     lookahead_cross_entropy: float = 0.1
-    perceptual_lpips: float = 20.0
+    perceptual_lpips: float = 2.0
 
 
 @dataclass(frozen=True)
