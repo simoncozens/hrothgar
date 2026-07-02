@@ -76,7 +76,14 @@ class ARModelConfig:
     # Content-only training: zero out the style-fused features with this
     # probability during training.  Forces the decoder to rely on codepoint
     # identity and token-level sequential structure.  Set to 0.0 to disable.
-    content_only_prob: float = 0.0
+    content_only_prob: float = 0.1
+
+    # Style-only training: zero out the codepoint embedding with this
+    # probability during training.  Forces the decoder to rely on style
+    # features, teaching the style encoder and aggregator to carry useful
+    # signal.  Counterpart to ``content_only_prob`` — together they ensure
+    # the model can use both conditioning paths.  Set to 0.0 to disable.
+    style_only_prob: float = 0.1
 
     # Perceptual loss via Gumbel-softmax straight-through decoding.
     # When > 0, the AR logits are sampled via Gumbel-softmax at this
@@ -86,7 +93,7 @@ class ARModelConfig:
     # Number of steps before the perceptual loss activates.  The model first
     # learns plausible token predictions from CE + L1 before the harder
     # Gumbel-softmax sampling objective is introduced.
-    perceptual_warmup_steps: int = 0
+    perceptual_warmup_steps: int = 5_000
 
     # Free-running training: with this probability, a training step replaces
     # teacher-forcing with full autoregressive generation.  The model
@@ -94,7 +101,7 @@ class ARModelConfig:
     # receives LPIPS loss only — no token CE.  This directly addresses
     # exposure bias by training on the model's own error distribution.
     # Set to 0.0 to disable (teacher-forcing only).
-    free_running_prob: float = 0.0
+    free_running_prob: float = 0.1
 
     freeze_gtok: bool = True
 
@@ -865,6 +872,7 @@ class ARModel(SaveLoadModel):
 
         self._global_step: int = 0
         self._content_only_step: bool = False
+        self._style_only_step: bool = False
         self._nfa_mode: bool = False
 
     def _register_latincore_mapping(self) -> None:
@@ -1120,6 +1128,21 @@ class ARModel(SaveLoadModel):
         ):
             fused = torch.zeros_like(fused)
             self._content_only_step = True
+
+        # Style-only dropout: zero out codepoint embedding with configured
+        # probability.  Forces the model to extract character identity from
+        # the fused features, which carries gradient to the aggregator and
+        # style encoder.  Mutually exclusive with content-only — if both
+        # trigger, content-only wins (zeroing both paths would be unlearnable).
+        self._style_only_step = False
+        if (
+            self.training
+            and not self._content_only_step
+            and self.config.style_only_prob > 0
+            and torch.rand(1).item() < self.config.style_only_prob
+        ):
+            codepoint_map = torch.zeros_like(codepoint_map)
+            self._style_only_step = True
 
         return torch.cat([codepoint_map, fused], dim=1)  # (B, 2C, H, W)
 
