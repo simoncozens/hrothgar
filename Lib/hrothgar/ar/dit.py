@@ -505,21 +505,33 @@ def get_beta_schedule(name: str, num_steps: int) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-class NoiseScheduler:
-    """Pre-computed noise schedule values for training and DDIM sampling."""
+class NoiseScheduler(nn.Module):
+    """Pre-computed noise schedule values for training and DDIM sampling.
+
+    Subclasses :class:`nn.Module` so that its tensors (registered as buffers)
+    automatically move to the correct device when the parent model calls
+    ``.to(device)``.
+    """
 
     def __init__(self, betas: torch.Tensor) -> None:
-        self.betas = betas  # (T,)
-        self.num_steps = len(betas)
+        super().__init__()
 
         alphas = 1.0 - betas
-        self.alphas_cumprod = torch.cumprod(alphas, dim=0)  # (T,)
-        self.alphas_cumprod_prev = torch.cat(
-            [torch.tensor([1.0]), self.alphas_cumprod[:-1]]
+        alphas_cumprod = torch.cumprod(alphas, dim=0)  # (T,)
+        alphas_cumprod_prev = torch.cat(
+            [torch.tensor([1.0]), alphas_cumprod[:-1]]
         )  # (T,)
 
-        self.sqrt_alphas_cumprod = self.alphas_cumprod.sqrt()
-        self.sqrt_one_minus_alphas_cumprod = (1.0 - self.alphas_cumprod).sqrt()
+        # Register as buffers so they move with the model.
+        self.register_buffer("betas", betas)
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
+        self.register_buffer("sqrt_alphas_cumprod", alphas_cumprod.sqrt())
+        self.register_buffer(
+            "sqrt_one_minus_alphas_cumprod", (1.0 - alphas_cumprod).sqrt()
+        )
+
+        self.num_steps = len(betas)
 
     def q_sample(
         self,
@@ -591,6 +603,9 @@ def ddim_sample(
 
     B, N, D = shape
     T = scheduler.num_steps
+
+    # Ensure scheduler buffers are on the target device.
+    scheduler.to(device)
 
     # Sample initial noise.
     x_t = torch.randn(B, N, D, device=device)
