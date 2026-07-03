@@ -1,4 +1,6 @@
-"""Loss utilities for visual-pretraining of the AR generator."""
+"""Loss utilities for DiT-based glyph generation."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -6,254 +8,76 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from hrothgar.ar.model import ARAdaptationOutput, ARModelOutput
+from hrothgar.ar.model import GlyphGenOutput
 
 
 @dataclass(frozen=True)
-class ARLossWeights:
-    """Weights for the AR visual-pretraining objectives."""
+class GlyphGenLossWeights:
+    """Weights for the DiT training objectives."""
 
-    token_cross_entropy: float = 0.3
+    noise_mse: float = 1.0
     pixel_l1: float = 1.0
-    lookahead_cross_entropy: float = 0.1
     perceptual_lpips: float = 2.0
 
 
-@dataclass(frozen=True)
-class ARAdaptationLossWeights:
-    """Weights for multimodal AR adaptation objectives."""
-
-    alignment_l2: float = 1.0
-    token_cross_entropy: float = 0.0
-    pixel_l1: float = 0.0
-    lookahead_cross_entropy: float = 0.0
-
-
-def compute_ar_loss(
-    model_output: ARModelOutput,
+def compute_glyph_gen_loss(
+    model_output: GlyphGenOutput,
     target_images: torch.Tensor,
     *,
-    target_token_indices: Optional[torch.Tensor] = None,
-    weights: ARLossWeights = ARLossWeights(),
+    weights: GlyphGenLossWeights = GlyphGenLossWeights(),
     lpips_metric: Optional[object] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """Compute AR visual-pretraining loss and loggable terms.
+    """Compute DiT training loss and loggable terms.
 
-    The paper objective for this stage combines token-level cross-entropy and
-    pixel-level L1 reconstruction.
-
-    When ``model_output.perceptual_recon`` is provided and
-    ``weights.perceptual_lpips > 0``, an auxiliary LPIPS loss is computed
-    between the Gumbel-softmax decoded image and the ground truth.  This
-    directly addresses the many-to-one mapping problem by teaching the model
-    that different code sequences are valid if they decode to the same image.
+    Primary objective: MSE between predicted and true noise.
+    Auxiliary objectives: pixel L1 and LPIPS perceptual loss between
+    the decoded x̂₀ prediction and the ground-truth image.
 
     Args:
-        model_output: Output from ``ARModel.forward``.
-        target_images: Ground-truth target glyph images, shape ``(B, C, H, W)``.
-        target_token_indices: Optional explicit token targets. If omitted, this
-            function uses ``model_output.target_token_indices``.
-        weights: Weights for token and pixel loss terms.
-        lpips_metric: Optional LPIPS module instance. Required when
-            ``weights.perceptual_lpips > 0`` and
-            ``model_output.perceptual_recon`` is not None.
+        model_output: Output from ``GlyphGenerator.forward``.
+        target_images: Ground-truth glyph images, ``(B, 3, H, W)``.
+        weights: Loss weight configuration.
+        lpips_metric: LPIPS module instance (required if
+            ``perceptual_lpips > 0``).
 
     Returns:
-        ``(total_loss, terms)`` where terms is suitable for TensorBoard logging.
+        ``(total_loss, terms)`` where terms is suitable for TensorBoard
+        logging.
     """
-    token_targets = target_token_indices
-    if token_targets is None:
-        token_targets = model_output.target_token_indices
+    device = target_images.device
 
-    # Free-running steps have no token targets — skip token CE and lookahead.
-    has_token_targets = token_targets is not None
+    # Primary: noise prediction MSE.
+    noise_mse = F.mse_loss(model_output.noise_pred, model_output.noise_target)
 
-    # MaskGIT: token_mask indicates which positions were masked during
-    # training (and should contribute to CE loss).
-    maskgit_mask = model_output.token_mask
-
-    if has_token_targets:
-        if model_output.logits.shape[:2] != token_targets.shape:
-            raise ValueError(
-                "Logit and target token shapes must match in batch and sequence dimensions "
-                f"(got logits {tuple(model_output.logits.shape[:2])}, targets {tuple(token_targets.shape)})"
-            )
-
-        if maskgit_mask is not None:
-            # MaskGIT: CE computed only on masked positions.
-            n_masked = maskgit_mask.sum()
-            if n_masked > 0:
-                masked_logits = model_output.logits[maskgit_mask]
-                masked_targets = token_targets[maskgit_mask]
-                token_cross_entropy = F.cross_entropy(masked_logits, masked_targets)
-            else:
-                token_cross_entropy = torch.tensor(0.0, device=token_targets.device)
-        else:
-            # AR: CE computed on all positions.
-            token_cross_entropy = F.cross_entropy(
-                model_output.logits.reshape(-1, model_output.logits.shape[-1]),
-                token_targets.reshape(-1),
-            )
-
-        lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
-        if model_output.lookahead_logits:
-            for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
-                valid_len = token_targets.shape[1] - k
-                if valid_len > 0:
-                    lookahead_cross_entropy = lookahead_cross_entropy + F.cross_entropy(
-                        l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
-                        token_targets[:, k:].reshape(-1),
-                    )
-            lookahead_cross_entropy = lookahead_cross_entropy / len(
-                model_output.lookahead_logits
-            )
-    else:
-        token_cross_entropy = torch.tensor(0.0, device=target_images.device)
-        lookahead_cross_entropy = torch.tensor(0.0, device=target_images.device)
-
+    # Auxiliary: pixel L1 between decoded x̂₀ and ground truth.
     pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
 
-    # Perceptual LPIPS loss on Gumbel-softmax sampled reconstruction.
-    perceptual_lpips = torch.tensor(0.0, device=target_images.device)
+    # Auxiliary: LPIPS perceptual loss on Gumbel-softmax decoded image.
+    perceptual_lpips = torch.tensor(0.0, device=device)
     if weights.perceptual_lpips > 0 and model_output.perceptual_recon is not None:
         if lpips_metric is None:
             raise ValueError(
                 "lpips_metric is required when perceptual_lpips > 0 "
                 "and perceptual_recon is provided"
             )
-        # Clamp to [0, 1] for LPIPS (decoder output can drift slightly).
         perceptual_recon_clamped = torch.clamp(model_output.perceptual_recon, 0.0, 1.0)
         target_clamped = torch.clamp(target_images, 0.0, 1.0)
         perceptual_lpips = lpips_metric(perceptual_recon_clamped, target_clamped).mean()
 
-    weighted_token_cross_entropy = weights.token_cross_entropy * token_cross_entropy
-    weighted_lookahead_cross_entropy = (
-        weights.lookahead_cross_entropy * lookahead_cross_entropy
-    )
+    weighted_noise_mse = weights.noise_mse * noise_mse
     weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
     weighted_perceptual_lpips = weights.perceptual_lpips * perceptual_lpips
-    total_loss = (
-        weighted_token_cross_entropy
-        + weighted_lookahead_cross_entropy
-        + weighted_pixel_l1
-        + weighted_perceptual_lpips
-    )
 
-    token_accuracy = torch.tensor(0.0, device=target_images.device)
-    if has_token_targets:
-        token_predictions = torch.argmax(model_output.logits, dim=-1)
-        if maskgit_mask is not None:
-            # Accuracy on masked positions only.
-            if maskgit_mask.sum() > 0:
-                token_accuracy = (
-                    (token_predictions[maskgit_mask] == token_targets[maskgit_mask])
-                    .float()
-                    .mean()
-                )
-        else:
-            token_accuracy = (token_predictions == token_targets).float().mean()
+    total_loss = weighted_noise_mse + weighted_pixel_l1 + weighted_perceptual_lpips
 
     terms: Dict[str, torch.Tensor] = {
-        "total": total_loss,
-        "token_cross_entropy": token_cross_entropy,
-        "lookahead_cross_entropy": lookahead_cross_entropy,
-        "pixel_l1": pixel_l1,
-        "perceptual_lpips": perceptual_lpips,
-        "token_accuracy": token_accuracy,
-        "weighted_token_cross_entropy": weighted_token_cross_entropy,
-        "weighted_lookahead_cross_entropy": weighted_lookahead_cross_entropy,
-        "weighted_pixel_l1": weighted_pixel_l1,
-        "weighted_perceptual_lpips": weighted_perceptual_lpips,
-    }
-    if maskgit_mask is not None:
-        terms["n_masked"] = maskgit_mask.sum().float()
-
-    return total_loss, terms
-
-
-def compute_ar_adaptation_loss(
-    model_output: ARAdaptationOutput,
-    *,
-    target_images: Optional[torch.Tensor] = None,
-    target_token_indices: Optional[torch.Tensor] = None,
-    weights: ARAdaptationLossWeights = ARAdaptationLossWeights(),
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """Compute multimodal adaptation loss and loggable terms.
-
-    Core objective is L2 alignment between visual-only and multimodal
-    aggregated style tokens. Optionally adds decoder supervision terms when
-    decoder outputs are available.
-    """
-    alignment_l2 = F.mse_loss(
-        model_output.multimodal_aggregated_style_tokens,
-        model_output.visual_aggregated_style_tokens,
-    )
-    total_loss = weights.alignment_l2 * alignment_l2
-
-    terms: Dict[str, torch.Tensor] = {
-        "alignment_l2": alignment_l2,
-        "weighted_alignment_l2": weights.alignment_l2 * alignment_l2,
+        "total": total_loss.detach(),
+        "noise_mse": noise_mse.detach(),
+        "pixel_l1": pixel_l1.detach(),
+        "perceptual_lpips": perceptual_lpips.detach(),
+        "weighted_noise_mse": weighted_noise_mse.detach(),
+        "weighted_pixel_l1": weighted_pixel_l1.detach(),
+        "weighted_perceptual_lpips": weighted_perceptual_lpips.detach(),
     }
 
-    has_decoder_outputs = (
-        model_output.logits is not None
-        and model_output.reconstructed_images is not None
-    )
-    decoder_requested = (
-        weights.token_cross_entropy > 0.0
-        or weights.pixel_l1 > 0.0
-        or weights.lookahead_cross_entropy > 0.0
-    )
-
-    if decoder_requested and not has_decoder_outputs:
-        raise ValueError(
-            "Decoder-weighted adaptation loss requested, but model output does not contain decoder tensors. "
-            "Run forward_adaptation(..., run_decoder=True)."
-        )
-
-    if has_decoder_outputs:
-        token_targets = target_token_indices
-        if token_targets is None:
-            token_targets = model_output.target_token_indices
-
-        if token_targets is not None:
-            token_cross_entropy = F.cross_entropy(
-                model_output.logits.reshape(-1, model_output.logits.shape[-1]),
-                token_targets.reshape(-1),
-            )
-            weighted_token_cross_entropy = (
-                weights.token_cross_entropy * token_cross_entropy
-            )
-            total_loss = total_loss + weighted_token_cross_entropy
-            terms["token_cross_entropy"] = token_cross_entropy
-            terms["weighted_token_cross_entropy"] = weighted_token_cross_entropy
-
-            token_predictions = torch.argmax(model_output.logits, dim=-1)
-            token_accuracy = (token_predictions == token_targets).float().mean()
-            terms["token_accuracy"] = token_accuracy
-
-            if model_output.lookahead_logits:
-                lookahead_ce = torch.tensor(0.0, device=token_targets.device)
-                for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
-                    valid_len = token_targets.shape[1] - k
-                    if valid_len > 0:
-                        lookahead_ce = lookahead_ce + F.cross_entropy(
-                            l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
-                            token_targets[:, k:].reshape(-1),
-                        )
-                lookahead_ce = lookahead_ce / len(model_output.lookahead_logits)
-                weighted_lookahead_ce = weights.lookahead_cross_entropy * lookahead_ce
-
-                total_loss = total_loss + weighted_lookahead_ce
-                terms["lookahead_cross_entropy"] = lookahead_ce
-                terms["weighted_lookahead_cross_entropy"] = weighted_lookahead_ce
-
-        if target_images is not None:
-            pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
-            weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
-            total_loss = total_loss + weighted_pixel_l1
-            terms["pixel_l1"] = pixel_l1
-            terms["weighted_pixel_l1"] = weighted_pixel_l1
-
-    terms["total"] = total_loss
     return total_loss, terms
