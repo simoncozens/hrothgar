@@ -69,31 +69,31 @@ class ARModelConfig:
     # used.  The probability ramps from 0 to ``perturbation_probability`` over
     # ``perturbation_warmup_steps``.
     perturbation_probability: float = 0.2
-    self_perturbation: bool = True
+    self_perturbation: bool = False
     perturbation_warmup_steps: int = 20_000
     reconstruction_temperature: float = 1.0
     num_multitoken_lookahead_steps: int = 0
 
     # Regularisation on the style encoding path.
-    style_dropout: float = 0.3
+    style_dropout: float = 0.2
 
     # Content-only training: zero out the style-fused features with this
     # probability during training.  Forces the decoder to rely on codepoint
     # identity and token-level sequential structure.  Set to 0.0 to disable.
-    content_only_prob: float = 0.1
+    content_only_prob: float = 0.0
 
     # Style-only training: zero out the codepoint embedding with this
     # probability during training.  Forces the decoder to rely on style
     # features, teaching the style encoder and aggregator to carry useful
     # signal.  Counterpart to ``content_only_prob`` — together they ensure
     # the model can use both conditioning paths.  Set to 0.0 to disable.
-    style_only_prob: float = 0.1
+    style_only_prob: float = 0.0
 
     # Perceptual loss via Gumbel-softmax straight-through decoding.
     # When > 0, the AR logits are sampled via Gumbel-softmax at this
     # temperature, decoded through the frozen G-Tok decoder, and compared
     # against the ground-truth image via LPIPS.  Set to 0 to disable.
-    perceptual_temperature: float = 0.5
+    perceptual_temperature: float = 0
     # Number of steps before the perceptual loss activates.  The model first
     # learns plausible token predictions from CE + L1 before the harder
     # Gumbel-softmax sampling objective is introduced.
