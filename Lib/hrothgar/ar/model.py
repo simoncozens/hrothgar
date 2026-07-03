@@ -106,13 +106,20 @@ class GlyphGenConfig:
                 f"(got {self.dit_hidden_size} and {self.dit_num_heads})"
             )
 
-    def dit_config(self) -> DiTConfig:
-        """Build DiTConfig from this config + derived sizes."""
+    def dit_config(self, token_dim: int = 16, num_tokens: int = 64) -> DiTConfig:
+        """Build DiTConfig from this config + derived sizes.
+
+        Args:
+            token_dim: Codebook embedding dimension (must match G-Tok output).
+            num_tokens: Sequence length (must match G-Tok grid size).
+        """
         return DiTConfig(
             hidden_size=self.dit_hidden_size,
             depth=self.dit_depth,
             num_heads=self.dit_num_heads,
             mlp_ratio=self.dit_mlp_ratio,
+            token_dim=token_dim,
+            num_tokens=num_tokens,
             num_diffusion_steps=self.diffusion_steps,
             noise_schedule=self.noise_schedule,
             ddim_steps=self.ddim_steps,
@@ -222,8 +229,11 @@ class GlyphGenerator(SaveLoadModel):
             n_style_blocks=config.aggregator_num_layers,
         )
 
-        # DiT backbone.
-        dit_config = config.dit_config()
+        # DiT backbone (token_dim and num_tokens derived from G-Tok).
+        dit_config = config.dit_config(
+            token_dim=self.codebook_dim,
+            num_tokens=self.sequence_length,
+        )
         self.dit = GlyphDiT(dit_config)
 
         # Noise scheduler.
