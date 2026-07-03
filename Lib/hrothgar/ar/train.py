@@ -288,6 +288,7 @@ class DiTGlyphTrainingLoop(TrainingLoop):
                     val_output,
                     val_target,
                     weights=self.loss_weights,
+                    lpips_metric=self.lpips,
                 )
                 recon = torch.clamp(val_output.reconstructed_images, 0.0, 1.0).float()
                 target = torch.clamp(val_target, 0.0, 1.0).float()
