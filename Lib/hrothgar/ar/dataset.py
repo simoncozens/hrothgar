@@ -12,8 +12,10 @@ from typing import Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from hrothgar.dataset import Dataset, DatasetMaker, LATIN_CORE, LATIN_KERNEL
 from torch.utils.data import BatchSampler, DataLoader
+
+from hrothgar.dataset import LATIN_CORE, LATIN_KERNEL, Dataset, DatasetMaker
+from hrothgar.googlefonts import GoogleFont
 
 
 def _has_non_empty_glyph(font, codepoint: int) -> bool:
@@ -258,12 +260,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
         """
 
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
-        target_renderings = torch.stack(
-            [
-                torch.tensor(item["font"].render(item["char"], size=self.image_size))
-                for item in batch
-            ]
-        )
+        target_renderings = []
 
         content_renderings = []
         style_renderings = []
@@ -271,9 +268,16 @@ class ARPhase1DatasetMaker(DatasetMaker):
         descriptions = []
 
         for item in batch:
-            font = item["font"]
+            font: GoogleFont = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
+
+            axis_pos = font.random_axis_position()
+
+            def render_with_font(char):
+                return font.render(char, size=self.image_size, axis_position=axis_pos)
+
+            target_rendering = render_with_font(char)
 
             # If reference font lacks a usable glyph for this character, fall back
             # to the target font so content conditioning is never blank.
@@ -284,7 +288,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             content_render = reference_font.render(char, size=self.image_size)
             if _is_blank_rendering(content_render):
-                content_render = font.render(char, size=self.image_size)
+                content_render = render_with_font(char)
             content_renderings.append(torch.tensor(content_render))
 
             sampled_style_chars = _sample_style_codepoints(
@@ -295,21 +299,23 @@ class ARPhase1DatasetMaker(DatasetMaker):
             )
             rendered_styles = []
             sanitized_style_chars = []
+
             for cp in sampled_style_chars:
-                style_render = font.render(cp, size=self.image_size)
+                style_render = render_with_font(cp)
                 if _is_blank_rendering(style_render):
                     cp = char
-                    style_render = font.render(cp, size=self.image_size)
+                    style_render = render_with_font(cp)
                 sanitized_style_chars.append(cp)
                 rendered_styles.append(torch.tensor(style_render))
 
+            target_renderings.append(torch.tensor(target_rendering))
             style_chars.append(sanitized_style_chars)
             style_renderings.append(torch.stack(rendered_styles))
             descriptions.append(font.description_with_tags_and_display())
 
         return {
             "char": chars,
-            "target_rendering": target_renderings,
+            "target_rendering": torch.stack(target_renderings),
             "content_rendering": torch.stack(content_renderings),
             "style_renderings": torch.stack(style_renderings),
             "style_chars": torch.tensor(style_chars, dtype=torch.long),
