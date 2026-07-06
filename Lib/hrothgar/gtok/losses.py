@@ -31,7 +31,7 @@ class GtokLossInfo:
     entropy_loss: Optional[torch.Tensor]
     codebook_usage: object
     perplexity: Optional[torch.Tensor] = None
-    aux_ar_loss: Optional[torch.Tensor] = None
+    #aux_ar_loss: Optional[torch.Tensor] = None
     character_ce: Optional[torch.Tensor] = None
     font_ce: Optional[torch.Tensor] = None
 
@@ -97,7 +97,7 @@ def compute_gtok_loss(
 
     commit_loss = _or_zero(loss_info.commit_loss)
     entropy_loss = _or_zero(loss_info.entropy_loss)
-    aux_ar_loss = _or_zero(loss_info.aux_ar_loss)
+    #aux_ar_loss = _or_zero(loss_info.aux_ar_loss)
     character_ce = _or_zero(loss_info.character_ce)
     font_ce = _or_zero(loss_info.font_ce)
 
@@ -106,7 +106,7 @@ def compute_gtok_loss(
     )
     perplexity = _or_zero(loss_info.perplexity)
 
-    weighted_aux_ar = weights.aux_ar * _or_zero(loss_info.aux_ar_loss)
+    #weighted_aux_ar = weights.aux_ar * _or_zero(loss_info.aux_ar_loss)
     weighted_character_ce = weights.character_ce * _or_zero(loss_info.character_ce)
     weighted_font_ce = weights.font_ce * font_ce
     weighted_l1 = weights.l1 * l1_loss
@@ -121,7 +121,7 @@ def compute_gtok_loss(
         + weighted_glyphloss
         + weighted_commit
         + weighted_entropy
-        + weighted_aux_ar
+        #+ weighted_aux_ar
         + weighted_character_ce
         + weighted_font_ce
     )
@@ -133,7 +133,7 @@ def compute_gtok_loss(
         "glyphloss": glyphloss_loss,
         "commit": commit_loss,
         "entropy": entropy_loss,
-        "aux_ar": aux_ar_loss,
+        #"aux_ar": aux_ar_loss,
         "character_ce": character_ce,
         "codebook_usage": codebook_usage,
         "perplexity": perplexity,
@@ -142,7 +142,7 @@ def compute_gtok_loss(
         "weighted_glyphloss": weighted_glyphloss,
         "weighted_commit": weighted_commit,
         "weighted_entropy": weighted_entropy,
-        "weighted_aux_ar": weighted_aux_ar,
+        #"weighted_aux_ar": weighted_aux_ar,
         "weighted_character_ce": weighted_character_ce,
         "font_ce": font_ce,
         "weighted_font_ce": weighted_font_ce,

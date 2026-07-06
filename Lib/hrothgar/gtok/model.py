@@ -512,11 +512,11 @@ class GtokModel(SaveLoadModel):
         )
 
         # Auxiliary AR prediction head (lightweight MLP, ~500K params at 2048×128)
-        self.aux_ar_head = AuxARHead(
-            hidden_dim=config.vit_hidden_dim,
-            codebook_size=config.quantizer_codebook_size,
-            aux_hidden_dim=128,
-        )
+        #self.aux_ar_head = AuxARHead(
+        #    hidden_dim=config.vit_hidden_dim,
+        #    codebook_size=config.quantizer_codebook_size,
+        #    aux_hidden_dim=128,
+        #)
 
         # Character classifier: encourages codebook to organise by character.
         # Takes mean-pooled quantized vectors and predicts class within the character set.
@@ -625,7 +625,7 @@ class GtokModel(SaveLoadModel):
         )
 
         # Auxiliary AR loss: predict next code index from current ViT features.
-        aux_ar_loss: Optional[torch.Tensor] = None
+        #aux_ar_loss: Optional[torch.Tensor] = None
         if hasattr(self, "aux_ar_head"):
             # indices_info[2] is min_encoding_indices, shape (B*N,)
             code_indices = indices_info[2].view(
@@ -669,7 +669,7 @@ class GtokModel(SaveLoadModel):
             entropy_loss=raw_loss_info[2],
             codebook_usage=raw_loss_info[3],
             perplexity=indices_info[0],
-            aux_ar_loss=aux_ar_loss,
+            #aux_ar_loss=aux_ar_loss,
             character_ce=character_ce,
             font_ce=font_ce,
         )
