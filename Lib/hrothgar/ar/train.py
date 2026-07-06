@@ -29,6 +29,9 @@ from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.utils import TrainingLoop
 
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 def _parse_codepoint(value: str) -> List[int]:
     return [ord(c) for c in value]
 
