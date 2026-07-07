@@ -1,4 +1,4 @@
-"""Autoregressive generator package exports."""
+"""MaskGIT glyph generator package exports."""
 
 from hrothgar.ar.dataset import ARPhase1DatasetMaker
 from hrothgar.ar.losses import (
@@ -22,14 +22,7 @@ from hrothgar.ar.model import (
     LoRAConfig,
     LoRALinear,
 )
-from hrothgar.ar.multimodal import (
-    HashedDescriptionEncoder,
-    HashedDescriptionEncoderConfig,
-    TextStyleAdapter,
-    TextStyleAdapterConfig,
-)
-from hrothgar.ar.nfa import ARNFATrainingLoop, NFADatasetMaker, NFAGlyphDataset
-from hrothgar.ar.train import ARMultimodalTrainingLoop, ARVisualTrainingLoop
+from hrothgar.ar.train import MaskGITTrainingLoop
 
 __all__ = [
     "ARPhase1DatasetMaker",
@@ -43,15 +36,7 @@ __all__ = [
     "ARModelOutput",
     "LoRAConfig",
     "LoRALinear",
-    "HashedDescriptionEncoder",
-    "HashedDescriptionEncoderConfig",
-    "TextStyleAdapter",
-    "TextStyleAdapterConfig",
-    "ARNFATrainingLoop",
-    "ARMultimodalTrainingLoop",
-    "NFADatasetMaker",
-    "NFAGlyphDataset",
-    "ARVisualTrainingLoop",
+    "MaskGITTrainingLoop",
     "MaskGITConfig",
     "MaskGITDecoder",
     "MaskGITLossWeights",
