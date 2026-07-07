@@ -114,7 +114,7 @@ class GtokTrainingLoop(TrainingLoop):
                     "Targeted validation families file did not match any test families; "
                     "skipping targeted validation."
                 )
-        self.perceptual_loss_fn = VGG().to(self.device)
+        self.perceptual_loss_fn = None  # VGG().to(self.device)
         self.glyphloss_fn = GlyphReconstructionLoss(lambda_pixel=0.0).to(self.device)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)

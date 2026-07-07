@@ -88,9 +88,9 @@ class GtokLossWeights:
     The VQ loss is always zero with EMA codebook updates.
     """
 
-    l1: float = 1.0
-    perceptual: float = 0.1
-    glyphloss: float = 2.0
+    l1: float = 4.0
+    perceptual: float = 0.0
+    glyphloss: float = 1.0
     vq: float = 1.0
     commit: float = 0.5
     entropy: float = 2.0
