@@ -47,9 +47,9 @@ class GtokConfig:
     @property
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
-        if self.image_size == 128:
+        if self.image_size >= 128:
             return 64
-        elif self.image_size == 64:
+        elif self.image_size >= 64:
             return 32
         else:
             raise ValueError(
@@ -67,14 +67,15 @@ class GtokConfig:
 
     @property
     def cnn_channel_multipliers(self) -> Optional[List[int]]:
-        if self.image_size == 128:
-            return [1, 1, 2, 2, 4]
-        elif self.image_size == 64:
-            return [1, 1, 2, 4]
-        else:
-            raise ValueError(
-                f"Unsupported image_size {self.image_size} for default cnn_channel_multipliers"
-            )
+        # if self.image_size == 128:
+        #     return [1, 1, 2, 2, 4]
+        # elif self.image_size == 64:
+        return [1, 1, 2, 4]
+
+    # else:
+    #     raise ValueError(
+    #         f"Unsupported image_size {self.image_size} for default cnn_channel_multipliers"
+    #     )
 
 
 @dataclass(frozen=True)
