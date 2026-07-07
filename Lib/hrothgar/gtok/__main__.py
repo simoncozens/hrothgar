@@ -134,7 +134,7 @@ def main() -> None:
     )
 
     with torch.no_grad():
-        reconstructed_tensor, _ = model(input_tensor, descriptions=[description])
+        reconstructed_tensor, _ = model(input_tensor)
 
     reconstructed = reconstructed_tensor.squeeze(0).detach().cpu().numpy()
     diff = np.abs(rendered - reconstructed) * 4.0  # amplify ×4 for visibility
