@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Sequence
 
+from hrothgar.ar.train import MASKGIT_NUM_INFERENCE_STEPS, MASKGIT_TEMPERATURE
 import numpy as np
 import torch
 from PIL import Image
@@ -56,8 +57,16 @@ def _parse_char(value: str) -> int:
     if value.startswith(("U+", "u+")):
         return int(value[2:], 16)
     if len(value) != 1:
-        raise ValueError("--target-char must be a single character or U+XXXX")
+        raise ValueError("Each target must be a single character or U+XXXX")
     return ord(value)
+
+
+def _parse_chars(value: str) -> list[int]:
+    """Parse a comma-separated string of chars/U+XXXX into a list of codepoints."""
+    parts = [p.strip() for p in value.split(",")]
+    if not parts or all(p == "" for p in parts):
+        raise ValueError("--target-chars must specify at least one character")
+    return [_parse_char(p) for p in parts]
 
 
 def _parse_codepoint_string(value: Optional[str]) -> Optional[list[int]]:
@@ -144,7 +153,7 @@ def fine_tune_ar_nfa(
                 content_images,
                 style_images,
                 target_images=target_images,
-                descriptions=descriptions,
+                # descriptions=descriptions,
             )
             loss, _ = compute_ar_loss(output, target_images, weights=loss_weights)
             loss.backward()
@@ -200,12 +209,13 @@ def _build_generation_inputs(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Lightly fine-tune GTok + AR NFA on one font and generate an "
-            "upscaled glyph"
+            "Lightly fine-tune GTok + AR NFA on one font and generate one or more "
+                        "upscaled glyphs"
         )
     )
     parser.add_argument("--font-path", type=Path, required=True)
-    parser.add_argument("--target-char", type=str, required=True)
+    parser.add_argument("--target-chars", type=str, required=True,
+                        help="Comma-separated target characters (e.g. 'A,B,C' or 'U+0041,U+0042')")
 
     parser.add_argument("--gtok-model-path", type=Path, required=True)
     parser.add_argument("--ar-model-path", type=Path, required=True)
@@ -224,8 +234,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reference family for content glyph conditioning during NFA",
     )
 
-    parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--output-size", type=int, default=512)
+    parser.add_argument("--upscale", type=int, default=4)
 
     parser.add_argument("--gtok-epochs", type=int, default=10)
     parser.add_argument("--nfa-epochs", type=int, default=20)
@@ -312,9 +321,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional output path for fine-tuned AR (base + LoRA) weights",
     )
     parser.add_argument(
-        "--save-intermediate-128",
+        "--target-char",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--save-intermediate",
         action="store_true",
-        help="Also save the raw 128x128 generated bitmap",
+        help="Also save the raw generated bitmap",
     )
     parser.add_argument(
         "--text-hash-vocab-size",
@@ -398,7 +413,12 @@ def main() -> None:
             f"Google Fonts repo path not found: {args.dataset_path}"
         )
 
-    target_char = _parse_char(args.target_char)
+    # Backward compatibility: if --target-char is used, wrap it into a single-element list.
+    if args.target_char is not None:
+        target_chars = [_parse_char(args.target_char)]
+    else:
+        target_chars = _parse_chars(args.target_chars)
+
     style_codepoints = _parse_codepoint_string(args.style_characters)
     device = pick_device()
     print(f"Using device: {device}")
@@ -408,267 +428,107 @@ def main() -> None:
     )
     font_description = matched_google_font.description_with_tags_and_display()
 
-    # Load GTok and adapt only its decoder path on Latin Core glyphs.
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    finetuned_gtok_path = args.gtok_model_path
 
-    if args.gtok_epochs > 0:
-        # Determine the output path for the fine-tuned checkpoint.
-        if args.finetuned_gtok_path is not None:
-            finetuned_gtok_path = args.finetuned_gtok_path
-        else:
-            finetuned_gtok_path = (
-                args.output_dir / f"{args.font_path.stem}_gtok_decoder_finetuned.pth"
-            )
-
-        # Check if fine-tuned checkpoint already exists.
-        if Path(finetuned_gtok_path).exists():
-            print(f"Found fine-tuned GTok checkpoint: {finetuned_gtok_path}")
-            gtok, gtok_config = load_gtok_model(Path(finetuned_gtok_path), device)
-        else:
-            print("Fine-tuned GTok checkpoint not found; training...")
-            gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
-            fine_tune_gtok_decoder_only(
-                model=gtok,
-                font=matched_google_font,
-                image_size=args.image_size,
-                description=font_description,
-                config=GtokFineTuneConfig(
-                    epochs=args.gtok_epochs,
-                    batch_size=args.gtok_batch_size,
-                    learning_rate=args.gtok_learning_rate,
-                ),
-                device=device,
-            )
-            gtok.save(str(finetuned_gtok_path))
-            gtok_config.save_sidecar(finetuned_gtok_path)
-            print(f"Saved fine-tuned GTok checkpoint: {finetuned_gtok_path}")
-    else:
-        gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
+    gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
 
     # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
-    glyph_lora_path = glyph_lora_model_path(args.ar_model_path, target_char)
-    if glyph_lora_path.exists():
-        print(f"Found existing glyph LoRA checkpoint: {glyph_lora_path}")
-    else:
-        print(
-            "Glyph LoRA checkpoint not found; running glyph adaptation to create: "
-            f"{glyph_lora_path}"
-        )
-        ga_model_path = glyph_lora_path.with_name(f"{glyph_lora_path.stem}.full.pth")
-        ga_args = SimpleNamespace(
-            allow_dirty=True,
-            tag=f"GA-{args.font_path.stem}-U{target_char:04X}",
-            model_path=str(ga_model_path),
-            base_model_path=str(args.ar_model_path),
-            gtok_model_path=str(finetuned_gtok_path),
-            dataset_path=str(args.dataset_path),
-            target_codepoint=target_char,
-            batch_size=args.ga_batch_size,
-            image_size=args.image_size,
-            style_glyph_count=args.style_glyph_count,
-            style_characters=style_codepoints,
-            split_seed=1234,
-            max_fonts=args.ga_max_fonts,
-            lora_rank=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            target_steps=args.ga_target_steps,
-            learning_rate=args.ga_learning_rate,
-            beta1=args.ga_beta1,
-            beta2=args.ga_beta2,
-            precision="bf16" if device.type == "cuda" else "fp32",
-            grad_accum_steps=1,
-            validation_every=args.ga_validation_every,
-            validation_batches=args.ga_validation_batches,
-            lora_model_path=str(glyph_lora_path),
-        )
-        ga_loop = ARGlyphAdaptationTrainingLoop(ga_args)
-        ga_loop.train()
-        if not glyph_lora_path.exists():
-            raise RuntimeError(
-                "Glyph adaptation completed but LoRA checkpoint was not found at "
-                f"{glyph_lora_path}"
-            )
-        print(f"Saved glyph LoRA checkpoint: {glyph_lora_path}")
-
-    # Load AR, restore GTok weights into it, then run NFA.
-    ar_config = ARModelConfig(image_size=args.image_size)
-    checkpoint_has_language_adapter = _checkpoint_contains_prefix(
-        args.ar_model_path,
-        "language_adapter.",
+    ar_config = ARModelConfig(
+        image_size=gtok_config.image_size,
+        use_maskgit=True,
+        maskgit_num_inference_steps=MASKGIT_NUM_INFERENCE_STEPS,
+        maskgit_temperature=MASKGIT_TEMPERATURE,
     )
-    language_adapter = None
-    if checkpoint_has_language_adapter:
-        print(
-            "Detected language_adapter.* weights in AR checkpoint; "
-            "enabling multimodal AR adapter in generate.py"
-        )
-        language_adapter = TextStyleAdapter(
-            TextStyleAdapterConfig(
-                style_token_dim=ar_config.encoder_feature_dim,
-                text_embedding_dim=args.text_embedding_dim,
-                adapter_hidden_dim=args.adapter_hidden_dim,
-                num_layers=args.adapter_layers,
-                num_heads=args.adapter_heads,
-                dropout=args.adapter_dropout,
-            )
-        )
-
     ar_model = ARModel(
         ar_config,
         gtok_model=gtok,
-        language_adapter=language_adapter,
     ).to(device)
     ar_model.load(str(args.ar_model_path), device=device)
     ar_model.gtok.load_state_dict(gtok.state_dict())
     ar_model.freeze_gtok()
 
-    text_encoder = None
-    if ar_model.language_adapter is not None:
-        text_encoder = HashedDescriptionEncoder(
-            HashedDescriptionEncoderConfig(
-                vocab_size=args.text_hash_vocab_size,
-                embedding_dim=args.text_embedding_dim,
-                max_tokens=args.text_max_tokens,
-            )
-        ).to(device)
-        text_encoder.eval()
-
-    lora_config = LoRAConfig(rank=args.lora_rank, alpha=args.lora_alpha)
-
-    # Enable composed NFA mode: the glyph LoRA (GA output) is loaded as a
-    # frozen adapter, and a fresh trainable font adapter is injected on top.
-    # NFA only updates the font adapter, preserving the glyph structural prior.
-    print(f"Loading glyph LoRA from {glyph_lora_path} for composed NFA mode...")
-    glyph_lora_state = torch.load(glyph_lora_path, map_location=device)
-    ar_model.enable_composed_nfa_mode(glyph_lora_state, lora_config)
-    print("Composed NFA mode enabled: glyph adapter frozen, font adapter trainable")
-
-    nfa_maker = NFADatasetMaker(
-        font=matched_google_font,
-        batch_size=args.nfa_batch_size,
-        image_size=args.image_size,
-        style_glyph_count=args.style_glyph_count,
-        common_style_codepoints=style_codepoints,
-        style_warmup_epochs=args.style_warmup_epochs,
-        style_extra_per_epoch=args.style_extra_per_epoch,
-        style_schedule_seed=args.style_schedule_seed,
-        target_codepoints=None,
-    )
-    fine_tune_ar_nfa(
-        model=ar_model,
-        maker=nfa_maker,
-        epochs=args.nfa_epochs,
-        batch_size=args.nfa_batch_size,
-        learning_rate=args.nfa_learning_rate,
-        beta1=args.nfa_beta1,
-        beta2=args.nfa_beta2,
-        composed_glyph_weight=args.composed_glyph_weight,
-        composed_font_weight_final=args.composed_font_weight_final,
-        composed_font_ramp_epochs=args.composed_font_ramp_epochs,
-        device=device,
-        description=font_description,
-    )
-
-    finetuned_ar_path = args.finetuned_ar_path
-    if finetuned_ar_path is None:
-        finetuned_ar_path = (
-            args.output_dir / f"{args.font_path.stem}_ar_nfa_finetuned.pth"
-        )
-    ar_model.save(str(finetuned_ar_path))
-    print(f"Saved fine-tuned AR checkpoint: {finetuned_ar_path}")
-
-    # Also save LoRA-only adaptation weights.
-    lora_only_path = finetuned_ar_path.with_name(f"{finetuned_ar_path.stem}_lora.pth")
-    torch.save(ar_model.token_decoder.get_lora_state_dict(), lora_only_path)
-    print(f"Saved LoRA-only checkpoint: {lora_only_path}")
-
-    # Generate a 128x128 glyph.
-    # Missing target glyphs in the adapted font are expected in this workflow.
-    # We only require that at least one content source can render the target
-    # character (selected reference font or the target font itself).
-    reference_for_target = matched_google_font.reference_font() or matched_google_font
-    if not _font_has_codepoint(
-        reference_for_target, target_char
-    ) and not _font_has_codepoint(matched_google_font, target_char):
-        raise ValueError(
-            "Target character "
-            f"U+{target_char:04X} is missing in both the target font and the "
-            "selected reference font. Provide --dataset-path with a suitable "
-            "--reference-family (noto-sans or noto-serif), or choose a supported "
-            "target character."
-        )
-
-    if not _font_has_codepoint(matched_google_font, target_char):
-        print(
-            "Target character "
-            f"U+{target_char:04X} is missing in the target font; using "
-            f"reference font content rendering from '{args.reference_family}'."
-        )
-
-    ar_model.eval()
-    content_images, style_images = _build_generation_inputs(
-        font=matched_google_font,
-        target_char=target_char,
-        style_glyph_count=args.style_glyph_count,
-        image_size=args.image_size,
-        common_style_codepoints=style_codepoints,
-        device=device,
-    )
-    with torch.no_grad():
-        if ar_model.language_adapter is not None and text_encoder is not None:
-            description_embeddings = text_encoder([font_description]).to(device)
-            generated = ar_model.generate_adaptation(
-                content_images=content_images,
-                style_reference_images=style_images,
-                text_embeddings=description_embeddings,
-                descriptions=[font_description],
-            )
-        else:
-            generated = ar_model.generate(
-                content_images=content_images,
-                style_reference_images=style_images,
-                descriptions=[font_description],
-            )
-        generated_128 = generated.reconstructed_images.squeeze(0).detach().cpu().numpy()
-
-    # Upscale 128x128 -> 512x512.
+    # Set up the upscaler once (shared across all target characters).
+    upscaled_size = gtok_config.image_size * args.upscale
     upscaler = UpscalerModel(
         UpscalerConfig(
-            low_res_size=args.image_size,
-            high_res_size=args.output_size,
+            low_res_size=gtok_config.image_size,
+            high_res_size=upscaled_size,
             use_gtok_encoder=True,
             use_gtok_vit_features=True,
-            gtok_model_path=str(finetuned_gtok_path),
+            gtok_model_path=args.gtok_model_path,
         )
     ).to(device)
     upscaler.load(str(args.upscaler_model_path), device=device)
     upscaler.eval()
 
-    with torch.no_grad():
-        low_res_tensor = torch.tensor(generated_128, dtype=torch.float32, device=device)
-        low_res_tensor = low_res_tensor.unsqueeze(0)
-        upscaled_512 = (
-            upscaler(low_res_tensor, descriptions=[font_description])
-            .squeeze(0)
-            .detach()
-            .cpu()
-            .numpy()
-        )
+    ar_model.eval()
 
-    codepoint_label = f"U+{target_char:04X}"
-    output_512_path = (
-        args.output_dir / f"{args.font_path.stem}_{codepoint_label}_512.png"
-    )
-    _to_image(upscaled_512).save(output_512_path)
-    print(f"Saved upscaled result: {output_512_path}")
+    for target_char in target_chars:
+        print(f"\n--- Generating U+{target_char:04X} ---")
 
-    if args.save_intermediate_128:
-        output_128_path = (
-            args.output_dir / f"{args.font_path.stem}_{codepoint_label}_128.png"
+        # Missing target glyphs in the adapted font are expected in this workflow.
+        # We only require that at least one content source can render the target
+        # character (selected reference font or the target font itself).
+        reference_for_target = matched_google_font.reference_font() or matched_google_font
+        if not _font_has_codepoint(
+            reference_for_target, target_char
+        ) and not _font_has_codepoint(matched_google_font, target_char):
+            print(
+                "Skipping character "
+                f"U+{target_char:04X}: missing in both the target font and the "
+                "selected reference font."
+            )
+            continue
+
+        if not _font_has_codepoint(matched_google_font, target_char):
+            print(
+                "Target character "
+                f"U+{target_char:04X} is missing in the target font; using "
+                f"reference font content rendering from '{args.reference_family}'."
+            )
+
+        content_images, style_images = _build_generation_inputs(
+            font=matched_google_font,
+            target_char=target_char,
+            style_glyph_count=args.style_glyph_count,
+            image_size=gtok_config.image_size,
+            common_style_codepoints=style_codepoints,
+            device=device,
         )
-        _to_image(generated_128).save(output_128_path)
-        print(f"Saved 128x128 generation: {output_128_path}")
+        with torch.no_grad():
+            generated = ar_model.generate(
+                content_images=content_images,
+                style_reference_images=style_images,
+                target_codepoints=torch.tensor([target_char]),
+                # descriptions=[font_description],
+            )
+            generated_lores = generated.reconstructed_images.squeeze(0).detach().cpu().numpy()
+
+        # Upscale
+        with torch.no_grad():
+            low_res_tensor = torch.tensor(generated_lores, dtype=torch.float32, device=device)
+            low_res_tensor = low_res_tensor.unsqueeze(0)
+            upscaled = (
+                upscaler(low_res_tensor, descriptions=[font_description])
+                .squeeze(0)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
+        codepoint_label = f"U+{target_char:04X}"
+        output_upscaled_path = (
+            args.output_dir / f"{args.font_path.stem}_{codepoint_label}_{upscaled_size}.png"
+        )
+        _to_image(upscaled).save(output_upscaled_path)
+        print(f"Saved upscaled result: {output_upscaled_path}")
+
+        if args.save_intermediate:
+            output_intermediate_path = (
+                args.output_dir / f"{args.font_path.stem}_{codepoint_label}_{gtok_config.image_size}.png"
+            )
+            _to_image(generated_lores).save(output_intermediate_path)
+            print(f"Saved {gtok_config.image_size}x{gtok_config.image_size} generation: {output_intermediate_path}")
 
 
 if __name__ == "__main__":
