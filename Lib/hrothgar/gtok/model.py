@@ -16,7 +16,7 @@ References:
 import dataclasses
 import json
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
