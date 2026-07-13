@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+coreml = ["coremltools"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

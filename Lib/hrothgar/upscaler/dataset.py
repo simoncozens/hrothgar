@@ -1,14 +1,18 @@
 """Dataset maker for glyph super-resolution.
 
 This prototype emits low-resolution and high-resolution raster pairs for the
-Latin core gidacter set, using the shared train/test split logic from
+Latin core character set, using the shared train/test split logic from
 ``hrothgar.dataset.DatasetMaker``.
+
+Each batch also includes K style-reference glyphs per sample — other glyphs
+from the same font rendered at high resolution — for style conditioning.
 """
 
 from __future__ import annotations
 
 from typing import Optional, Set
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
@@ -31,6 +35,7 @@ class UpscalerDatasetMaker(DatasetMaker):
         outline_noise_std: float = 0.08,
         outline_noise_edge_threshold: float = 0.12,
         low_res_noise_std: float = 0.01,
+        style_reference_count: int = 4,
     ) -> None:
         if low_res_size <= 0 or high_res_size <= 0:
             raise ValueError(
@@ -71,6 +76,7 @@ class UpscalerDatasetMaker(DatasetMaker):
         self.outline_noise_std = outline_noise_std
         self.outline_noise_edge_threshold = outline_noise_edge_threshold
         self.low_res_noise_std = low_res_noise_std
+        self.style_reference_count = style_reference_count
 
         super().__init__(
             repo_url=repo_url,
@@ -164,6 +170,33 @@ class UpscalerDatasetMaker(DatasetMaker):
         replacement = replacement_gray.expand_as(low_res)
         return torch.where(replace_mask.expand_as(low_res), replacement, low_res)
 
+    @staticmethod
+    def _sample_style_gids(font: object, exclude_gid: int, count: int) -> list[int]:
+        """Sample *count* valid (non-empty) gids from *font*, excluding *exclude_gid*.
+
+        Uses rejection sampling with a budget of 10×*count* attempts.
+        If not enough distinct gids are found, the list is padded by
+        repeating the last-found gid.
+        """
+        glyph_count: int = font.hb_face.glyph_count  # type: ignore[union-attr]
+        gids: list[int] = []
+        attempts = 0
+        budget = count * 10
+        while len(gids) < count and attempts < budget:
+            candidate = int(torch.randint(1, max(2, glyph_count), ()).item())
+            attempts += 1
+            if candidate == exclude_gid:
+                continue
+            # Quick render at low res to check if the glyph has drawable geometry.
+            raster = font.render_gid(candidate, size=64)  # type: ignore[union-attr]
+            if not np.allclose(raster, 1.0, atol=1e-2):
+                gids.append(candidate)
+        # Pad with the last-found gid (or exclude_gid as absolute fallback).
+        fallback = gids[-1] if gids else exclude_gid
+        while len(gids) < count:
+            gids.append(fallback)
+        return gids
+
     def collate_fn(self, batch):
         gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
         high_res = torch.stack(
@@ -175,6 +208,22 @@ class UpscalerDatasetMaker(DatasetMaker):
                 for item in batch
             ]
         )
+
+        # --- Style references ---
+        style_refs: list[torch.Tensor] = []
+        if self.style_reference_count > 0:
+            for item in batch:
+                ref_gids = self._sample_style_gids(
+                    item["font"], item["gid"], self.style_reference_count
+                )
+                ref_rasters = [
+                    torch.tensor(
+                        item["font"].render_gid(g, size=self.high_res_size),
+                        dtype=torch.float32,
+                    )
+                    for g in ref_gids
+                ]
+                style_refs.append(torch.stack(ref_rasters))  # (K, 3, H, W)
 
         low_res_source = high_res
         if self.style_conformance_mode:
@@ -190,14 +239,14 @@ class UpscalerDatasetMaker(DatasetMaker):
         if self.style_conformance_mode and self.low_res_noise_std > 0.0:
             low_res = self._inject_monochrome_low_res_noise(low_res)
 
-        return {
+        result = {
             "gid": gids,
             "low_res": low_res,
             "high_res": high_res,
-            "description": [
-                item["font"].description_with_tags_and_display() for item in batch
-            ],
         }
+        if style_refs:
+            result["style_references"] = torch.stack(style_refs)  # (B, K, 3, H, W)
+        return result
 
 
 __all__ = ["UpscalerDatasetMaker"]

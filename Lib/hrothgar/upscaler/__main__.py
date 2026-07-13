@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -96,7 +97,43 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not open matplotlib preview window",
     )
+    parser.add_argument(
+        "--disable-style-conditioning",
+        action="store_true",
+        help="Disable style-reference conditioning during inference",
+    )
+    parser.add_argument(
+        "--style-reference-count",
+        type=int,
+        default=4,
+        help="Number of reference glyphs to use for style encoding",
+    )
     return parser
+
+
+def _render_style_references(
+    font: StandaloneFont, count: int, size: int
+) -> np.ndarray:
+    """Render *count* glyphs from *font* to use as style references.
+
+    Uses a fixed set of common Latin characters.  Characters not present in
+    the font are skipped; if fewer than *count* are available the shortfall
+    is padded by repeating the last-found glyph.
+    """
+    reference_codepoints = [
+        ord(c) for c in "ABCDEFGHJKMNPQRSTUVWXYZabdeghknpqy0123456789"
+    ]
+    rasters: list[np.ndarray] = []
+    for cp in reference_codepoints:
+        if font.has_codepoint(cp):
+            rasters.append(font.render(cp, size=size))
+            if len(rasters) >= count:
+                break
+    # Pad with the last-found raster if the font is very limited.
+    fallback = rasters[-1] if rasters else np.ones((3, size, size), dtype=np.float32)
+    while len(rasters) < count:
+        rasters.append(fallback)
+    return np.stack(rasters[:count])  # (K, 3, size, size)
 
 
 def main() -> None:
@@ -113,7 +150,6 @@ def main() -> None:
 
     font = StandaloneFont(args.font)
     low_res, high_res, label = _render_pair(font, char=char, gid=gid)
-    description = font.description_with_tags_and_display()
 
     device = pick_device()
     print(f"Using device: {device}")
@@ -121,7 +157,19 @@ def main() -> None:
     config = UpscalerConfig(
         low_res_size=128,
         high_res_size=512,
+        use_style_conditioning=not args.disable_style_conditioning,
+        style_reference_count=args.style_reference_count,
     )
+
+    style_tensor: Optional[torch.Tensor] = None
+    if not args.disable_style_conditioning:
+        style_refs = _render_style_references(
+            font, count=args.style_reference_count, size=512
+        )
+        style_tensor = torch.tensor(
+            style_refs, dtype=torch.float32, device=device
+        ).unsqueeze(0)  # (1, K, 3, 512, 512)
+
     model = UpscalerModel(config).to(device)
     model.load(str(args.model_path), device=device)
     model.eval()
@@ -131,7 +179,10 @@ def main() -> None:
     ).unsqueeze(0)
     with torch.no_grad():
         upscaled = (
-            model(low_res_tensor, descriptions=[description])
+            model(
+                low_res_tensor,
+                style_references=style_tensor,
+            )
             .squeeze(0)
             .detach()
             .cpu()

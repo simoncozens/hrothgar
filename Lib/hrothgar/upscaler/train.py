@@ -52,8 +52,11 @@ class UpscalerTrainingLoop(TrainingLoop):
             high_res_size=train_args.low_res_size * train_args.upscaling_factor,
             base_channels=train_args.base_channels,
             num_residual_blocks=train_args.num_residual_blocks,
+            use_style_conditioning=not train_args.disable_style_conditioning,
+            style_reference_count=train_args.style_reference_count,
         )
         model = UpscalerModel(config).to(self.device)
+        config.save_sidecar(train_args.model_path)
 
         maker = UpscalerDatasetMaker(
             train_args.dataset_path,
@@ -66,6 +69,7 @@ class UpscalerTrainingLoop(TrainingLoop):
             outline_noise_std=train_args.outline_noise_std,
             outline_noise_edge_threshold=train_args.outline_noise_edge_threshold,
             low_res_noise_std=train_args.low_res_noise_std,
+            style_reference_count=config.style_reference_count,
         )
 
         self.train_loader = maker.train_loader()
@@ -88,8 +92,12 @@ class UpscalerTrainingLoop(TrainingLoop):
     def train_step(self, batch):
         low_res = batch["low_res"].to(self.device)
         high_res = batch["high_res"].to(self.device)
-        descriptions = batch.get("description")
-        predictions = self.model(low_res, descriptions=descriptions)
+        style_references = batch.get("style_references")
+        if style_references is not None:
+            style_references = style_references.to(self.device)
+        predictions = self.model(
+            low_res, style_references=style_references
+        )
         return compute_upscaler_loss(
             predictions,
             high_res,
@@ -111,7 +119,13 @@ class UpscalerTrainingLoop(TrainingLoop):
             ):
                 low_res = val_batch["low_res"].to(self.device)
                 high_res = val_batch["high_res"].to(self.device)
-                pred = self.model(low_res, descriptions=val_batch.get("description"))
+                style_refs = val_batch.get("style_references")
+                if style_refs is not None:
+                    style_refs = style_refs.to(self.device)
+                pred = self.model(
+                    low_res,
+                    style_references=style_refs,
+                )
                 val_ssim.append(self.ssim(pred, high_res))
                 val_glyphloss.append(glyph_reconstruction_loss(pred, high_res))
 
@@ -128,7 +142,13 @@ class UpscalerTrainingLoop(TrainingLoop):
         val_batch = next(iter(self.test_loader))
         low_res = val_batch["low_res"].to(self.device)
         high_res = val_batch["high_res"].to(self.device)
-        pred = self.model(low_res, descriptions=val_batch.get("description"))
+        style_refs = val_batch.get("style_references")
+        if style_refs is not None:
+            style_refs = style_refs.to(self.device)
+        pred = self.model(
+            low_res,
+            style_references=style_refs,
+        )
 
         preview_count = min(8, low_res.shape[0])
         bicubic = F.interpolate(
@@ -283,7 +303,17 @@ if __name__ == "__main__":
         default="models/upscaler_model.pth",
         help="Path to save SR model weights",
     )
-
+    parser.add_argument(
+        "--disable-style-conditioning",
+        action="store_true",
+        help="Disable style-reference conditioning during inference",
+    )
+    parser.add_argument(
+        "--style-reference-count",
+        type=int,
+        default=4,
+        help="Number of reference glyphs to use for style encoding",
+    )
     args = parser.parse_args()
     if not args.dataset_path:
         raise ValueError(
