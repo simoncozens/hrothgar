@@ -14,19 +14,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import TrainingLoop
-from hrothgar.eagle_loss import EagleLoss
-
-
-def _edge_map(images: torch.Tensor) -> torch.Tensor:
-    """Compute finite-difference edge magnitude for edge-aware losses."""
-    grayscale = images.mean(dim=1, keepdim=True)
-
-    gx = grayscale[:, :, :, 1:] - grayscale[:, :, :, :-1]
-    gy = grayscale[:, :, 1:, :] - grayscale[:, :, :-1, :]
-    gx = F.pad(gx, (0, 1, 0, 0), mode="replicate")
-    gy = F.pad(gy, (0, 0, 0, 1), mode="replicate")
-    magnitude = torch.sqrt(gx * gx + gy * gy + 1e-8)
-    return magnitude
+from glyphloss import glyph_reconstruction_loss
 
 
 def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:
@@ -39,27 +27,18 @@ def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:
 def compute_upscaler_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
-    eagle_loss: EagleLoss,
-    edge_weight: float = 1.0,
-    eagle_loss_weight: float = 1.0,
+    glyphloss_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Combine pixel BCE with edge-aware L1 penalty."""
     predictions = _sanitize_for_bce(predictions, nan_fill=0.5)
     targets = _sanitize_for_bce(targets, nan_fill=0.0)
 
     bce = F.binary_cross_entropy(predictions, targets)
-    pred_edges = _edge_map(predictions)
-    target_edges = _edge_map(targets)
-    edge_l1 = F.l1_loss(pred_edges, target_edges)
-    eagle_contribution = (
-        eagle_loss(predictions, targets) if eagle_loss_weight > 0 else torch.tensor(0.0)
-    )
-
-    loss = bce + edge_weight * edge_l1 + eagle_loss_weight * eagle_contribution
+    glyphloss = glyph_reconstruction_loss(predictions, targets)
+    loss = bce + glyphloss_weight * glyphloss
     return loss, {
         "bce": bce,
-        "edge_l1": edge_l1,
-        "eagle": eagle_contribution,
+        "glyphloss":glyphloss,
         "loss": loss,
     }
 
@@ -68,15 +47,11 @@ class UpscalerTrainingLoop(TrainingLoop):
     """Training loop for the glyph SR prototype."""
 
     def post_init(self, train_args):
-        self.eagle_loss = EagleLoss(patch_size=8).to(self.device)
         config = UpscalerConfig(
             low_res_size=train_args.low_res_size,
-            high_res_size=train_args.high_res_size,
+            high_res_size=train_args.low_res_size * train_args.upscaling_factor,
             base_channels=train_args.base_channels,
             num_residual_blocks=train_args.num_residual_blocks,
-            use_gtok_encoder=not train_args.disable_gtok_encoder,
-            use_gtok_vit_features=not train_args.disable_gtok_vit,
-            gtok_model_path=train_args.gtok_model_path,
         )
         model = UpscalerModel(config).to(self.device)
 
@@ -118,9 +93,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         return compute_upscaler_loss(
             predictions,
             high_res,
-            edge_weight=self.edge_weight,
-            eagle_loss=self.eagle_loss,
-            eagle_loss_weight=0.0,
+            glyphloss_weight=1.0,
         )
 
     def post_train_step(self):
@@ -130,6 +103,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         self.model.eval()
         with torch.no_grad():
             val_ssim = []
+            val_glyphloss = []
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
                 desc="Validation",
@@ -139,9 +113,12 @@ class UpscalerTrainingLoop(TrainingLoop):
                 high_res = val_batch["high_res"].to(self.device)
                 pred = self.model(low_res, descriptions=val_batch.get("description"))
                 val_ssim.append(self.ssim(pred, high_res))
+                val_glyphloss.append(glyph_reconstruction_loss(pred, high_res))
 
             avg_ssim = torch.mean(torch.stack(val_ssim))
+            avg_glyphloss = torch.mean(torch.stack(val_glyphloss))
             self.write_scalar("Validation/SSIM", avg_ssim)
+            self.write_scalar("Validation/GlyphLoss", avg_glyphloss)
             self.checkpoint_if_best(avg_ssim)
             self.visualize()
 
@@ -204,10 +181,10 @@ if __name__ == "__main__":
         help="Input glyph raster size",
     )
     parser.add_argument(
-        "--high-res-size",
+        "--upscaling-factor",
         type=int,
-        default=512,
-        help="Output glyph raster size",
+        default=4,
+        help="Output glyph raster size is upscaling_factor * low_res_size",
     )
     parser.add_argument(
         "--base-channels",
@@ -256,22 +233,6 @@ if __name__ == "__main__":
         type=int,
         default=100,
         help="Validation batch count per validation pass",
-    )
-    parser.add_argument(
-        "--disable-gtok-encoder",
-        action="store_true",
-        help="Disable GTok conditioning features",
-    )
-    parser.add_argument(
-        "--disable-gtok-vit",
-        action="store_true",
-        help="Use GTok CNN features only (skip GTok ViT features)",
-    )
-    parser.add_argument(
-        "--gtok-model-path",
-        type=str,
-        default="models/gtok_model.pth",
-        help="Path to pretrained GTok weights (optional)",
     )
     parser.add_argument(
         "--style-conformance-mode",

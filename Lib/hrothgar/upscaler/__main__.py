@@ -84,22 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path("models/upscaler_model.pth"),
         help="Path to trained upscaler model weights",
     )
-    parser.add_argument(
-        "--gtok-model-path",
-        type=Path,
-        default=Path("models/gtok_model.pth"),
-        help="Path to pretrained GTok weights",
-    )
-    parser.add_argument(
-        "--disable-gtok-encoder",
-        action="store_true",
-        help="Disable GTok feature conditioning",
-    )
-    parser.add_argument(
-        "--disable-gtok-vit",
-        action="store_true",
-        help="Use GTok CNN features only",
-    )
+
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -136,9 +121,6 @@ def main() -> None:
     config = UpscalerConfig(
         low_res_size=128,
         high_res_size=512,
-        use_gtok_encoder=not args.disable_gtok_encoder,
-        use_gtok_vit_features=not args.disable_gtok_vit,
-        gtok_model_path=str(args.gtok_model_path),
     )
     model = UpscalerModel(config).to(device)
     model.load(str(args.model_path), device=device)
