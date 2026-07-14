@@ -66,7 +66,7 @@ def _render_style_references(
 def _find_sidecar(model_dir: Path) -> Path:
     """Find the config sidecar in *model_dir*."""
     for name in model_dir.iterdir():
-        if name.suffix == ".conf.json":
+        if str(name).endswith(".conf.json"):
             return name
     raise FileNotFoundError(
         f"No .conf.json sidecar found in {model_dir}. "

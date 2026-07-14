@@ -6,7 +6,7 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from hrothgar.ar.model import ARAdaptationOutput, ARModelOutput
+from hrothgar.ar.model import ARModelOutput
 
 
 @dataclass(frozen=True)
@@ -172,13 +172,13 @@ def compute_ar_loss(
 
 
 def compute_ar_adaptation_loss(
-    model_output: ARAdaptationOutput,
+    model_output,  # ARAdaptationOutput (deprecated — kept for import compatibility)
     *,
-    target_images: Optional[torch.Tensor] = None,
-    target_token_indices: Optional[torch.Tensor] = None,
-    weights: ARAdaptationLossWeights = ARAdaptationLossWeights(),
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-    """Compute multimodal adaptation loss and loggable terms.
+    target_images=None,
+    target_token_indices=None,
+    weights=None,
+):
+    """Compute adaptation loss (deprecated — AR decoder removed).
 
     Core objective is L2 alignment between visual-only and multimodal
     aggregated style tokens. Optionally adds decoder supervision terms when

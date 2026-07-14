@@ -56,11 +56,11 @@ class MaskGITTrainingLoop(TrainingLoop):
 
         config = ARModelConfig(
             image_size=image_size,
-            use_maskgit=True,
             maskgit_num_inference_steps=MASKGIT_NUM_INFERENCE_STEPS,
             maskgit_temperature=MASKGIT_TEMPERATURE,
         )
         model = ARModel(config, gtok_model=gtok).to(self.device)
+        config.save_sidecar(train_args.model_path)
 
         # ── Data ──────────────────────────────────────────────────────
         if train_args.style_glyph_count < len(train_args.style_characters or []):

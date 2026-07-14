@@ -34,13 +34,8 @@ from hrothgar.ar.dataset import (
     _sample_style_codepoints,
 )
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
-from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
-from hrothgar.ar.multimodal import (
-    HashedDescriptionEncoder,
-    HashedDescriptionEncoderConfig,
-    TextStyleAdapter,
-    TextStyleAdapterConfig,
-)
+from hrothgar.ar.model import ARModel, ARModelConfig
+from hrothgar.ar.model import ARModel, ARModelConfig
 from hrothgar.ar.ga import ARGlyphAdaptationTrainingLoop, glyph_lora_model_path
 from hrothgar.ar.nfa import NFADatasetMaker
 from hrothgar.googlefonts import (
@@ -426,8 +421,6 @@ def main() -> None:
     matched_google_font = find_google_font_by_basename(
         args.dataset_path, args.font_path
     )
-    font_description = matched_google_font.description_with_tags_and_display()
-
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
@@ -435,7 +428,6 @@ def main() -> None:
     # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
     ar_config = ARModelConfig(
         image_size=gtok_config.image_size,
-        use_maskgit=True,
         maskgit_num_inference_steps=MASKGIT_NUM_INFERENCE_STEPS,
         maskgit_temperature=MASKGIT_TEMPERATURE,
     )
@@ -453,9 +445,6 @@ def main() -> None:
         UpscalerConfig(
             low_res_size=gtok_config.image_size,
             high_res_size=upscaled_size,
-            use_gtok_encoder=True,
-            use_gtok_vit_features=True,
-            gtok_model_path=args.gtok_model_path,
         )
     ).to(device)
     upscaler.load(str(args.upscaler_model_path), device=device)
@@ -509,7 +498,7 @@ def main() -> None:
             low_res_tensor = torch.tensor(generated_lores, dtype=torch.float32, device=device)
             low_res_tensor = low_res_tensor.unsqueeze(0)
             upscaled = (
-                upscaler(low_res_tensor, descriptions=[font_description])
+                upscaler(low_res_tensor)
                 .squeeze(0)
                 .detach()
                 .cpu()

@@ -42,7 +42,7 @@ from hrothgar.ar.dataset import (
     _sample_style_codepoints,
 )
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
-from hrothgar.ar.model import ARModel, ARModelConfig, LoRAConfig
+from hrothgar.ar.model import ARModel, ARModelConfig
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import load_model
