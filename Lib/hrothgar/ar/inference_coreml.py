@@ -22,6 +22,14 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+from glyphsets import GlyphSet, unicodes_per_glyphset
+
+LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
+# Skip combining characters
+LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
+# Add the Rupee
+LATIN_CORE.append(0x20B9)
+
 
 try:
     import coremltools as ct  # type: ignore[import-untyped]
@@ -77,7 +85,7 @@ class GeneratorInference:
         self._mask_token_id = self._vocab_size  # [MASK] token convention
 
         # Load config from sidecar.
-        from hrothgar.ar.model import ARModelConfig
+        from hrothgar.ar.config import ARModelConfig
         sidecar = model_dir / "gen_config.pth.conf.json"
         if not sidecar.exists():
             for f in model_dir.glob("*.conf.json"):
@@ -113,7 +121,6 @@ class GeneratorInference:
             ``(3, H, H)`` float32 generated glyph.
         """
         # ---- Codepoint → LATIN_CORE index ----
-        from hrothgar.dataset import LATIN_CORE
         cp = target_codepoint
         latincore_idx = LATIN_CORE.index(cp) if cp in LATIN_CORE else 0
 
