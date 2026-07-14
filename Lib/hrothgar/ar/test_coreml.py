@@ -28,7 +28,8 @@ def _char_to_gid(font_path: str, char: str) -> int:
     cp = ord(char)
     if cp not in cmap:
         raise ValueError(f"Character '{char}' (U+{cp:04X}) not in font")
-    gid = cmap[cp]
+    glyphname = cmap[cp]
+    gid = tt.getGlyphOrder().index(glyphname)
     tt.close()
     return gid
 
@@ -36,14 +37,16 @@ def _char_to_gid(font_path: str, char: str) -> int:
 def _render_style_refs(font_path: str, count: int, size: int) -> np.ndarray:
     """Render *count* style reference glyphs as (count, 3, size, size)."""
     # These match the style characters used during training.
-    ref_chars = "ABEGNRSTabdeghknpqy023456789"
+    ref_chars = "adhesionADHESIONR5$"
     tt = TTFont(font_path)
     cmap = tt.getBestCmap()
     refs: list[np.ndarray] = []
     for c in ref_chars:
         cp = ord(c)
         if cp in cmap:
-            img = render_gid(font_path, cmap[cp], size)
+            glyphname = cmap[cp]
+            gid = tt.getGlyphOrder().index(glyphname)
+            img = render_gid(font_path, gid, size)
             if not np.allclose(img, 1.0, atol=1e-2):
                 refs.append(img)
                 if len(refs) >= count:
@@ -65,7 +68,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--char", type=str, required=True, help="Character to generate.")
     p.add_argument("--model-dir", type=Path, default=Path("models/coreml_gen"),
                    help="Directory with exported Core ML models.")
-    p.add_argument("--style-ref-count", type=int, default=4,
+    p.add_argument("--style-ref-count", type=int, default=8,
                    help="Number of style reference glyphs.")
     p.add_argument("--output-dir", type=Path, default=Path("outputs/gen_test"))
     p.add_argument("--no-show", action="store_true")
