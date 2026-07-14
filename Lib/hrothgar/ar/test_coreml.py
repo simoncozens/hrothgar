@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """CLI for testing the Core ML MaskGIT generation pipeline.
 
-Usage (after ``export_coreml.py``)::
+Uses the same rendering and style-sampling as ``generate.py`` so outputs
+are directly comparable.
+
+Usage::
 
     python -m hrothgar.ar.test_coreml \\
         MyFont.ttf --char A --model-dir models/coreml_gen
 
-Requirements: coremltools, fonttools, matplotlib, numpy
+Requirements: coremltools, matplotlib, numpy
 """
 
 from __future__ import annotations
@@ -16,50 +19,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fontTools.ttLib import TTFont
 
-from hrothgar.render import render_gid
-
-
-def _char_to_gid(font_path: str, char: str) -> int:
-    """Look up the GID for a character in a font."""
-    tt = TTFont(font_path)
-    cmap = tt.getBestCmap()
-    cp = ord(char)
-    if cp not in cmap:
-        raise ValueError(f"Character '{char}' (U+{cp:04X}) not in font")
-    glyphname = cmap[cp]
-    gid = tt.getGlyphOrder().index(glyphname)
-    tt.close()
-    return gid
-
-
-def _render_style_refs(font_path: str, count: int, size: int) -> np.ndarray:
-    """Render *count* style reference glyphs as (count, 3, size, size)."""
-    # These match the style characters used during training.
-    ref_chars = "adhesionADHESIONR5$"
-    tt = TTFont(font_path)
-    cmap = tt.getBestCmap()
-    refs: list[np.ndarray] = []
-    for c in ref_chars:
-        cp = ord(c)
-        if cp in cmap:
-            glyphname = cmap[cp]
-            gid = tt.getGlyphOrder().index(glyphname)
-            img = render_gid(font_path, gid, size)
-            if not np.allclose(img, 1.0, atol=1e-2):
-                refs.append(img)
-                if len(refs) >= count:
-                    break
-    tt.close()
-
-    if not refs:
-        blank = np.ones((3, size, size), dtype=np.float32)
-        refs = [blank] * count
-    while len(refs) < count:
-        refs.append(refs[-1])
-
-    return np.stack(refs[:count])
+from hrothgar.googlefonts import StandaloneFont
+from hrothgar.ar.dataset import _sample_style_codepoints
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -68,6 +30,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--char", type=str, required=True, help="Character to generate.")
     p.add_argument("--model-dir", type=Path, default=Path("models/coreml_gen"),
                    help="Directory with exported Core ML models.")
+    p.add_argument("--reference-font", type=Path, default=None,
+                   help="Optional reference font for content image.")
+    p.add_argument("--style-chars", type=str, default="ABEGNRSTabdeghknpqy023456789",
+                   help="Characters to use as style references.")
     p.add_argument("--style-ref-count", type=int, default=8,
                    help="Number of style reference glyphs.")
     p.add_argument("--output-dir", type=Path, default=Path("outputs/gen_test"))
@@ -92,30 +58,54 @@ def main() -> None:
     K = args.style_ref_count
     print(f"Generator: image_size={H}  steps={gen.num_inference_steps}")
 
+    # ---- Render inputs (same as generate.py) ----
+    target_font = StandaloneFont(args.font)
+    ref_font = StandaloneFont(args.reference_font, reference=target_font) if args.reference_font else target_font
+    if args.reference_font:
+        target_font = StandaloneFont(args.font, reference=ref_font)
+
+    # Content: from reference font if available, else from target.
+    content_font = ref_font if args.reference_font else target_font
+    if not content_font.has_codepoint(ord(char)):
+        content_font = target_font
+    content = content_font.render(ord(char), size=H)
+
+    # Style: using the same sampling logic as generate.py.
+    common_cps = [ord(c) for c in args.style_chars]
+    style_chars = _sample_style_codepoints(
+        font=target_font,
+        target_char=ord(char),
+        style_glyph_count=K,
+        common_style_codepoints=common_cps,
+    )
+    style_rasters = [target_font.render(cp, size=H) for cp in style_chars]
+    style = np.stack(style_rasters)
+
     print(f"Font: {args.font.name}")
-    print(f"Generating '{char}' (U+{ord(char):04X}) ...")
+    print(f"Rendered content + {K} style refs at {H}x{H}.")
+    if args.reference_font:
+        print(f"  content from: {args.reference_font}")
 
-    # Render content and style glyphs using the same path as generate.py.
-    target_gid = _char_to_gid(str(args.font), char)
-    content = render_gid(str(args.font), target_gid, H)
-    style = _render_style_refs(str(args.font), K, H)
-    print(f"Rendered content (GID {target_gid}) + {K} style refs at {H}x{H}.")
-
+    # ---- Generate ----
     generated = gen.generate(
         content_image=content,
         style_refs=style,
         target_codepoint=ord(char),
     )
 
+    # ---- Save ----
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{args.font.stem}_U+{ord(char):04X}"
 
-    def _save(path: Path, arr: np.ndarray) -> None:
+    def _save(path, arr):
+        if arr.ndim == 4:
+            arr = arr[0]
         plt.imsave(path, arr.transpose(1, 2, 0).clip(0, 1), vmin=0, vmax=1)
 
     _save(args.output_dir / f"{stem}_gen_{H}.png", generated)
     print(f"Saved: {args.output_dir / f'{stem}_gen_{H}.png'}")
 
+    # ---- Display ----
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
     axes[0].imshow(content[0], cmap="gray", vmin=0, vmax=1)
     axes[0].set_title(f"Content ({H})")
