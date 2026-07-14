@@ -33,7 +33,12 @@ except ImportError:
 
 
 def _load_model(model_path: Path) -> ct.models.MLModel:
-    return ct.models.MLModel(str(model_path))
+    """Load a Core ML model with CPU-only compute to avoid async GPU
+    execution stream crashes (MLE5ExecutionStream.resetQueue)."""
+    try:
+        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPU_ONLY)
+    except AttributeError:
+        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPUOnly)
 
 
 def _copy(arr: np.ndarray) -> np.ndarray:
