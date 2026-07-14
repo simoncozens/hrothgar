@@ -108,7 +108,7 @@ def main() -> None:
     from hrothgar.upscaler.inference_coreml import UpscalerInference
 
     # Read config from sidecar.
-    sidecar_path = _find_sidecar(args.model_dir)
+    sidecar_path = args.model_dir / "upscaler_config.conf.json"
     config = UpscalerConfig.from_sidecar(sidecar_path)
     low_sz = config.low_res_size
     high_sz = config.high_res_size

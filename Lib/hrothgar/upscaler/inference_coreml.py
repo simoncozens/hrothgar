@@ -16,7 +16,6 @@ Usage::
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 from typing import Optional, Union
 
@@ -32,17 +31,12 @@ except ImportError:
 
 
 def _load_model(model_path: Path) -> ct.models.MLModel:
-    """Load a Core ML model (``.mlpackage`` or ``.mlmodelc``)."""
     return ct.models.MLModel(str(model_path))
 
 
-def _numpy_bytes(arr: np.ndarray) -> bytes:
-    """Convert numpy array to raw float32 bytes for the style fallback."""
-    return arr.astype(np.float32).tobytes()
-
-
-def _model_exists(base: Path) -> bool:
-    return base.with_suffix(".mlmodelc").exists() or base.with_suffix(".mlpackage").exists()
+def _copy(arr: np.ndarray) -> np.ndarray:
+    """Copy an array so CoreML gets its own buffer, avoiding use-after-free."""
+    return np.ascontiguousarray(arr, dtype=np.float32).copy()
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +66,7 @@ class UpscalerInference:
             raise FileNotFoundError(f"Model not found: {base}.mlmodelc or .mlpackage")
 
         self._style_model: Optional[ct.models.MLModel] = None
-        if _model_exists(style_base):
+        if style_base.with_suffix(".mlmodelc").exists() or style_base.with_suffix(".mlpackage").exists():
             self._style_model = _load_model(_find(style_base))
 
         self._body_model = _load_model(_find(body_base))
@@ -105,23 +99,20 @@ class UpscalerInference:
         # Style gamma_beta.
         if style_references is not None and self._style_model is not None:
             result = self._style_model.predict(
-                {"style_references": style_references.astype(np.float32)}
+                {"style_references": _copy(style_references.astype(np.float32))}
             )
-            style_gb = result["style_gamma_beta"]  # (128,)
+            style_gb = result["style_gamma_beta"]
         else:
-            style_gb = self._fallback_style_gb  # (128,)
+            style_gb = self._fallback_style_gb
 
-        # Add batch dims for the upscaler body.
-        low_res_b = low_res[np.newaxis, ...].astype(np.float32)          # (1, 3, 128, 128)
-        style_gb_b = style_gb[np.newaxis, ...].astype(np.float32)        # (1, 128)
+        low_res_b = _copy(low_res[np.newaxis, ...].astype(np.float32))
+        style_gb_b = _copy(style_gb[np.newaxis, ...].astype(np.float32))
 
-        result = self._body_model.predict(
-            {
-                "low_res": low_res_b,
-                "style_gamma_beta": style_gb_b,
-            }
-        )
-        upscaled = result["upscaled"]  # (1, 3, 512, 512)
+        result = self._body_model.predict({
+            "low_res": low_res_b,
+            "style_gamma_beta": style_gb_b,
+        })
+        upscaled = result["upscaled"]
         return upscaled.squeeze(0).astype(np.float32)
 
 

@@ -36,6 +36,15 @@ def _load_model(model_path: Path) -> ct.models.MLModel:
     return ct.models.MLModel(str(model_path))
 
 
+def _copy(arr: np.ndarray) -> np.ndarray:
+    """Copy an array so CoreML gets its own buffer.
+
+    CoreML's async cleanup thread may free the buffer after we return.
+    Giving it a copy prevents use-after-free crashes.
+    """
+    return np.ascontiguousarray(arr, dtype=np.float32).copy()
+
+
 # ---------------------------------------------------------------------------
 # MaskGIT decode schedule
 # ---------------------------------------------------------------------------
@@ -134,8 +143,8 @@ class GeneratorInference:
 
         # ---- Step 1: Build conditioning map ----
         cond_map = self._encoder.predict({
-            "content_image": content_image[np.newaxis, ...].astype(np.float32),
-            "style_refs": style_refs[np.newaxis, ...].astype(np.float32),
+            "content_image": _copy(content_image[np.newaxis, ...]),
+            "style_refs": _copy(style_refs[np.newaxis, ...]),
             "latincore_idx": np.array([latincore_idx], dtype=np.int32),
         })["conditioning_map"]
 
@@ -147,9 +156,9 @@ class GeneratorInference:
 
         for step in range(self._num_steps):
             logits = self._transformer.predict({
-                "token_indices": predicted.astype(np.int32),
+                "token_indices": _copy(predicted.astype(np.int32)),
                 "conditioning_map": cond_map,
-            })["logits"]  # (1, N, K)
+            })["logits"]
 
             probs = _softmax(logits[0] / self._temperature, axis=-1)
             max_probs = probs.max(axis=-1)
@@ -169,21 +178,19 @@ class GeneratorInference:
         final_logits = None
         if remaining.any():
             final_logits = self._transformer.predict({
-                "token_indices": predicted.astype(np.int32),
+                "token_indices": _copy(predicted.astype(np.int32)),
                 "conditioning_map": cond_map,
             })["logits"]
             predicted[0, remaining] = final_logits[0, remaining].argmax(axis=-1)
 
-        # Get logits for the completed token sequence.
         if final_logits is None:
             final_logits = self._transformer.predict({
-                "token_indices": predicted.astype(np.int32),
+                "token_indices": _copy(predicted.astype(np.int32)),
                 "conditioning_map": cond_map,
             })["logits"]
 
-        # ---- Step 3: Soft decode ----
         images = self._softdecoder.predict({
-            "logits": final_logits.astype(np.float32),
+            "logits": _copy(final_logits.astype(np.float32)),
         })["images"]
 
         return images.squeeze(0).astype(np.float32)
