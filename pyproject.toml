@@ -17,15 +17,15 @@ dependencies = [
     "scikit-learn",
     "pkbar",
     "torchmetrics",
-    "tensorboard", 
-    "jaxtyping", 
+    "tensorboard",
+    "jaxtyping",
     "freetype-py",
     "matrix-disk-cache",
     "transformers>=4.40.0",
     "sentencepiece>=0.2.0",
     "einops>=0.8.0",
+    "glyphloss",
 ]
-# Also pydiffvg but that's not on pypi!
 
 [project.optional-dependencies]
 test = ["pytest"]
