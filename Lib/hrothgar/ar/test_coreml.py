@@ -6,7 +6,7 @@ Usage (after ``export_coreml.py``)::
     python -m hrothgar.ar.test_coreml \\
         MyFont.ttf --char A --model-dir models/coreml_gen
 
-Requirements: coremltools, freetype-py, matplotlib, numpy
+Requirements: coremltools, fonttools, matplotlib, numpy
 """
 
 from __future__ import annotations
@@ -16,38 +16,46 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from fontTools.ttLib import TTFont
+
+from hrothgar.render import render_gid
 
 
-def _render_glyph(font_path: str, char: str, size: int) -> np.ndarray:
-    import freetype
-    face = freetype.Face(font_path)
-    face.set_pixel_sizes(size, size)
-    face.load_char(char, freetype.FT_LOAD_RENDER)
-    bitmap = face.glyph.bitmap
-    buf, w, rows = bitmap.buffer, bitmap.width, bitmap.rows
-    raw = np.zeros((3, size, size), dtype=np.float32)
-    for y in range(rows):
-        for x in range(w):
-            v = buf[y * w + x] / 255.0
-            raw[:, y, x] = v
-    return raw
+def _char_to_gid(font_path: str, char: str) -> int:
+    """Look up the GID for a character in a font."""
+    tt = TTFont(font_path)
+    cmap = tt.getBestCmap()
+    cp = ord(char)
+    if cp not in cmap:
+        raise ValueError(f"Character '{char}' (U+{cp:04X}) not in font")
+    gid = cmap[cp]
+    tt.close()
+    return gid
 
 
 def _render_style_refs(font_path: str, count: int, size: int) -> np.ndarray:
+    """Render *count* style reference glyphs as (count, 3, size, size)."""
+    # These match the style characters used during training.
     ref_chars = "ABEGNRSTabdeghknpqy023456789"
-    refs = []
+    tt = TTFont(font_path)
+    cmap = tt.getBestCmap()
+    refs: list[np.ndarray] = []
     for c in ref_chars:
-        try:
-            refs.append(_render_glyph(font_path, c, size))
-            if len(refs) >= count:
-                break
-        except Exception:
-            continue
+        cp = ord(c)
+        if cp in cmap:
+            img = render_gid(font_path, cmap[cp], size)
+            if not np.allclose(img, 1.0, atol=1e-2):
+                refs.append(img)
+                if len(refs) >= count:
+                    break
+    tt.close()
+
     if not refs:
-        blank = np.zeros((3, size, size), dtype=np.float32)
+        blank = np.ones((3, size, size), dtype=np.float32)
         refs = [blank] * count
     while len(refs) < count:
         refs.append(refs[-1])
+
     return np.stack(refs[:count])
 
 
@@ -76,7 +84,6 @@ def main() -> None:
     if len(char) != 1:
         raise ValueError("--char must be a single Unicode character")
 
-    # Load generator (reads image_size from sidecar).
     gen = GeneratorInference(args.model_dir)
     H = gen.image_size
     K = args.style_ref_count
@@ -85,19 +92,18 @@ def main() -> None:
     print(f"Font: {args.font.name}")
     print(f"Generating '{char}' (U+{ord(char):04X}) ...")
 
-    # Render content and style glyphs.
-    content = _render_glyph(str(args.font), char, H)
+    # Render content and style glyphs using the same path as generate.py.
+    target_gid = _char_to_gid(str(args.font), char)
+    content = render_gid(str(args.font), target_gid, H)
     style = _render_style_refs(str(args.font), K, H)
-    print(f"Rendered content + {K} style references at {H}x{H}.")
+    print(f"Rendered content (GID {target_gid}) + {K} style refs at {H}x{H}.")
 
-    # Generate.
     generated = gen.generate(
         content_image=content,
         style_refs=style,
         target_codepoint=ord(char),
     )
 
-    # Save.
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{args.font.stem}_U+{ord(char):04X}"
 
@@ -107,13 +113,12 @@ def main() -> None:
     _save(args.output_dir / f"{stem}_gen_{H}.png", generated)
     print(f"Saved: {args.output_dir / f'{stem}_gen_{H}.png'}")
 
-    # Display.
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
     axes[0].imshow(content[0], cmap="gray", vmin=0, vmax=1)
-    axes[0].set_title(f"Content ({H}x{H})")
+    axes[0].set_title(f"Content ({H})")
     axes[0].axis("off")
     axes[1].imshow(generated[0], cmap="gray", vmin=0, vmax=1)
-    axes[1].set_title(f"Generated ({H}x{H})")
+    axes[1].set_title(f"Generated ({H})")
     axes[1].axis("off")
     fig.suptitle(f"{args.font.name} — {char} (U+{ord(char):04X})")
     fig.tight_layout()
