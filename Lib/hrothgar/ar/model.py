@@ -25,7 +25,7 @@ from hrothgar.ar.maskgit import (
     MaskGITDecoder,
     MaskGITTransformer,
 )
-from hrotgar.ar.config import ARModelConfig
+from hrothgar.ar.config import ARModelConfig
 from hrothgar.dataset import LATIN_CORE
 from hrothgar.gtok.model import (
     GtokConfig,
