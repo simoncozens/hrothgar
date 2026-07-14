@@ -1,31 +1,19 @@
 """End-to-end single-font glyph generation pipeline.
 
-This script orchestrates a complete many-shot generation pass for one font:
-
 1. Load pretrained GTok, AR, and upscaler models.
-2. Build two single-font datasets:
-   - all GIDs (for GTok fine-tuning)
-   - Latin Core split via NFADatasetMaker (for AR NFA fine-tuning)
-3. Fine-tune GTok for N epochs on all-glyph renderings.
-4. Fine-tune AR in NFA (LoRA-only) mode for M epochs.
-5. Generate a target glyph at 128x128.
-6. Upscale the generated glyph to 512x512.
-7. Save output images and adapted checkpoints.
+2. Generate target glyphs.
+3. Upscale and save.
 """
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Optional, Sequence
 
-from hrothgar.ar.train import MASKGIT_NUM_INFERENCE_STEPS, MASKGIT_TEMPERATURE
 import numpy as np
 import torch
 from PIL import Image
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from hrothgar.ar.dataset import (
     _font_has_codepoint,
@@ -33,16 +21,11 @@ from hrothgar.ar.dataset import (
     _is_blank_rendering,
     _sample_style_codepoints,
 )
-from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig
-from hrothgar.ar.model import ARModel, ARModelConfig
-from hrothgar.ar.ga import ARGlyphAdaptationTrainingLoop, glyph_lora_model_path
-from hrothgar.ar.nfa import NFADatasetMaker
 from hrothgar.googlefonts import (
     GoogleFont,
     find_google_font_by_basename,
 )
-from hrothgar.gtok import GtokFineTuneConfig, fine_tune_gtok_decoder_only
 from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
@@ -76,92 +59,6 @@ def _to_image(image_chw: np.ndarray) -> Image.Image:
     image_hwc = np.transpose(np.clip(image_chw, 0.0, 1.0), (1, 2, 0))
     image_u8 = (image_hwc * 255.0).round().astype(np.uint8)
     return Image.fromarray(image_u8)
-
-
-def _checkpoint_contains_prefix(path: Path, prefix: str) -> bool:
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
-    return any(key.startswith(prefix) for key in state_dict)
-
-
-def fine_tune_ar_nfa(
-    *,
-    model: ARModel,
-    maker: NFADatasetMaker,
-    epochs: int,
-    batch_size: int,
-    learning_rate: float,
-    beta1: float,
-    beta2: float,
-    composed_glyph_weight: float,
-    composed_font_weight_final: float,
-    composed_font_ramp_epochs: int,
-    device: torch.device,
-    description: str,
-) -> None:
-    train_set = maker.train_set
-    if len(train_set) == 0:
-        raise ValueError("NFA training split is empty; cannot fine-tune AR model.")
-
-    loader = DataLoader(
-        train_set,
-        batch_size=min(batch_size, len(train_set)),
-        shuffle=True,
-        drop_last=False,
-        collate_fn=maker.collate_fn,
-    )
-
-    optimizer = torch.optim.AdamW(
-        model.trainable_parameters(),
-        lr=learning_rate,
-        betas=(beta1, beta2),
-    )
-    loss_weights = ARLossWeights()
-
-    print(f"AR NFA fine-tuning on {len(train_set)} samples for {epochs} epochs")
-    model.train()
-    model.gtok.eval()
-
-    def _font_weight_for_epoch(epoch_index: int) -> float:
-        if composed_font_ramp_epochs <= 0:
-            return composed_font_weight_final
-        if composed_font_ramp_epochs == 1:
-            return composed_font_weight_final
-        progress = min(
-            max(epoch_index, 0) / float(composed_font_ramp_epochs - 1),
-            1.0,
-        )
-        return composed_font_weight_final * progress
-
-    for epoch in range(epochs):
-        maker.set_style_schedule_epoch(epoch)
-        font_weight = _font_weight_for_epoch(epoch)
-        model.set_composed_lora_weights(composed_glyph_weight, font_weight)
-        running_loss = 0.0
-        for batch in tqdm(loader, desc=f"NFA epoch {epoch + 1}/{epochs}"):
-            target_images = batch["target_rendering"].to(device)
-            content_images = batch["content_rendering"].to(device)
-            style_images = batch["style_renderings"].to(device)
-            descriptions = [description] * target_images.shape[0]
-
-            optimizer.zero_grad(set_to_none=True)
-            output = model(
-                content_images,
-                style_images,
-                target_images=target_images,
-                # descriptions=descriptions,
-            )
-            loss, _ = compute_ar_loss(output, target_images, weights=loss_weights)
-            loss.backward()
-            optimizer.step()
-
-            running_loss += float(loss.detach().cpu())
-
-        avg_loss = running_loss / max(len(loader), 1)
-        print(
-            "  NFA epoch "
-            f"{epoch + 1}: avg loss={avg_loss:.5f}, "
-            f"glyph_w={composed_glyph_weight:.3f}, font_w={font_weight:.3f}"
-        )
 
 
 def _build_generation_inputs(
@@ -231,79 +128,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--upscale", type=int, default=4)
 
-    parser.add_argument("--gtok-epochs", type=int, default=10)
-    parser.add_argument("--nfa-epochs", type=int, default=20)
-
-    parser.add_argument("--ga-target-steps", type=int, default=5000)
-    parser.add_argument("--ga-batch-size", type=int, default=32)
-    parser.add_argument("--ga-learning-rate", type=float, default=1e-4)
-    parser.add_argument("--ga-beta1", type=float, default=0.9)
-    parser.add_argument("--ga-beta2", type=float, default=0.95)
-    parser.add_argument("--ga-validation-every", type=int, default=500)
-    parser.add_argument("--ga-validation-batches", type=int, default=20)
-    parser.add_argument(
-        "--ga-max-fonts",
-        type=int,
-        default=None,
-        help="Optional cap on number of fonts used by glyph adaptation",
-    )
-
-    parser.add_argument("--gtok-batch-size", type=int, default=16)
-    parser.add_argument("--nfa-batch-size", type=int, default=8)
-
-    parser.add_argument("--gtok-learning-rate", type=float, default=1e-5)
-    parser.add_argument("--nfa-learning-rate", type=float, default=2e-5)
-    parser.add_argument("--nfa-beta1", type=float, default=0.9)
-    parser.add_argument("--nfa-beta2", type=float, default=0.95)
-    parser.add_argument("--lora-rank", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=float, default=16.0)
-    parser.add_argument(
-        "--composed-glyph-weight",
-        type=float,
-        default=0.75,
-        help="Multiplier for frozen glyph LoRA delta during composed NFA",
-    )
-    parser.add_argument(
-        "--composed-font-weight-final",
-        type=float,
-        default=1.0,
-        help="Final multiplier for trainable font LoRA delta during composed NFA",
-    )
-    parser.add_argument(
-        "--composed-font-ramp-epochs",
-        type=int,
-        default=10,
-        help="Epochs to ramp font LoRA multiplier from 0 to final value",
-    )
-
     parser.add_argument("--style-glyph-count", type=int, default=8)
     parser.add_argument(
         "--style-characters",
-        type=str,
-        default=None,
-        help="Optional fixed style character string (e.g. adhesionADHESION)",
-    )
-    parser.add_argument(
-        "--style-warmup-epochs",
-        type=int,
-        default=0,
-        help="Epochs to use only --style-characters before widening the style pool",
-    )
-    parser.add_argument(
-        "--style-extra-per-epoch",
-        type=int,
-        default=0,
-        help="Additional font glyphs to add to the style pool after each warm-up epoch",
-    )
-    parser.add_argument(
-        "--style-schedule-seed",
-        type=int,
-        default=1234,
-        help="Seed for the deterministic order of extra style glyphs",
-    )
-
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/generated"))
-    parser.add_argument(
         "--finetuned-gtok-path",
         type=Path,
         default=None,
@@ -326,48 +153,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also save the raw generated bitmap",
     )
-    parser.add_argument(
-        "--text-hash-vocab-size",
-        type=int,
-        default=4096,
-        help="Vocabulary bucket count for hashed multimodal description encoder",
-    )
-    parser.add_argument(
-        "--text-embedding-dim",
-        type=int,
-        default=512,
-        help="Embedding dimension for multimodal description tokens",
-    )
-    parser.add_argument(
-        "--text-max-tokens",
-        type=int,
-        default=64,
-        help="Maximum tokens retained from each multimodal description",
-    )
-    parser.add_argument(
-        "--adapter-hidden-dim",
-        type=int,
-        default=256,
-        help="Hidden dimension for multimodal text-style adapter",
-    )
-    parser.add_argument(
-        "--adapter-layers",
-        type=int,
-        default=6,
-        help="Number of cross-attention layers in multimodal adapter",
-    )
-    parser.add_argument(
-        "--adapter-heads",
-        type=int,
-        default=8,
-        help="Attention heads per multimodal adapter layer",
-    )
-    parser.add_argument(
-        "--adapter-dropout",
-        type=float,
-        default=0.1,
-        help="Dropout used in multimodal adapter layers",
-    )
+
     return parser
 
 
@@ -375,21 +161,7 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.composed_glyph_weight < 0.0:
-        raise ValueError(
-            "--composed-glyph-weight must be non-negative, got "
-            f"{args.composed_glyph_weight}"
-        )
-    if args.composed_font_weight_final < 0.0:
-        raise ValueError(
-            "--composed-font-weight-final must be non-negative, got "
-            f"{args.composed_font_weight_final}"
-        )
-    if args.composed_font_ramp_epochs < 0:
-        raise ValueError(
-            "--composed-font-ramp-epochs must be non-negative, got "
-            f"{args.composed_font_ramp_epochs}"
-        )
+
 
     if not args.font_path.exists():
         raise FileNotFoundError(f"Font file not found: {args.font_path}")
@@ -414,7 +186,19 @@ def main() -> None:
     else:
         target_chars = _parse_chars(args.target_chars)
 
-    style_codepoints = _parse_codepoint_string(args.style_characters)
+    # Load config first so we can use its metadata.
+    ar_config = ARModelConfig.from_sidecar(args.ar_model_path)
+    style_codepoints = ar_config.style_codepoints
+
+    # Validate target characters against the training glyphset.
+    if ar_config.target_codepoints is not None:
+        for tc in target_chars:
+            if tc not in ar_config.target_codepoints:
+                raise ValueError(
+                    f"Target character U+{tc:04X} is not in the model's "
+                    f"training glyphset ({len(ar_config.target_codepoints)} codepoints)"
+                )
+
     device = pick_device()
     print(f"Using device: {device}")
 
@@ -425,12 +209,6 @@ def main() -> None:
 
     gtok, gtok_config = load_gtok_model(Path(args.gtok_model_path), device)
 
-    # Ensure a deterministic glyph-specialist LoRA exists for this target codepoint.
-    ar_config = ARModelConfig(
-        image_size=gtok_config.image_size,
-        maskgit_num_inference_steps=MASKGIT_NUM_INFERENCE_STEPS,
-        maskgit_temperature=MASKGIT_TEMPERATURE,
-    )
     ar_model = ARModel(
         ar_config,
         gtok_model=gtok,
