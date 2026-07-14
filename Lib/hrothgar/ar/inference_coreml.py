@@ -33,21 +33,23 @@ except ImportError:
 
 
 def _load_model(model_path: Path) -> ct.models.MLModel:
-    """Load a Core ML model with CPU-only compute to avoid async GPU
-    execution stream crashes (MLE5ExecutionStream.resetQueue)."""
-    try:
-        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPU_ONLY)
-    except AttributeError:
-        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPUOnly)
+    return ct.models.MLModel(str(model_path))
 
 
-def _copy(arr: np.ndarray) -> np.ndarray:
-    """Copy an array so CoreML gets its own buffer.
+_ANCHORS: list[np.ndarray] = []
+_MAX_ANCHORS = 100  # Higher: transformer called many times per generate()
 
-    CoreML's async cleanup thread may free the buffer after we return.
-    Giving it a copy prevents use-after-free crashes.
-    """
-    return np.ascontiguousarray(arr, dtype=np.float32).copy()
+
+def _predict(model: ct.models.MLModel, **inputs: np.ndarray) -> dict:
+    anchored = {}
+    for k, v in inputs.items():
+        a = np.ascontiguousarray(v, dtype=np.float32)
+        _ANCHORS.append(a)
+        anchored[k] = a
+    result = model.predict(anchored)
+    while len(_ANCHORS) > _MAX_ANCHORS:
+        _ANCHORS.pop(0)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -147,11 +149,11 @@ class GeneratorInference:
         latincore_idx = LATIN_CORE.index(cp) if cp in LATIN_CORE else 0
 
         # ---- Step 1: Build conditioning map ----
-        cond_map = self._encoder.predict({
-            "content_image": _copy(content_image[np.newaxis, ...]),
-            "style_refs": _copy(style_refs[np.newaxis, ...]),
-            "latincore_idx": np.array([latincore_idx], dtype=np.int32),
-        })["conditioning_map"]
+        cond_map = _predict(self._encoder,
+            content_image=content_image[np.newaxis, ...],
+            style_refs=style_refs[np.newaxis, ...],
+            latincore_idx=np.array([latincore_idx], dtype=np.int32),
+        )["conditioning_map"]
 
         # ---- Step 2: MaskGIT iterative decoding ----
         N = self._seq_len
@@ -160,10 +162,10 @@ class GeneratorInference:
         unmasked = np.zeros((B, N), dtype=bool)
 
         for step in range(self._num_steps):
-            logits = self._transformer.predict({
-                "token_indices": _copy(predicted.astype(np.int32)),
-                "conditioning_map": cond_map,
-            })["logits"]
+            logits = _predict(self._transformer,
+                token_indices=predicted.astype(np.int32),
+                conditioning_map=cond_map,
+            )["logits"]
 
             probs = _softmax(logits[0] / self._temperature, axis=-1)
             max_probs = probs.max(axis=-1)
@@ -182,21 +184,21 @@ class GeneratorInference:
         remaining = ~unmasked[0]
         final_logits = None
         if remaining.any():
-            final_logits = self._transformer.predict({
-                "token_indices": _copy(predicted.astype(np.int32)),
-                "conditioning_map": cond_map,
-            })["logits"]
+            final_logits = _predict(self._transformer,
+                token_indices=predicted.astype(np.int32),
+                conditioning_map=cond_map,
+            )["logits"]
             predicted[0, remaining] = final_logits[0, remaining].argmax(axis=-1)
 
         if final_logits is None:
-            final_logits = self._transformer.predict({
-                "token_indices": _copy(predicted.astype(np.int32)),
-                "conditioning_map": cond_map,
-            })["logits"]
+            final_logits = _predict(self._transformer,
+                token_indices=predicted.astype(np.int32),
+                conditioning_map=cond_map,
+            )["logits"]
 
-        images = self._softdecoder.predict({
-            "logits": _copy(final_logits.astype(np.float32)),
-        })["images"]
+        images = _predict(self._softdecoder,
+            logits=final_logits.astype(np.float32),
+        )["images"]
 
         return images.squeeze(0).astype(np.float32)
 

@@ -31,17 +31,28 @@ except ImportError:
 
 
 def _load_model(model_path: Path) -> ct.models.MLModel:
-    """Load a Core ML model with CPU-only compute to avoid async GPU
-    execution stream crashes (MLE5ExecutionStream.resetQueue)."""
-    try:
-        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPU_ONLY)
-    except AttributeError:
-        return ct.models.MLModel(str(model_path), compute_units=ct.ComputeUnit.CPUOnly)
+    return ct.models.MLModel(str(model_path))
 
 
-def _copy(arr: np.ndarray) -> np.ndarray:
-    """Copy an array so CoreML gets its own buffer, avoiding use-after-free."""
-    return np.ascontiguousarray(arr, dtype=np.float32).copy()
+# Anchors: keep input arrays alive so Python doesn't GC their buffers
+# before CoreML's async cleanup thread releases them (MLE5ExecutionStream
+# resetQueue).  Without this, libcoremlpython.so double-frees the buffer.
+_ANCHORS: list[np.ndarray] = []
+_MAX_ANCHORS = 20
+
+
+def _predict(model: ct.models.MLModel, **inputs: np.ndarray) -> dict:
+    """Call model.predict() with anchored input copies."""
+    anchored = {}
+    for k, v in inputs.items():
+        a = np.ascontiguousarray(v, dtype=np.float32)
+        _ANCHORS.append(a)
+        anchored[k] = a
+    result = model.predict(anchored)
+    # Trim old anchors to bound memory.
+    while len(_ANCHORS) > _MAX_ANCHORS:
+        _ANCHORS.pop(0)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -103,20 +114,19 @@ class UpscalerInference:
         """
         # Style gamma_beta.
         if style_references is not None and self._style_model is not None:
-            result = self._style_model.predict(
-                {"style_references": _copy(style_references.astype(np.float32))}
-            )
+            result = _predict(self._style_model,
+                style_references=style_references.astype(np.float32))
             style_gb = result["style_gamma_beta"]
         else:
             style_gb = self._fallback_style_gb
 
-        low_res_b = _copy(low_res[np.newaxis, ...].astype(np.float32))
-        style_gb_b = _copy(style_gb[np.newaxis, ...].astype(np.float32))
+        low_res_b = low_res[np.newaxis, ...].astype(np.float32)
+        style_gb_b = style_gb[np.newaxis, ...].astype(np.float32)
 
-        result = self._body_model.predict({
-            "low_res": low_res_b,
-            "style_gamma_beta": style_gb_b,
-        })
+        result = _predict(self._body_model,
+            low_res=low_res_b,
+            style_gamma_beta=style_gb_b,
+        )
         upscaled = result["upscaled"]
         return upscaled.squeeze(0).astype(np.float32)
 
