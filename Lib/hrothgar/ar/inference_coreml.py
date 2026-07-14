@@ -156,8 +156,9 @@ class GeneratorInference:
             unmasked[0, top_indices] = True
             predicted[0, top_indices] = pred_tokens[top_indices]
 
-        # Safety net.
+        # Safety net: fill remaining masked positions, then get final logits.
         remaining = ~unmasked[0]
+        final_logits = None
         if remaining.any():
             final_logits = self._transformer.predict({
                 "token_indices": predicted.astype(np.int32),
@@ -165,9 +166,16 @@ class GeneratorInference:
             })["logits"]
             predicted[0, remaining] = final_logits[0, remaining].argmax(axis=-1)
 
+        # Get logits for the completed token sequence.
+        if final_logits is None:
+            final_logits = self._transformer.predict({
+                "token_indices": predicted.astype(np.int32),
+                "conditioning_map": cond_map,
+            })["logits"]
+
         # ---- Step 3: Soft decode ----
         images = self._softdecoder.predict({
-            "logits": predicted.astype(np.float32),
+            "logits": final_logits.astype(np.float32),
         })["images"]
 
         return images.squeeze(0).astype(np.float32)
