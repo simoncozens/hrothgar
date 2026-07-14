@@ -31,6 +31,12 @@ class ARModelConfig:
     maskgit_num_inference_steps: int = 8
     maskgit_temperature: float = 1.0
 
+    # Training metadata — used at inference to validate inputs.
+    # None means "trained on full Latin Core" (the default).
+    target_codepoints: Optional[list[int]] = None
+    target_only: bool = False
+    style_codepoints: Optional[list[int]] = None
+
     def __post_init__(self) -> None:
         if self.image_size <= 0:
             raise ValueError(f"image_size must be positive, got {self.image_size}")

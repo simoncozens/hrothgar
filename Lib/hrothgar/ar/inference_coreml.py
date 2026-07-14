@@ -90,6 +90,9 @@ class GeneratorInference:
         self._image_size = self._config.image_size
         self._num_steps = self._config.maskgit_num_inference_steps
         self._temperature = self._config.maskgit_temperature
+        self._target_codepoints = self._config.target_codepoints
+        self._target_only = self._config.target_only
+        self._style_codepoints = self._config.style_codepoints
 
     @property
     def image_size(self) -> int:
@@ -98,6 +101,16 @@ class GeneratorInference:
     @property
     def num_inference_steps(self) -> int:
         return self._num_steps
+
+    @property
+    def target_glyphset(self) -> Optional[list[int]]:
+        """Codepoints the model was trained to generate (None = full Latin Core)."""
+        return self._target_codepoints
+
+    @property
+    def style_glyphset(self) -> Optional[list[int]]:
+        """Codepoints used for style references during training."""
+        return self._style_codepoints
 
     def generate(
         self,

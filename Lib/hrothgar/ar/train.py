@@ -60,6 +60,17 @@ class MaskGITTrainingLoop(TrainingLoop):
             maskgit_temperature=MASKGIT_TEMPERATURE,
         )
         model = ARModel(config, gtok_model=gtok).to(self.device)
+
+        # ── Save config metadata ─────────────────────────────────────
+        config.target_codepoints = (
+            sorted(train_args.target_characters)
+            if train_args.target_characters else None
+        )
+        config.target_only = train_args.target_only
+        config.style_codepoints = (
+            [ord(c) for c in train_args.style_characters]
+            if train_args.style_characters else None
+        )
         config.save_sidecar(train_args.model_path)
 
         # ── Data ──────────────────────────────────────────────────────
