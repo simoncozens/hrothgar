@@ -29,7 +29,7 @@ from hrothgar.ar.export_wrappers import (
     _MaskGITTransformerExport,
     _SoftDecoderExport,
 )
-from hrothgar.ar.dataset import _sample_style_codepoints
+from hrothgar.ar.style_sampling import _sample_style_codepoints
 from hrothgar.ar.model import ARModelConfig, ARModel
 from hrothgar.googlefonts import StandaloneFont
 from hrothgar.gtok.model import load_model as load_gtok
@@ -288,7 +288,7 @@ def main() -> None:
 
 
 def _codepoint_to_latincore(cp: int) -> int:
-    from hrothgar.dataset import LATIN_CORE
+    from hrothgar.dataset_constants import LATIN_CORE
     return LATIN_CORE.index(cp) if cp in LATIN_CORE else 0
 
 

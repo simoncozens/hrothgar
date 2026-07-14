@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.ar.dataset import _sample_style_codepoints
+from hrothgar.ar.style_sampling import _sample_style_codepoints
 
 
 def _build_parser() -> argparse.ArgumentParser:

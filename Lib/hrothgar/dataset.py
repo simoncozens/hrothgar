@@ -3,34 +3,13 @@ from typing import Callable, Optional, Sequence, Set
 
 import torch
 import uharfbuzz as hb
-from glyphsets import GlyphSet, unicodes_per_glyphset
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.googlefonts import GoogleFonts
 
-LATIN_CORE = [x for x in GlyphSet("GF_Latin_Core").get_characters() if x != 32]
-# Skip combining characters
-LATIN_CORE = [x for x in LATIN_CORE if not (0x0300 <= x <= 0x036F)]
-# Add the Rupee
-LATIN_CORE.append(0x20B9)
-
-
-LATIN_KERNEL = [x for x in unicodes_per_glyphset("GF_Latin_Kernel") if x != 32]
-# Skip combining characters
-LATIN_KERNEL = [x for x in LATIN_KERNEL if not (0x0300 <= x <= 0x036F)]
-
-LGC_ALL = set(
-    [x for x in unicodes_per_glyphset("GF_Latin_Core") if x != 32]
-    + [x for x in unicodes_per_glyphset("GF_Latin_Plus") if x != 32]
-    + [x for x in unicodes_per_glyphset("GF_Latin_African") if x != 32]
-    + [x for x in unicodes_per_glyphset("GF_Cyrillic_Core") if x != 32]
-    + [x for x in unicodes_per_glyphset("GF_Greek_Core") if x != 32]
-)
-LGC_ALL = [x for x in LGC_ALL if not (0x0300 <= x <= 0x036F)]
-
-CAPS_ONLY = [ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$₹"]
+from hrothgar.dataset_constants import CAPS_ONLY, LATIN_CORE, LATIN_KERNEL, LGC_ALL
 
 
 def _has_non_empty_outline(extents) -> bool:
