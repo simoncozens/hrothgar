@@ -131,8 +131,6 @@ def _convert(
         raise RuntimeError("coremltools is required.  pip install coremltools")
 
     wrapper.eval()
-    with torch.no_grad():
-        traced = torch.jit.trace(wrapper, example_inputs)
 
     ct_inputs = [
         ct.TensorType(shape=inp.shape, name=name)
@@ -141,7 +139,7 @@ def _convert(
     ct_precision = ct.precision.FLOAT16 if precision == "float16" else ct.precision.FLOAT32
 
     mlmodel = ct.convert(
-        traced,
+        wrapper,
         inputs=ct_inputs,
         outputs=[ct.TensorType(name=output_name)],
         convert_to="mlprogram",
