@@ -97,11 +97,7 @@ class GeneratorInference:
 
         # Load config from sidecar.
         from hrothgar.ar.config import ARModelConfig
-        sidecar = model_dir / "gen_config.pth.conf.json"
-        if not sidecar.exists():
-            for f in model_dir.glob("*.conf.json"):
-                sidecar = f
-                break
+        sidecar = model_dir / "gen_config.conf.json"
         self._config = ARModelConfig.from_sidecar(sidecar)
         self._image_size = self._config.image_size
         self._num_steps = self._config.maskgit_num_inference_steps
