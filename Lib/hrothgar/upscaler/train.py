@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import tqdm
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
@@ -70,6 +69,12 @@ class UpscalerTrainingLoop(TrainingLoop):
             outline_noise_edge_threshold=train_args.outline_noise_edge_threshold,
             low_res_noise_std=train_args.low_res_noise_std,
             style_reference_count=config.style_reference_count,
+            terminal_blur_sigma=train_args.terminal_blur_sigma,
+            stem_blur_sigma=train_args.stem_blur_sigma,
+            blur_mix_min=train_args.blur_mix_min,
+            blur_mix_max=train_args.blur_mix_max,
+            blur_sigma_jitter=train_args.blur_sigma_jitter,
+            mix_spatial_noise=train_args.mix_spatial_noise,
         )
 
         self.train_loader = maker.train_loader()
@@ -79,14 +84,13 @@ class UpscalerTrainingLoop(TrainingLoop):
             lr=train_args.learning_rate,
             betas=(train_args.beta1, train_args.beta2),
         )
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
 
         self.model = model
         self.target_steps = train_args.target_steps
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
-        self.validation_direction = "higher"
+        self.validation_direction = "lower"
         self.edge_weight = train_args.edge_weight
 
     def train_step(self, batch):
@@ -110,7 +114,6 @@ class UpscalerTrainingLoop(TrainingLoop):
 
         self.model.eval()
         with torch.no_grad():
-            val_ssim = []
             val_glyphloss = []
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
@@ -126,14 +129,13 @@ class UpscalerTrainingLoop(TrainingLoop):
                     low_res,
                     style_references=style_refs,
                 )
-                val_ssim.append(self.ssim(pred, high_res))
+                # val_ssim.append(self.ssim(pred, high_res))
                 val_glyphloss.append(glyph_reconstruction_loss(pred, high_res))
 
-            avg_ssim = torch.mean(torch.stack(val_ssim))
             avg_glyphloss = torch.mean(torch.stack(val_glyphloss))
-            self.write_scalar("Validation/SSIM", avg_ssim)
+            # self.write_scalar("Validation/SSIM", avg_ssim)
             self.write_scalar("Validation/GlyphLoss", avg_glyphloss)
-            self.checkpoint_if_best(avg_ssim)
+            self.checkpoint_if_best(avg_glyphloss)
             self.visualize()
 
         self.model.train()
@@ -290,6 +292,42 @@ if __name__ == "__main__":
         type=float,
         default=0.01,
         help="Per-pixel replacement probability applied after downsampling in conformance mode",
+    )
+    parser.add_argument(
+        "--terminal-blur-sigma",
+        type=float,
+        default=2.75,
+        help="Gaussian sigma for blur at terminals, corners and joins (high-curvature regions)",
+    )
+    parser.add_argument(
+        "--stem-blur-sigma",
+        type=float,
+        default=0.75,
+        help="Gaussian sigma for blur along straight/low-curvature edges",
+    )
+    parser.add_argument(
+        "--blur-mix-min",
+        type=float,
+        default=0.2,
+        help="Minimum fraction of blurred pixels to mix in at edge regions (0-1)",
+    )
+    parser.add_argument(
+        "--blur-mix-max",
+        type=float,
+        default=0.85,
+        help="Maximum fraction of blurred pixels to mix in at edge regions (0-1)",
+    )
+    parser.add_argument(
+        "--blur-sigma-jitter",
+        type=float,
+        default=0.3,
+        help="Per-batch random jitter on blur sigma as a fraction of base sigma (0-1)",
+    )
+    parser.add_argument(
+        "--mix-spatial-noise",
+        type=float,
+        default=0.15,
+        help="Per-pixel spatial noise added to the blur mix weight (0-1)",
     )
     parser.add_argument(
         "--edge-weight",
