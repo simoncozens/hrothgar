@@ -17,12 +17,11 @@ from typing import List
 import torch
 import torchvision
 import tqdm
-from torchmetrics.image import StructuralSimilarityIndexMeasure
+from glyphloss import glyph_reconstruction_loss
 
 from hrothgar.ar.dataset import ARPhase1DatasetMaker
 from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig
-from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.utils import TrainingLoop
 
@@ -67,10 +66,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             if train_args.target_characters else None
         )
         config.target_only = train_args.target_only
-        config.style_codepoints = (
-            [ord(c) for c in train_args.style_characters]
-            if train_args.style_characters else None
-        )
+        config.style_codepoints = train_args.style_characters
         config.save_sidecar(train_args.model_path)
 
         # ── Data ──────────────────────────────────────────────────────
@@ -104,8 +100,6 @@ class MaskGITTrainingLoop(TrainingLoop):
 
         # ── Loss & metrics ────────────────────────────────────────────
         self.loss_weights = ARLossWeights()
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
-        self.lpips = LPIPS().to(self.device)
 
         # ── Training bookkeeping ──────────────────────────────────────
         self.model = model
@@ -151,7 +145,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             raise ValueError("target_steps must not be None for MaskGITTrainingLoop")
 
         self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
-        self.validation_direction = "higher"  # Maximise SSIM.
+        self.validation_direction = "lower"  # Minimize glyphloss
 
     # ------------------------------------------------------------------
     # AMP helper
@@ -171,19 +165,26 @@ class MaskGITTrainingLoop(TrainingLoop):
         content_images = batch["content_rendering"].to(self.device)
         style_reference_images = batch["style_renderings"].to(self.device)
         target_codepoints = batch["char"].to(self.device)
+        metrics = batch.get("metrics")
+        if metrics is not None:
+            metrics = metrics.to(self.device)
+        target_widths = batch.get("advance_width")
+        if target_widths is not None:
+            target_widths = target_widths.to(self.device)
 
         model_output = self.model(
             content_images,
             style_reference_images,
             target_images=target_images,
             target_codepoints=target_codepoints,
+            metrics=metrics,
             global_step=self.global_step,
         )
         loss, loss_info = compute_ar_loss(
             model_output,
             target_images,
             weights=self.loss_weights,
-            lpips_metric=self.lpips,
+            target_widths=target_widths,
         )
         loss_info["content_only"] = torch.tensor(
             float(self.model._content_only_step),
@@ -286,20 +287,14 @@ class MaskGITTrainingLoop(TrainingLoop):
         if self.global_step % self.validation_every != 0:
             return
 
-        use_maskgit = getattr(self.model.config, "use_maskgit", False)
-        if use_maskgit:
-            ctx_label = "BidirectionalContext"
-            gen_label = "IterativeDecode"
-        else:
-            ctx_label = "TeacherForced"
-            gen_label = "FreeRunning"
+        ctx_label = "BidirectionalContext"
+        gen_label = "IterativeDecode"
 
         self.model.eval()
         with torch.no_grad():
             # ── Full-context quality ──────────────────────────────────
             val_metrics = {
-                "ssim": [],
-                "lpips": [],
+                "glyphloss": [],
                 "token_accuracy": [],
                 "token_cross_entropy": [],
             }
@@ -312,6 +307,12 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_content = val_batch["content_rendering"].to(self.device)
                 val_style = val_batch["style_renderings"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
+                batch_metrics = val_batch.get("metrics")
+                if batch_metrics is not None:
+                    batch_metrics = batch_metrics.to(self.device)
+                val_target_widths = val_batch.get("advance_width")
+                if val_target_widths is not None:
+                    val_target_widths = val_target_widths.to(self.device)
 
                 with self._autocast_context():
                     val_output = self.model(
@@ -319,34 +320,33 @@ class MaskGITTrainingLoop(TrainingLoop):
                         val_style,
                         target_images=val_target,
                         target_codepoints=val_cp,
+                        metrics=batch_metrics,
                     )
                 _val_loss, val_loss_info = compute_ar_loss(
                     val_output,
                     val_target,
                     weights=self.loss_weights,
+                    target_widths=val_target_widths,
                 )
                 recon = torch.clamp(val_output.reconstructed_images, 0.0, 1.0).float()
                 target = torch.clamp(val_target, 0.0, 1.0).float()
                 with torch.autocast(device_type=self.device.type, enabled=False):
-                    val_metrics["ssim"].append(self.ssim(recon, target))
-                    val_metrics["lpips"].append(self.lpips(recon, target))
+                    val_metrics["glyphloss"].append(glyph_reconstruction_loss(recon, target))
                 val_metrics["token_accuracy"].append(val_loss_info["token_accuracy"])
                 val_metrics["token_cross_entropy"].append(
                     val_loss_info["token_cross_entropy"]
                 )
 
-            avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
-            avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
+            avg_glyphloss = torch.mean(torch.stack(val_metrics["glyphloss"]))
             avg_token_acc = torch.mean(torch.stack(val_metrics["token_accuracy"]))
             avg_token_ce = torch.mean(torch.stack(val_metrics["token_cross_entropy"]))
-            self.write_scalar(f"Validation/{ctx_label}_SSIM", avg_ssim)
-            self.write_scalar(f"Validation/{ctx_label}_LPIPS", avg_lpips)
+            self.write_scalar(f"Validation/{ctx_label}_glyphloss", avg_glyphloss)
             self.write_scalar(f"Validation/{ctx_label}_TokenAccuracy", avg_token_acc)
             self.write_scalar(f"Validation/{ctx_label}_TokenCrossEntropy", avg_token_ce)
 
             # ── Generation quality ────────────────────────────────────
             fr_batches = max(1, self.validation_batches // 10)
-            fr_metrics = {"ssim": [], "lpips": [], "token_accuracy": []}
+            fr_metrics = {"glyphloss": [], "token_accuracy": []}
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, fr_batches),
                 desc="Generation validation",
@@ -356,12 +356,16 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_content = val_batch["content_rendering"].to(self.device)
                 val_style = val_batch["style_renderings"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
+                val_metrics_gen = val_batch.get("metrics")
+                if val_metrics_gen is not None:
+                    val_metrics_gen = val_metrics_gen.to(self.device)
 
                 with self._autocast_context():
                     gen_output = self.model.generate(
                         content_images=val_content,
                         style_reference_images=val_style,
                         target_codepoints=val_cp,
+                        metrics=val_metrics_gen,
                     )
                 gt_tokens = self.model.target_token_indices_from_images(
                     val_target,
@@ -371,24 +375,21 @@ class MaskGITTrainingLoop(TrainingLoop):
                 ).float()
                 gen_target = torch.clamp(val_target, 0.0, 1.0).float()
                 with torch.autocast(device_type=self.device.type, enabled=False):
-                    fr_metrics["ssim"].append(self.ssim(gen_recon, gen_target))
-                    fr_metrics["lpips"].append(self.lpips(gen_recon, gen_target))
+                    fr_metrics["glyphloss"].append(glyph_reconstruction_loss(gen_recon, gen_target))
                 fr_metrics["token_accuracy"].append(
                     (gen_output.target_token_indices == gt_tokens).float().mean()
                 )
 
-            fr_ssim = torch.mean(torch.stack(fr_metrics["ssim"]))
-            fr_lpips = torch.mean(torch.stack(fr_metrics["lpips"]))
+            fr_glyphloss = torch.mean(torch.stack(fr_metrics["glyphloss"]))
             fr_token_acc = torch.mean(torch.stack(fr_metrics["token_accuracy"]))
-            self.write_scalar(f"Validation/{gen_label}_SSIM", fr_ssim)
-            self.write_scalar(f"Validation/{gen_label}_LPIPS", fr_lpips)
+            self.write_scalar(f"Validation/{gen_label}_glyphloss", fr_glyphloss)
             self.write_scalar(f"Validation/{gen_label}_TokenAccuracy", fr_token_acc)
             gap = avg_token_acc - fr_token_acc
             gap_ratio = gap / torch.clamp(avg_token_acc, min=1e-8)
             self.write_scalar("Validation/TokenAccuracy_Gap_Absolute", gap)
             self.write_scalar("Validation/TokenAccuracy_Gap_Relative", gap_ratio)
 
-            self.checkpoint_if_best(fr_ssim)
+            self.checkpoint_if_best(fr_glyphloss)
             self.visualize()
 
         self.model.train()

@@ -33,6 +33,7 @@ from typing import List, Optional, Sequence
 import torch
 import torchvision
 import tqdm
+import uharfbuzz as hb
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
@@ -230,7 +231,8 @@ class NFADatasetMaker:
 
         Returns the same keys as ``ARPhase1DatasetMaker.collate_fn``:
         ``target_rendering``, ``content_rendering``, ``style_renderings``,
-        ``chars``, ``style_chars``, and ``description``.
+        ``chars``, ``style_chars``, ``description``, ``metrics``, and
+        ``advance_width``.
         """
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
         target_renderings = torch.stack(
@@ -244,11 +246,15 @@ class NFADatasetMaker:
         style_renderings = []
         style_chars_list = []
         descriptions = []
+        all_metrics: list[torch.Tensor] = []
+        advance_widths: list[float] = []
 
         for item in batch:
             font = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
+
+            upem = float(getattr(font.hb_face, "upem", 1000))
 
             if not _font_has_codepoint(
                 reference_font, char
@@ -292,6 +298,20 @@ class NFADatasetMaker:
             else:
                 descriptions.append("")
 
+            # Font-level vertical metrics + glyph-level advance width.
+            vm = font.vertical_metrics()
+            gid_for_advance = hb.Font(font.hb_face).get_nominal_glyph(char)
+            aw = font.advance_width(gid_for_advance) / upem if upem > 0 else 0.0
+            advance_widths.append(aw)
+            all_metrics.append(torch.tensor([
+                float(vm["ascender"]) / upem if upem > 0 else 0.0,
+                float(vm["descender"]) / upem if upem > 0 else 0.0,
+                float(vm["x_height"]) / upem if upem > 0 else 0.0,
+                float(vm["cap_height"]) / upem if upem > 0 else 0.0,
+                float(vm["baseline"]) / upem if upem > 0 else 0.0,
+                aw,
+            ]))
+
         return {
             "target_rendering": target_renderings,
             "content_rendering": torch.stack(content_renderings),
@@ -299,6 +319,8 @@ class NFADatasetMaker:
             "chars": chars,
             "style_chars": torch.stack(style_chars_list),
             "description": descriptions,
+            "metrics": torch.stack(all_metrics),
+            "advance_width": torch.tensor(advance_widths),
         }
 
     def train_loader(self) -> DataLoader:

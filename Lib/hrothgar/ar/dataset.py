@@ -7,9 +7,12 @@ provides a collation function tailored to the AR generator inputs.
 from __future__ import annotations
 
 from typing import Set
+import random
 
 import torch
 from torch.utils.data import BatchSampler, DataLoader
+
+import uharfbuzz as hb
 
 from hrothgar.ar.style_sampling import (
     _font_has_codepoint,
@@ -22,7 +25,7 @@ from hrothgar.dataset import Dataset, DatasetMaker
 from hrothgar.googlefonts import GoogleFont
 
 
-class _OversampledTargetDatasetetDataset(Dataset):
+class _OversampledTargetDataset(Dataset):
     """Dataset that duplicates configured target codepoints in item order."""
 
     def __init__(
@@ -174,11 +177,15 @@ class ARPhase1DatasetMaker(DatasetMaker):
         style_renderings = []
         style_chars = []
         descriptions = []
+        all_metrics: list[torch.Tensor] = []
+        advance_widths: list[float] = []
 
         for item in batch:
             font: GoogleFont = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
+
+            upem = float(font.hb_face.upem)
 
             axis_pos = font.random_axis_position()
 
@@ -221,6 +228,20 @@ class ARPhase1DatasetMaker(DatasetMaker):
             style_renderings.append(torch.stack(rendered_styles))
             descriptions.append(font.description_with_tags_and_display())
 
+            # Font-level vertical metrics + glyph-level advance width.
+            vm = font.vertical_metrics()
+            gid_for_advance = hb.Font(font.hb_face).get_nominal_glyph(char)
+            aw = font.advance_width(gid_for_advance) / upem if upem > 0 else 0.0
+            advance_widths.append(aw)
+            all_metrics.append(torch.tensor([
+                float(vm["ascender"]) / upem if upem > 0 else 0.0,
+                float(vm["descender"]) / upem if upem > 0 else 0.0,
+                float(vm["x_height"]) / upem if upem > 0 else 0.0,
+                float(vm["cap_height"]) / upem if upem > 0 else 0.0,
+                float(vm["baseline"]) / upem if upem > 0 else 0.0,
+                aw,
+            ]))
+
         return {
             "char": chars,
             "target_rendering": torch.stack(target_renderings),
@@ -228,6 +249,8 @@ class ARPhase1DatasetMaker(DatasetMaker):
             "style_renderings": torch.stack(style_renderings),
             "style_chars": torch.tensor(style_chars, dtype=torch.long),
             "description": descriptions,
+            "metrics": torch.stack(all_metrics),
+            "advance_width": torch.tensor(advance_widths),
         }
 
 

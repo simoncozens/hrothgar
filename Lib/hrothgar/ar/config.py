@@ -23,6 +23,16 @@ class ARModelConfig:
 
     style_dropout: float = 0.2
 
+    # Global style vector: pool frozen G-Tok ViT features into a single
+    # (B, encoder_feature_dim) vector and broadcast-add it to every
+    # spatial position of the fused conditioning map.  This gives every
+    # generation token an identical, globally-consistent style signal —
+    # helpful for scripts (e.g. Latin) whose glyphs carry sparse,
+    # non-redundant style cues.
+    use_global_style: bool = True
+    # Dropout probability applied to the global style vector (per-batch).
+    global_style_dropout: float = 0.2
+
     content_only_prob: float = 0.0
     style_only_prob: float = 0.0
 
@@ -30,6 +40,12 @@ class ARModelConfig:
 
     maskgit_num_inference_steps: int = 8
     maskgit_temperature: float = 1.0
+
+    # Metric conditioning (concern 3: baseline/x-height/width alignment).
+    # If False, the metric embedder and width head are not created.
+    use_metrics: bool = True
+    metric_embedding_hidden_dim: int = 128
+    width_head_hidden_dim: int = 128
 
     # Training metadata — used at inference to validate inputs.
     # None means "trained on full Latin Core" (the default).
@@ -81,4 +97,3 @@ class ARModelConfig:
             data = _json.load(f)
         known = {f.name for f in _dc.fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
-

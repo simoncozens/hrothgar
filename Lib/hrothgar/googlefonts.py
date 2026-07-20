@@ -86,6 +86,22 @@ class Font:
         ]
         return axes
 
+    def vertical_metrics(self) -> Dict[str, float]:
+        """Return the vertical metrics for this font."""
+        hbfont = hb.Font(self.hb_face)
+        extents = hbfont.get_font_extents("ltr")
+        return {
+            "ascender": extents.ascender,
+            "descender": extents.descender,
+            "x_height": hbfont.get_metric_position(hb.OTMetricsTag.X_HEIGHT) or 0,
+            "cap_height": hbfont.get_metric_position(hb.OTMetricsTag.CAP_HEIGHT) or 0,
+            "baseline": 0,
+        }
+
+    def advance_width(self, gid) -> float:
+        """Return the advance width for a given glyph ID."""
+        hbfont = hb.Font(self.hb_face)
+        return hbfont.get_glyph_h_advance(gid)
 
 class GoogleFonts:
     """A class for interacting with the Google Fonts repository.

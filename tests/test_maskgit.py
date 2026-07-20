@@ -9,7 +9,8 @@ from hrothgar.ar.maskgit import (
     _cosine_mask_ratio,
     _cosine_unmask_schedule,
 )
-from hrothgar.ar.model import ARModel, ARModelConfig, ARModelOutput, LoRAConfig
+from hrothgar.ar.model import ARModel, ARModelConfig, ARModelOutput
+from hrothgar.ar.lora import LoRAConfig
 from hrothgar.gtok.model import GtokConfig, GtokModel
 
 # ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ def _make_maskgit_model(freeze_gtok: bool = False) -> ARModel:
         decoder_hidden_dim=128,
         decoder_num_layers=2,
         decoder_num_heads=4,
-        use_maskgit=True,
+        use_metrics=False,
         maskgit_num_inference_steps=4,
         freeze_gtok=freeze_gtok,
     )
@@ -110,7 +111,6 @@ def test_maskgit_transformer_mask_token() -> None:
     """Mask token ID should be vocab_size (one past the last valid index)."""
     model = _make_maskgit_model()
     assert model.maskgit_decoder.mask_token_id == model.codebook_size
-    assert model.maskgit_decoder.mask_token_id == 8192
 
 
 # ---------------------------------------------------------------------------
@@ -333,23 +333,49 @@ def test_compute_ar_loss_maskgit_no_masked_positions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# NFA compatibility guard
+# NFA on MaskGIT
 # ---------------------------------------------------------------------------
 
 
-def test_nfa_raises_with_maskgit() -> None:
-    """enable_nfa_mode should raise RuntimeError when use_maskgit is True."""
+def test_nfa_with_maskgit() -> None:
+    """enable_nfa_mode should inject LoRA and freeze the model."""
     model = _make_maskgit_model()
-    with pytest.raises(RuntimeError, match="MaskGIT"):
-        model.enable_nfa_mode(LoRAConfig(rank=4, alpha=4.0))
+    lora_cfg = LoRAConfig(rank=4, alpha=4.0)
+    model.enable_nfa_mode(lora_cfg)
+    assert model.is_nfa_mode
+    assert model.maskgit_decoder.transformer._lora_injected
+    # Only LoRA parameters should be trainable.
+    trainable = sum(p.numel() for p in model.trainable_parameters())
+    total = sum(p.numel() for p in model.parameters())
+    assert trainable > 0
+    assert trainable < total
+    # Check LoRA state dict can be retrieved.
+    lora_sd = model.maskgit_decoder.transformer.get_lora_state_dict()
+    assert len(lora_sd) > 0
+    # Double-inject guard.
+    with pytest.raises(RuntimeError, match="already in NFA mode"):
+        model.enable_nfa_mode(lora_cfg)
 
 
-def test_composed_nfa_raises_with_maskgit() -> None:
-    """enable_composed_nfa_mode should raise RuntimeError when use_maskgit is True."""
+def test_composed_nfa_with_maskgit() -> None:
+    """enable_composed_nfa_mode should inject composed LoRA."""
+    # First create a GA LoRA state dict.
+    model_ga = _make_maskgit_model()
+    lora_cfg = LoRAConfig(rank=4, alpha=4.0)
+    model_ga.maskgit_decoder.transformer.inject_lora(lora_cfg)
+    glyph_state = model_ga.maskgit_decoder.transformer.get_lora_state_dict()
+
+    # Now apply composed NFA with that glyph state.
     model = _make_maskgit_model()
-    dummy_state = {}
-    with pytest.raises(RuntimeError, match="MaskGIT"):
-        model.enable_composed_nfa_mode(dummy_state, LoRAConfig(rank=4, alpha=4.0))
+    model.enable_composed_nfa_mode(glyph_state, lora_cfg)
+    assert model.is_nfa_mode
+    assert model.maskgit_decoder.transformer._composed_lora
+    # Only font LoRA parameters should be trainable.
+    lora_sd = model.maskgit_decoder.transformer.get_lora_state_dict()
+    assert len(lora_sd) > 0
+    # All keys should be font adapter keys.
+    for k in lora_sd:
+        assert "lora_A_font" in k or "lora_B_font" in k
 
 
 # ---------------------------------------------------------------------------

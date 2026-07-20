@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from hrothgar.ar.model import ARModelOutput
+from glyphloss import glyph_reconstruction_loss
 
 
 @dataclass(frozen=True)
@@ -14,9 +15,9 @@ class ARLossWeights:
     """Weights for the AR visual-pretraining objectives."""
 
     token_cross_entropy: float = 0.3
-    pixel_l1: float = 1.0
+    glyphloss: float = 1.0
     lookahead_cross_entropy: float = 0.1
-    perceptual_lpips: float = 2.0
+    width_l1: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -25,7 +26,7 @@ class ARAdaptationLossWeights:
 
     alignment_l2: float = 1.0
     token_cross_entropy: float = 0.0
-    pixel_l1: float = 0.0
+    glyphloss: float = 1.0
     lookahead_cross_entropy: float = 0.0
 
 
@@ -34,8 +35,8 @@ def compute_ar_loss(
     target_images: torch.Tensor,
     *,
     target_token_indices: Optional[torch.Tensor] = None,
+    target_widths: Optional[torch.Tensor] = None,
     weights: ARLossWeights = ARLossWeights(),
-    lpips_metric: Optional[object] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """Compute AR visual-pretraining loss and loggable terms.
 
@@ -96,8 +97,9 @@ def compute_ar_loss(
             )
 
         lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
-        if model_output.lookahead_logits:
-            for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
+        lookahead_logits = getattr(model_output, "lookahead_logits", None)
+        if lookahead_logits:
+            for k, l_logits in enumerate(lookahead_logits, start=1):
                 valid_len = token_targets.shape[1] - k
                 if valid_len > 0:
                     lookahead_cross_entropy = lookahead_cross_entropy + F.cross_entropy(
@@ -105,38 +107,40 @@ def compute_ar_loss(
                         token_targets[:, k:].reshape(-1),
                     )
             lookahead_cross_entropy = lookahead_cross_entropy / len(
-                model_output.lookahead_logits
+                lookahead_logits
             )
     else:
         token_cross_entropy = torch.tensor(0.0, device=target_images.device)
         lookahead_cross_entropy = torch.tensor(0.0, device=target_images.device)
 
-    pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
-
-    # Perceptual LPIPS loss on Gumbel-softmax sampled reconstruction.
-    perceptual_lpips = torch.tensor(0.0, device=target_images.device)
-    if weights.perceptual_lpips > 0 and model_output.perceptual_recon is not None:
-        if lpips_metric is None:
-            raise ValueError(
-                "lpips_metric is required when perceptual_lpips > 0 "
-                "and perceptual_recon is provided"
-            )
-        # Clamp to [0, 1] for LPIPS (decoder output can drift slightly).
-        perceptual_recon_clamped = torch.clamp(model_output.perceptual_recon, 0.0, 1.0)
-        target_clamped = torch.clamp(target_images, 0.0, 1.0)
-        perceptual_lpips = lpips_metric(perceptual_recon_clamped, target_clamped).mean()
+    # glyphloss loss
+    glyphloss = torch.tensor(0.0, device=target_images.device)
+    recon = getattr(model_output, "reconstructed_images", None)
+    if recon is not None:
+        glyphloss = glyph_reconstruction_loss(recon, target_images)
 
     weighted_token_cross_entropy = weights.token_cross_entropy * token_cross_entropy
     weighted_lookahead_cross_entropy = (
         weights.lookahead_cross_entropy * lookahead_cross_entropy
     )
-    weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
-    weighted_perceptual_lpips = weights.perceptual_lpips * perceptual_lpips
+    weighted_glyphloss = weights.glyphloss * glyphloss
+
+    # Auxiliary width prediction loss.
+    width_l1 = torch.tensor(0.0, device=target_images.device)
+    weighted_width_l1 = torch.tensor(0.0, device=target_images.device)
+    if (
+        weights.width_l1 > 0
+        and target_widths is not None
+        and model_output.predicted_width is not None
+    ):
+        width_l1 = F.l1_loss(model_output.predicted_width, target_widths)
+        weighted_width_l1 = weights.width_l1 * width_l1
+
     total_loss = (
         weighted_token_cross_entropy
         + weighted_lookahead_cross_entropy
-        + weighted_pixel_l1
-        + weighted_perceptual_lpips
+        + weighted_glyphloss
+        + weighted_width_l1
     )
 
     token_accuracy = torch.tensor(0.0, device=target_images.device)
@@ -157,13 +161,13 @@ def compute_ar_loss(
         "total": total_loss,
         "token_cross_entropy": token_cross_entropy,
         "lookahead_cross_entropy": lookahead_cross_entropy,
-        "pixel_l1": pixel_l1,
-        "perceptual_lpips": perceptual_lpips,
+        "glyphloss": glyphloss,
         "token_accuracy": token_accuracy,
         "weighted_token_cross_entropy": weighted_token_cross_entropy,
         "weighted_lookahead_cross_entropy": weighted_lookahead_cross_entropy,
-        "weighted_pixel_l1": weighted_pixel_l1,
-        "weighted_perceptual_lpips": weighted_perceptual_lpips,
+        "weighted_glyphloss": weighted_glyphloss,
+        "width_l1": width_l1.detach(),
+        "weighted_width_l1": weighted_width_l1.detach(),
     }
     if maskgit_mask is not None:
         terms["n_masked"] = maskgit_mask.sum().float()
@@ -201,7 +205,7 @@ def compute_ar_adaptation_loss(
     )
     decoder_requested = (
         weights.token_cross_entropy > 0.0
-        or weights.pixel_l1 > 0.0
+        or weights.glyphloss > 0.0
         or weights.lookahead_cross_entropy > 0.0
     )
 
@@ -249,11 +253,11 @@ def compute_ar_adaptation_loss(
                 terms["weighted_lookahead_cross_entropy"] = weighted_lookahead_ce
 
         if target_images is not None:
-            pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
-            weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
-            total_loss = total_loss + weighted_pixel_l1
-            terms["pixel_l1"] = pixel_l1
-            terms["weighted_pixel_l1"] = weighted_pixel_l1
+            glyphloss = glyph_reconstruction_loss(model_output.reconstructed_images, target_images)
+            weighted_glyphloss = weights.glyphloss * glyphloss
+            total_loss = total_loss + weighted_glyphloss
+            terms["glyphloss"] = glyphloss
+            terms["weighted_glyphloss"] = weighted_glyphloss
 
     terms["total"] = total_loss
     return total_loss, terms

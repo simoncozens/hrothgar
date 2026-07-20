@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -167,6 +167,10 @@ class MaskGITTransformer(nn.Module):
         self.max_seq_length = -1
         self.initialize_weights()
 
+        # LoRA state.
+        self._lora_injected: bool = False
+        self._composed_lora: bool = False
+
     @property
     def mask_token_id(self) -> int:
         """The token id used for ``[MASK]``."""
@@ -246,6 +250,182 @@ class MaskGITTransformer(nn.Module):
         logits = logits[:, self.img_feature_code_len :].contiguous()
         # logits shape: (B, N, vocab_size)
         return logits
+
+    # ------------------------------------------------------------------
+    # LoRA injection
+    # ------------------------------------------------------------------
+
+    def inject_lora(self, lora_config: "LoRAConfig") -> None:
+        """Inject single LoRA adapters into linear layers of the transformer.
+
+        Targets:
+        - Attention QKV and output projections in every layer.
+        - Feed-forward w1, w2, w3 projections in every layer.
+        - Final output projection.
+
+        Base weights are frozen; only the new LoRA matrices are trainable.
+        May only be called once per transformer instance.
+
+        Raises:
+            RuntimeError: If LoRA has already been injected.
+        """
+        from hrothgar.ar.lora import LoRAConfig, LoRALinear
+
+        if self._lora_injected:
+            raise RuntimeError(
+                "LoRA has already been injected into this transformer.  "
+                "Create a fresh model before injecting again."
+            )
+
+        for i, layer in enumerate(self.layers):
+            # Attention projections.
+            layer.attention.wqkv = LoRALinear(
+                layer.attention.wqkv, lora_config.rank, lora_config.alpha
+            )
+            layer.attention.wo = LoRALinear(
+                layer.attention.wo, lora_config.rank, lora_config.alpha
+            )
+            # Feed-forward projections.
+            layer.feed_forward.w1 = LoRALinear(
+                layer.feed_forward.w1, lora_config.rank, lora_config.alpha
+            )
+            layer.feed_forward.w2 = LoRALinear(
+                layer.feed_forward.w2, lora_config.rank, lora_config.alpha
+            )
+            layer.feed_forward.w3 = LoRALinear(
+                layer.feed_forward.w3, lora_config.rank, lora_config.alpha
+            )
+
+        # Final output projection.
+        self.output = LoRALinear(self.output, lora_config.rank, lora_config.alpha)
+        self._lora_injected = True
+
+    def inject_composed_lora(
+        self,
+        glyph_state_dict: "Dict[str, torch.Tensor]",
+        lora_config: "LoRAConfig",
+    ) -> None:
+        """Inject composed LoRA: frozen glyph prior + trainable font adapter.
+
+        Each linear target is replaced with a ``ComposedLoRALinear`` that
+        holds both adapters.  The glyph adapter weights are loaded from
+        *glyph_state_dict* (output of a previous GA run) and frozen.
+        The font adapter is zero-initialised and trained during NFA.
+
+        The glyph LoRA rank is cross-checked against the tensor shapes in
+        *glyph_state_dict* and a ``ValueError`` is raised on mismatch.
+
+        May only be called once per transformer instance.
+        """
+        from hrothgar.ar.lora import ComposedLoRALinear, LoRAConfig
+
+        if self._lora_injected:
+            raise RuntimeError(
+                "LoRA has already been injected into this transformer.  "
+                "Create a fresh model before injecting again."
+            )
+
+        def _make_composed(
+            linear: nn.Linear, key_prefix: str
+        ) -> "ComposedLoRALinear":
+            a_key = f"{key_prefix}.lora_A"
+            b_key = f"{key_prefix}.lora_B"
+            if a_key not in glyph_state_dict or b_key not in glyph_state_dict:
+                raise ValueError(
+                    f"Glyph LoRA state dict is missing keys '{a_key}' and/or "
+                    f"'{b_key}'.  Ensure the state dict was produced by "
+                    "inject_lora() with matching layer targets."
+                )
+            glyph_A = glyph_state_dict[a_key]
+            glyph_B = glyph_state_dict[b_key]
+            inferred_rank = glyph_A.shape[0]
+            if inferred_rank != lora_config.rank:
+                raise ValueError(
+                    f"Glyph LoRA rank ({inferred_rank}) does not match "
+                    f"lora_config.rank ({lora_config.rank}).  GA and NFA must "
+                    "use the same --lora-rank."
+                )
+            glyph_scaling = lora_config.scaling
+            return ComposedLoRALinear(
+                linear,
+                glyph_lora_A=glyph_A,
+                glyph_lora_B=glyph_B,
+                glyph_scaling=glyph_scaling,
+                font_rank=lora_config.rank,
+                font_alpha=lora_config.alpha,
+            )
+
+        for i, layer in enumerate(self.layers):
+            prefix = f"layers.{i}"
+            layer.attention.wqkv = _make_composed(
+                layer.attention.wqkv, f"{prefix}.attention.wqkv"
+            )
+            layer.attention.wo = _make_composed(
+                layer.attention.wo, f"{prefix}.attention.wo"
+            )
+            layer.feed_forward.w1 = _make_composed(
+                layer.feed_forward.w1, f"{prefix}.feed_forward.w1"
+            )
+            layer.feed_forward.w2 = _make_composed(
+                layer.feed_forward.w2, f"{prefix}.feed_forward.w2"
+            )
+            layer.feed_forward.w3 = _make_composed(
+                layer.feed_forward.w3, f"{prefix}.feed_forward.w3"
+            )
+
+        self.output = _make_composed(self.output, "output")
+        self._lora_injected = True
+        self._composed_lora = True
+
+    def get_lora_state_dict(self) -> "Dict[str, torch.Tensor]":
+        """Return a state dict containing only trainable LoRA parameters.
+
+        In single-adapter mode this returns all ``lora_A`` / ``lora_B`` keys.
+        In composed mode, only the trainable *font* adapter keys
+        (``lora_A_font`` / ``lora_B_font``) are returned.
+
+        Raises:
+            RuntimeError: If LoRA has not been injected.
+        """
+        if not self._lora_injected:
+            raise RuntimeError(
+                "Cannot get LoRA state dict — inject_lora() or "
+                "inject_composed_lora() must be called first."
+            )
+        if self._composed_lora:
+            return {
+                k: v
+                for k, v in self.state_dict().items()
+                if "lora_A_font" in k or "lora_B_font" in k
+            }
+        return {
+            k: v
+            for k, v in self.state_dict().items()
+            if "lora_A" in k or "lora_B" in k
+        }
+
+    def load_lora_state_dict(self, state_dict: "Dict[str, torch.Tensor]") -> None:
+        """Load a LoRA state dict (produced by ``get_lora_state_dict``).
+
+        The keys must match the current LoRA parameter names exactly.
+
+        Raises:
+            RuntimeError: If LoRA has not been injected.
+        """
+        if not self._lora_injected:
+            raise RuntimeError(
+                "Cannot load LoRA state dict — inject_lora() or "
+                "inject_composed_lora() must be called first."
+            )
+        missing, unexpected = self.load_state_dict(state_dict, strict=False)
+        if unexpected:
+            raise RuntimeError(
+                f"Unexpected keys in LoRA state dict: {unexpected}"
+            )
+        if missing:
+            raise RuntimeError(
+                f"Missing keys when loading LoRA state dict: {missing}"
+            )
 
 
 # ---------------------------------------------------------------------------
