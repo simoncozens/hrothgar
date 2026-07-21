@@ -354,6 +354,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also save the raw generated bitmap",
     )
+    parser.add_argument(
+        "--zero-aggregator",
+        action="store_true",
+        help="Zero out the FeatureFusionModule cross-attention output, "
+             "isolating the global style vector + codepoint embedding",
+    )
 
     return parser
 
@@ -526,6 +532,7 @@ def main() -> None:
                 style_reference_images=style_images,
                 target_codepoints=torch.tensor([target_char]),
                 metrics=metrics,
+                zero_aggregator=args.zero_aggregator,
             )
             generated_lores = generated.reconstructed_images.squeeze(0).detach().cpu().numpy()
 

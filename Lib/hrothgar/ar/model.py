@@ -513,6 +513,7 @@ class ARModel(SaveLoadModel):
         latincore_idx: torch.Tensor,
         *,
         metrics: Optional[torch.Tensor] = None,
+        zero_aggregator: bool = False,
     ) -> torch.Tensor:
         """Build the 2D conditioning feature map for PrefixLM.
 
@@ -533,12 +534,18 @@ class ARModel(SaveLoadModel):
             metrics: Optional ``(B, 6)`` tensor of normalised metrics
                 ``[ascender, descender, x_height, cap_height, baseline,
                 advance_width]``.
+            zero_aggregator: If True, zero out the per-position cross-attention
+                output from the FeatureFusionModule, leaving only the global
+                style vector (if enabled) and codepoint embedding.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
         style_features = self.encode_style(
             style_reference_images
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
+
+        if zero_aggregator:
+            fused = torch.zeros_like(fused)
 
         # Inject global style vector: identical signal broadcast to every
         # spatial position, giving the MaskGIT transformer a position-agnostic
@@ -720,6 +727,7 @@ class ARModel(SaveLoadModel):
         target_codepoints: torch.Tensor,
         *,
         metrics: Optional[torch.Tensor] = None,
+        zero_aggregator: bool = False,
     ) -> ARModelOutput:
         """Generate target glyphs via MaskGIT iterative decoding.
 
@@ -728,6 +736,8 @@ class ARModel(SaveLoadModel):
             style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             target_codepoints: ``(B,)`` Unicode codepoint tensor.
             metrics: Optional ``(B, 6)`` normalised metric tensor.
+            zero_aggregator: If True, zero out the per-position cross-attention
+                output, isolating the global style vector + codepoint embedding.
         """
         latincore_idx = self._unicode_to_latincore(target_codepoints)
         conditioning_map = self.build_conditioning_map(
@@ -735,6 +745,7 @@ class ARModel(SaveLoadModel):
             style_reference_images=style_reference_images,
             latincore_idx=latincore_idx,
             metrics=metrics,
+            zero_aggregator=zero_aggregator,
         )
 
         predicted = self.maskgit_decoder.generate(
