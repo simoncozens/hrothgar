@@ -15,6 +15,12 @@ class ARModelConfig:
     aggregator_num_layers: int = 3
     aggregator_num_heads: int = 8
 
+    # Number of global style tokens to pool the CNN style feature map into
+    # via learned-query cross-attention.  0 or negative = per-position
+    # cross-attention (legacy).  Default 16 gives every content position
+    # the same compact, globally-consistent style summary.
+    style_pool_tokens: int = 16
+
     decoder_hidden_dim: int = 832
     decoder_num_layers: int = 16
     decoder_num_heads: int = 16

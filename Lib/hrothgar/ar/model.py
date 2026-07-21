@@ -189,6 +189,7 @@ class ARModel(SaveLoadModel):
             z_channel=config.encoder_feature_dim,
             n_heads=config.aggregator_num_heads,
             n_style_blocks=config.aggregator_num_layers,
+            n_style_tokens=config.style_pool_tokens,
         )
 
         conditioning_dim = config.encoder_feature_dim * 2
@@ -833,7 +834,8 @@ class ARModel(SaveLoadModel):
         incompatible = self.load_state_dict(core_keys, strict=False)
 
         allowed_missing_prefixes = [
-            "gtok.", "token_decoder.", "lookahead_decoders."
+            "gtok.", "token_decoder.", "lookahead_decoders.",
+            "metric_embedder.", "width_head.", "aggregator.style_pool."
         ]
         if self.language_adapter is not None:
             allowed_missing_prefixes.append("language_adapter.")
