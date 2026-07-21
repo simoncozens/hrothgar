@@ -599,7 +599,6 @@ def compute_maskgit_loss(
     reconstructed_images: torch.Tensor,
     target_images: torch.Tensor,
     *,
-    perceptual_recon: Optional[torch.Tensor] = None,
     weights: MaskGITLossWeights = MaskGITLossWeights(),
     lpips_metric: Optional[object] = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -616,7 +615,6 @@ def compute_maskgit_loss(
         target_token_indices: Ground-truth token indices, ``(B, N)``.
         reconstructed_images: Soft-decoded images from ``soft_decode()``.
         target_images: Ground-truth images, ``(B, 3, H, W)``.
-        perceptual_recon: Optional Gumbel-softmax decoded images for LPIPS.
         weights: Loss weight configuration.
         lpips_metric: LPIPS module instance (required if ``perceptual_lpips > 0``).
 
@@ -646,17 +644,16 @@ def compute_maskgit_loss(
     # Pixel L1 on the full reconstruction.
     pixel_l1 = F.l1_loss(reconstructed_images, target_images)
 
-    # Perceptual LPIPS.
+    # Perceptual LPIPS on soft-decoded reconstruction.
     perceptual_lpips = torch.tensor(0.0, device=device)
-    if weights.perceptual_lpips > 0 and perceptual_recon is not None:
+    if weights.perceptual_lpips > 0:
         if lpips_metric is None:
             raise ValueError(
-                "lpips_metric is required when perceptual_lpips > 0 "
-                "and perceptual_recon is provided"
+                "lpips_metric is required when perceptual_lpips > 0"
             )
-        perceptual_recon_clamped = torch.clamp(perceptual_recon, 0.0, 1.0)
+        recon_clamped = torch.clamp(reconstructed_images, 0.0, 1.0)
         target_clamped = torch.clamp(target_images, 0.0, 1.0)
-        perceptual_lpips = lpips_metric(perceptual_recon_clamped, target_clamped).mean()
+        perceptual_lpips = lpips_metric(recon_clamped, target_clamped).mean()
 
     weighted_token_ce = weights.token_cross_entropy * token_cross_entropy
     weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
