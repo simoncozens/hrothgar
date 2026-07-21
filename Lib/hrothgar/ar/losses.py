@@ -106,9 +106,7 @@ def compute_ar_loss(
                         l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
                         token_targets[:, k:].reshape(-1),
                     )
-            lookahead_cross_entropy = lookahead_cross_entropy / len(
-                lookahead_logits
-            )
+            lookahead_cross_entropy = lookahead_cross_entropy / len(lookahead_logits)
     else:
         token_cross_entropy = torch.tensor(0.0, device=target_images.device)
         lookahead_cross_entropy = torch.tensor(0.0, device=target_images.device)
@@ -253,7 +251,9 @@ def compute_ar_adaptation_loss(
                 terms["weighted_lookahead_cross_entropy"] = weighted_lookahead_ce
 
         if target_images is not None:
-            glyphloss = glyph_reconstruction_loss(model_output.reconstructed_images, target_images)
+            glyphloss = glyph_reconstruction_loss(
+                model_output.reconstructed_images, target_images
+            )
             weighted_glyphloss = weights.glyphloss * glyphloss
             total_loss = total_loss + weighted_glyphloss
             terms["glyphloss"] = glyphloss
