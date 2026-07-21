@@ -133,10 +133,15 @@ class GoogleFonts:
         self._init_tags()
 
     def _init_tags(self):
+        # Need a proper csv decoder to handle quoted values, etc.
+        import csv
+
         tag_csv = self.repo_path / "tags" / "all" / "families.csv"
+
         with tag_csv.open() as f:
-            for line in f:
-                family, _variation, tag, value = line.strip().split(",")
+            reader = csv.reader(f)
+            for line in reader:
+                family, _variation, tag, value = line
                 self.tags[family] = self.tags.get(family, {})
                 self.tags[family][tag] = float(value)
 
