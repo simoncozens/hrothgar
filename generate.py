@@ -91,14 +91,16 @@ def _build_generation_inputs(
     image_size: int,
     common_style_codepoints: Optional[Sequence[int]],
     device: torch.device,
+    reference_for_target: Optional[GoogleFont] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    reference_font = font.reference_font() or font
+    reference_font = reference_for_target or font
     if not _font_has_codepoint(reference_font, target_char) or not _has_non_empty_glyph(
         reference_font, target_char
     ):
         reference_font = font
 
     content_render = reference_font.render(target_char, size=image_size)
+    print("Rendering content from font:", reference_font.family)
     if _is_blank_rendering(content_render):
         content_render = font.render(target_char, size=image_size)
 
@@ -262,7 +264,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--reference-family",
-        choices=["noto-sans", "noto-serif", "none"],
+        choices=["noto-sans", "noto-serif", "adobe-blank", "none"],
         default="noto-sans",
         help="Reference family for content glyph conditioning",
     )
@@ -491,7 +493,7 @@ def main() -> None:
         print(f"\n--- Generating U+{target_char:04X} ---")
 
         # Missing target glyphs in the adapted font are expected in this workflow.
-        reference_for_target = matched_google_font.reference_font() or matched_google_font
+        reference_for_target = matched_google_font.reference_font(args.reference_family) or matched_google_font
         if not _font_has_codepoint(
             reference_for_target, target_char
         ) and not _font_has_codepoint(matched_google_font, target_char):
@@ -516,6 +518,7 @@ def main() -> None:
             image_size=gtok_config.image_size,
             common_style_codepoints=style_codepoints,
             device=device,
+            reference_for_target=reference_for_target
         )
         with torch.no_grad():
             generated = ar_model.generate(

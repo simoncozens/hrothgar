@@ -232,15 +232,19 @@ class GoogleFont(Font):
         display_descriptor = f"This is a {centile_to_text(int(display))} display font. "
         return display_descriptor + self.description_with_tags()
 
-    def reference_font(self) -> Union[Self, None]:
+    def reference_font(self, hint=None) -> Union[Self, None]:
         """Returns a reference font for this font, based on its stroke tags. This is used to provide a baseline for comparison when describing the font."""
         if (
             self.metadata.stroke == "SANS_SERIF"
             or self.metadata.category == "SANS_SERIF"
+            or hint == "noto-sans"
         ):
             return GoogleFonts.families_by_name.get("Noto Sans")
-        elif self.metadata.stroke == "SERIF" or self.metadata.category == "SERIF":
+        elif self.metadata.stroke == "SERIF" or self.metadata.category == "SERIF" or hint == "noto-serif":
             return GoogleFonts.families_by_name.get("Noto Serif")
+        elif hint == "adobe-blank":
+            # Debugging
+            return GoogleFonts.families_by_name.get("Adobe Blank")
         else:
             return GoogleFonts.families_by_name.get("Noto Sans")
 
