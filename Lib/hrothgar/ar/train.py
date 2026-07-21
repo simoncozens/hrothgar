@@ -334,6 +334,7 @@ class MaskGITTrainingLoop(TrainingLoop):
                     val_target,
                     weights=self.loss_weights,
                     target_widths=val_target_widths,
+                    lpips_metric = self.lpips
                 )
                 recon = torch.clamp(val_output.reconstructed_images, 0.0, 1.0).float()
                 target = torch.clamp(val_target, 0.0, 1.0).float()
