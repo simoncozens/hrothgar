@@ -40,9 +40,10 @@ class FontStyleDatasetMaker(DatasetMaker):
         repo_url: str | Path,
         batch_size: int,
         *,
-        image_size: int = 512,
-        phrase_width: int = 512,
-        phrase_font_size: int = 32,
+        target_width: int = 768,
+        target_height: int = 128,
+        phrase_width: int = 1536,
+        phrase_font_size: int = 72,
         split_seed: int = 1234,
         canary_size: Optional[int] = None,
         tag_names: Optional[list[str]] = None,
@@ -52,14 +53,15 @@ class FontStyleDatasetMaker(DatasetMaker):
         super().__init__(
             repo_url=str(repo_url),
             batch_size=batch_size,
-            image_size=image_size if image_size > phrase_width // 2 else phrase_width // 2,
+            image_size=target_width,  # base class stores this; we use our own params
             split_seed=split_seed,
             canary_size=canary_size,
             character_set=list(LATIN_CORE),
         )
         self._tag_names = tag_names or []
         self._tag_num_classes = tag_num_classes
-        self._target_image_size = image_size
+        self._target_width = target_width
+        self._target_height = target_height
         self._phrase_width = phrase_width
         self._phrase_font_size = phrase_font_size
         self._class_balanced = class_balanced
@@ -133,11 +135,11 @@ class FontStyleDatasetMaker(DatasetMaker):
             # Render and resize to square.
             img1 = _render_and_resize(
                 font, p1, self._phrase_font_size, axis1,
-                self._phrase_width, self._target_image_size,
+                self._phrase_width, self._target_width, self._target_height,
             )
             img2 = _render_and_resize(
                 font, p2, self._phrase_font_size, axis2,
-                self._phrase_width, self._target_image_size,
+                self._phrase_width, self._target_width, self._target_height,
             )
             images_v1.append(img1)
             images_v2.append(img2)
@@ -192,9 +194,10 @@ def _render_and_resize(
     font_size: int,
     axis_position,
     phrase_width: int,
-    target_size: int,
+    target_width: int,
+    target_height: int,
 ) -> torch.Tensor:
-    """Render a phrase in a font and resize to a square RGB tensor."""
+    """Render a phrase in a font and resize to a target (W, H) RGB tensor."""
     import torchvision.transforms.functional as TF
 
     arr = render_phrase(
@@ -205,8 +208,8 @@ def _render_and_resize(
     )
     # arr is (H, W, 4) RGBA uint8 — strip alpha for RGB.
     img = torch.from_numpy(arr[..., :3].copy()).permute(2, 0, 1).float() / 255.0
-    # Resize to square.
-    img = TF.resize(img, [target_size, target_size], antialias=True)
+    # Resize to target dimensions.
+    img = TF.resize(img, [target_height, target_width], antialias=True)
     return img
 
 
