@@ -1,4 +1,4 @@
-"""Glyph rendering utilities based on FreeType.
+"""Glyph rendering utilities based on FreeType and Skia
 
 This module renders glyphs by glyph ID (GID) and is intentionally independent
 from Torch/data pipeline code so it can be tested in isolation.
@@ -12,6 +12,7 @@ from typing import Any, Optional, Sequence
 
 import freetype
 import numpy as np
+import skia
 
 
 def _bitmap_to_array(bitmap: Any) -> np.ndarray:
@@ -145,6 +146,41 @@ def render_gid(
 
     out = image.astype(np.float32) / 255.0
     return np.stack([out, out, out], axis=0)
+
+
+def render_phrase(
+    font_path: str | Path,
+    phrase: str,
+    size: int = 48,
+    axis_position: Optional[Sequence[float]] = None,
+    width: int = 768,
+) -> np.ndarray:
+    typeface = skia.Typeface.MakeFromFile(str(font_path), 0)
+    height = width // 2
+    # Positioning
+    left_margin = 10
+    baseline = int(height * 2.0 / 3.0)
+    surface = skia.Surface(width, height)
+    canvas = surface.getCanvas()
+    canvas.clear(skia.ColorWHITE)
+    if axis_position:
+        axes = typeface.getVariationDesignParameters()
+        coords = skia.FontArguments.VariationPosition.Coordinates()
+        for i in range(min(len(axis_position), len(axes))):
+            coords.append(
+                skia.FontArguments.VariationPosition.Coordinate(
+                    axes[i].tag, axis_position[i]
+                )
+            )
+        varpos = skia.FontArguments.VariationPosition(coords)
+        args = skia.FontArguments()
+        args.setVariationDesignPosition(varpos)
+        typeface = typeface.makeClone(args)
+
+    paint = skia.Paint(AntiAlias=True, Color=skia.ColorBLACK)
+    canvas.drawString(phrase, left_margin, baseline, skia.Font(typeface, size), paint)
+    image = surface.makeImageSnapshot()
+    return image.toarray()
 
 
 def _parse_args() -> argparse.Namespace:

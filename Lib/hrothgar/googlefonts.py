@@ -11,6 +11,8 @@ from gftools.util.google_fonts import Metadata
 from hrothgar.render import render_gid
 
 
+ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
+
 class Font:
     """A font, whether standalone or from the Google Fonts repository. This is an abstract base class that defines the interface for fonts, and provides some common functionality. The concrete implementations are GoogleFont and StandaloneFont."""
 
@@ -214,6 +216,16 @@ class GoogleFont(Font):
             desc += " It is considered "
             desc += tag_descriptions
         return desc
+
+    def category(self) -> str:
+        """Returns a broad category description."""
+        cat = "Display"
+        for tag, value in self.tags().items():
+            for maybe_tag in ALL_CATEGORIES:
+                if maybe_tag in tag and value > 0:
+                    cat = maybe_tag
+        return cat
+
 
     def display_score(self) -> float:
         """Compute the display-ness score for this font (0-100).

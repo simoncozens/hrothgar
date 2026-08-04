@@ -63,10 +63,10 @@ class SaveLoadModel(torch.nn.Module):
         """Save the model to the given path."""
         torch.save(self.state_dict(), path)
 
-    def load(self, path: str, device: torch.device):
+    def load(self, path: str, device: torch.device, strict: bool=True):
         """Load the model from the given path."""
         state_dict = torch.load(path, map_location=device)
-        self.load_state_dict(state_dict)
+        self.load_state_dict(state_dict, strict=strict)
 
 
 class TrainingLoop:
@@ -104,7 +104,7 @@ class TrainingLoop:
             print(
                 f"Model file {self.model_path} already exists, loading it before training."
             )
-            self.model.load(self.model_path, device=self.device)
+            self.model.load(self.model_path, device=self.device, strict=False)
 
     def must_stop(self):
         if self.target_steps is None:

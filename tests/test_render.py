@@ -68,3 +68,26 @@ def test_variable_font_axis_positions_change_rendering() -> None:
 
     assert regular.shape == heavy.shape
     assert not np.allclose(regular, heavy)
+
+
+def test_render_phrase_variable_font_axis_changes_output() -> None:
+    from hrothgar.render import render_phrase
+
+    font_path = Path("tests/dummy_repo/ofl/roboto/Roboto[wdth,wght].ttf")
+    phrase = "THE quick brown fox 1234"
+
+    light = render_phrase(font_path, phrase, size=48, axis_position=(100.0, 100.0))
+    heavy = render_phrase(font_path, phrase, size=48, axis_position=(900.0, 100.0))
+
+    assert light.shape == heavy.shape, (
+        f"Shape mismatch: {light.shape} vs {heavy.shape}"
+    )
+    assert light.shape[0] > 0 and light.shape[1] > 0, "Empty output"
+    # Different weights should produce measurably different rendering.
+    # Heavy weight has more ink (darker pixels).
+    light_ink = (light < 255).sum()
+    heavy_ink = (heavy < 255).sum()
+    assert light_ink > 0, "Light rendering is blank"
+    assert heavy_ink > light_ink, (
+        f"Heavy ({heavy_ink}) should have more ink than light ({light_ink})"
+    )
