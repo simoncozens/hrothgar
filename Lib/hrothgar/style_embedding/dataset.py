@@ -40,9 +40,8 @@ class FontStyleDatasetMaker(DatasetMaker):
         repo_url: str | Path,
         batch_size: int,
         *,
-        target_width: int = 768,
-        target_height: int = 128,
-        phrase_width: int = 1536,
+        phrase_width: int = 768,
+        phrase_height: int = 128,
         phrase_font_size: int = 72,
         split_seed: int = 1234,
         canary_size: Optional[int] = None,
@@ -53,16 +52,15 @@ class FontStyleDatasetMaker(DatasetMaker):
         super().__init__(
             repo_url=str(repo_url),
             batch_size=batch_size,
-            image_size=target_width,  # base class stores this; we use our own params
+            image_size=phrase_width,  # base class stores this; we use our own params
             split_seed=split_seed,
             canary_size=canary_size,
             character_set=list(LATIN_CORE),
         )
         self._tag_names = tag_names or []
         self._tag_num_classes = tag_num_classes
-        self._target_width = target_width
-        self._target_height = target_height
         self._phrase_width = phrase_width
+        self._phrase_height = phrase_height
         self._phrase_font_size = phrase_font_size
         self._class_balanced = class_balanced
 
@@ -101,7 +99,7 @@ class FontStyleDatasetMaker(DatasetMaker):
                     drop_last=True,
                 ),
                 collate_fn=self.collate_fn,
-                num_workers=0,
+                num_workers=16,
                 pin_memory=True,
             )
         return super().train_loader()
@@ -135,11 +133,11 @@ class FontStyleDatasetMaker(DatasetMaker):
             # Render and resize to square.
             img1 = _render_and_resize(
                 font, p1, self._phrase_font_size, axis1,
-                self._phrase_width, self._target_width, self._target_height,
+                self._phrase_width, self._phrase_height,
             )
             img2 = _render_and_resize(
                 font, p2, self._phrase_font_size, axis2,
-                self._phrase_width, self._target_width, self._target_height,
+                self._phrase_width, self._phrase_height,
             )
             images_v1.append(img1)
             images_v2.append(img2)
@@ -194,8 +192,7 @@ def _render_and_resize(
     font_size: int,
     axis_position,
     phrase_width: int,
-    target_width: int,
-    target_height: int,
+    phrase_height: int,
 ) -> torch.Tensor:
     """Render a phrase in a font and resize to a target (W, H) RGB tensor."""
     import torchvision.transforms.functional as TF
@@ -205,11 +202,10 @@ def _render_and_resize(
         size=font_size,
         axis_position=axis_position if axis_position and len(axis_position) > 0 else None,
         width=phrase_width,
+        height=phrase_height,
     )
     # arr is (H, W, 4) RGBA uint8 — strip alpha for RGB.
     img = torch.from_numpy(arr[..., :3].copy()).permute(2, 0, 1).float() / 255.0
-    # Resize to target dimensions.
-    img = TF.resize(img, [target_height, target_width], antialias=True)
     return img
 
 

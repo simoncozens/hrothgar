@@ -110,9 +110,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         maker = FontStyleDatasetMaker(
             repo_url=str(train_args.dataset_path),
             batch_size=train_args.batch_size,
-            target_width=config.phrase_target_width,
-            target_height=config.phrase_target_height,
             phrase_width=config.phrase_width,
+            phrase_height=config.phrase_height,
             phrase_font_size=config.phrase_font_size,
             canary_size=train_args.limit_dataset_size,
             tag_names=tag_names or [],

@@ -154,9 +154,9 @@ def render_phrase(
     size: int = 48,
     axis_position: Optional[Sequence[float]] = None,
     width: int = 768,
+    height: int = 128,
 ) -> np.ndarray:
     typeface = skia.Typeface.MakeFromFile(str(font_path), 0)
-    height = width // 2
     # Positioning
     left_margin = 10
     baseline = int(height * 2.0 / 3.0)

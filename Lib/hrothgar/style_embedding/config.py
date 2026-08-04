@@ -17,12 +17,11 @@ class FontStyleEmbedderConfig:
 
     # Input rendering.
     # Native render size for the phrase image.
-    phrase_width: int = 1536
     phrase_font_size: int = 72
-    # Target size to resize the phrase rendering to before CNN encoding.
+    # Target size for phrase rendering
     # Rectangular (6:1) preserves text shape without dead pixels.
-    phrase_target_width: int = 768
-    phrase_target_height: int = 128
+    phrase_width: int = 768
+    phrase_height: int = 128
 
     # CNN encoder (matches StyleEncoder convention).
     encoder_base_channels: int = 32
