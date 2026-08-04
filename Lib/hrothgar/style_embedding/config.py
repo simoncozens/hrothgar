@@ -24,7 +24,7 @@ class FontStyleEmbedderConfig:
     phrase_width: int = phrase_height * 8
 
     # CNN encoder (matches StyleEncoder convention).
-    encoder_base_channels: int = 32
+    encoder_base_channels: int = 16
     encoder_feature_dim: int = 256
 
     # Final embedding dimensionality for contrastive loss.
@@ -42,7 +42,7 @@ class FontStyleEmbedderConfig:
     category_dropout: float = 0.3
 
     # Regularization.
-    encoder_dropout: float = 0.1
+    encoder_dropout: float = 0.3
 
     # Training.
     contrastive_temperature: float = 0.07

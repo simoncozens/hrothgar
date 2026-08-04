@@ -31,6 +31,7 @@ from hrothgar.utils import TrainingLoop, progress_values
 LEARNING_RATE = 1e-4
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.999
+WEIGHT_DECAY = 1e-4
 GRAD_CLIP_NORM = 1.0
 
 
@@ -129,6 +130,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             model.parameters(),
             lr=LEARNING_RATE,
             betas=(ADAM_BETA1, ADAM_BETA2),
+            weight_decay=WEIGHT_DECAY,
         )
 
         # ── Loss ────────────────────────────────────────────────────────
@@ -374,6 +376,12 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             with self._autocast_context():
                 _emb, _proj, predicted_tags, category_logits = self.model(images_v1)
 
+        # Also log the phrase image itself so we can see what the model sees.
+        if images_v1.shape[0] > 0:
+            sample = images_v1[0].clamp(0, 1)  # (3, H, W)
+            self.writer.add_image("Validation/phrase_sample", sample, self.global_step)
+
+
         tag_names = self.model.config.tag_names
         if not tag_names or predicted_tags is None:
             return
@@ -446,12 +454,6 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Convert HWC → CHW for TensorBoard.
         img_tensor = torch.from_numpy(img).permute(2, 0, 1)
         self.writer.add_image("Validation/tag_predictions", img_tensor, self.global_step)
-
-        # Also log the phrase image itself so we can see what the model sees.
-        if images_v1.shape[0] > 0:
-            sample = images_v1[0].clamp(0, 1)  # (3, H, W)
-            self.writer.add_image("Validation/phrase_sample", sample, self.global_step)
-
 
 # ---------------------------------------------------------------------------
 # CLI

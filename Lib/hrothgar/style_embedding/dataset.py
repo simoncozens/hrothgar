@@ -145,7 +145,11 @@ class FontStyleDatasetMaker(DatasetMaker):
         images = torch.cat([
             torch.stack(images_v1),
             torch.stack(images_v2),
-        ], dim=0)  # (2B, 3, H, H)
+        ], dim=0)  # (2B, 3, H, W)
+
+        # Apply colour jitter for augmentation — prevents memorisation of
+        # exact pixel values.
+        images = _augment_batch(images)
 
         # Tags.
         tags: dict[str, torch.Tensor] = {}
@@ -207,6 +211,27 @@ def _render_and_resize(
     # arr is (H, W, 4) RGBA uint8 — strip alpha for RGB.
     img = torch.from_numpy(arr[..., :3].copy()).permute(2, 0, 1).float() / 255.0
     return img
+
+
+def _augment_batch(images: torch.Tensor) -> torch.Tensor:
+    """Apply colour jitter to prevent memorisation of exact pixel values.
+
+    Each image in the batch gets independent jitter so the two views of the
+    same font differ in brightness/contrast as well as phrase text.
+    """
+    import torchvision.transforms.functional as TF
+
+    B = images.shape[0]
+    out = []
+    for i in range(B):
+        img = images[i]
+        # Random brightness/contrast jitter.
+        b = float(torch.empty(1).uniform_(0.85, 1.15).item())
+        c = float(torch.empty(1).uniform_(0.85, 1.15).item())
+        img = TF.adjust_brightness(img, b)
+        img = TF.adjust_contrast(img, c)
+        out.append(img)
+    return torch.stack(out)
 
 
 class _ClassBalancedBatchSampler(BatchSampler):
