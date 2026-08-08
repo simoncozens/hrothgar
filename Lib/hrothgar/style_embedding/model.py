@@ -128,6 +128,14 @@ class FontStyleEmbedder(SaveLoadModel):
                 dropout=config.category_dropout,
             )
 
+        # Optional text projection — maps frozen text embeddings into the
+        # same space as image projections for multi-positive contrastive loss.
+        self.text_projection: Optional[nn.Linear] = None
+        if config.text_encoder_name:
+            self.text_projection = nn.Linear(
+                config.text_embedding_dim, config.projection_dim
+            )
+
     def encode(self, images: torch.Tensor) -> torch.Tensor:
         """Encode phrase images into font embeddings.
 
@@ -147,6 +155,20 @@ class FontStyleEmbedder(SaveLoadModel):
         features = self.enc_dropout(features)
         embedding = features.mean(dim=[-2, -1])  # (B, encoder_feature_dim)
         return embedding
+
+    def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
+        """Project frozen text embeddings into the contrastive projection space.
+
+        Args:
+            text_embeddings: ``(B, text_embedding_dim)`` — raw frozen embeddings.
+
+        Returns:
+            ``(B, projection_dim)`` L2-normalized projections.
+        """
+        assert self.text_projection is not None, (
+            "text_projection not initialised; set text_encoder_name in config"
+        )
+        return F.normalize(self.text_projection(text_embeddings), p=2, dim=-1)
 
     def forward(
         self, images: torch.Tensor

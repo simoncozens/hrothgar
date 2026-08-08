@@ -232,6 +232,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         text_embeddings = batch.get("text_embeddings")
         if text_embeddings is not None:
             text_embeddings = text_embeddings.to(self.device)
+            text_embeddings = self.model.project_text(text_embeddings)
 
         target_tags_2x = {k: torch.cat([v, v], dim=0) for k, v in target_tags.items()}  # type: ignore[arg-type]
         tag_masks_2x = {k: torch.cat([v, v], dim=0) for k, v in tag_masks.items()}  # type: ignore[arg-type]
@@ -290,6 +291,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 text_embeddings = val_batch.get("text_embeddings")
                 if text_embeddings is not None:
                     text_embeddings = text_embeddings.to(self.device)
+                    text_embeddings = self.model.project_text(text_embeddings)
 
                 target_tags_2x = {
                     k: torch.cat([v, v], dim=0)  # type: ignore[arg-type]
