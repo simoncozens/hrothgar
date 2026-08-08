@@ -168,7 +168,11 @@ class FontStyleEmbedder(SaveLoadModel):
         assert self.text_projection is not None, (
             "text_projection not initialised; set text_encoder_name in config"
         )
+        if torch.isnan(text_embeddings).any():
+            raise RuntimeError("NaN in text_embeddings input to project_text")
         projected = self.text_projection(text_embeddings)
+        if torch.isnan(projected).any():
+            raise RuntimeError("NaN in text_projection output")
         # Guard against zero vectors (fonts with no description).
         return F.normalize(projected, p=2, dim=-1, eps=1e-8)
 
