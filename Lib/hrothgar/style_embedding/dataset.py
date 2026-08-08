@@ -52,6 +52,13 @@ class FontStyleDatasetMaker(DatasetMaker):
         text_encoder_name: Optional[str] = None,
         text_embedding_dim: int = 384,
     ):
+        # Set text-encoder fields *before* super().__init__() so they exist
+        # in case filter_fonts() needs them (though pre-computation is deferred
+        # to after init is complete).
+        self._text_encoder_name = text_encoder_name
+        self._text_embedding_dim = text_embedding_dim
+        self._text_embeddings: dict[str, torch.Tensor] = {}
+
         super().__init__(
             repo_url=str(repo_url),
             batch_size=batch_size,
@@ -66,9 +73,11 @@ class FontStyleDatasetMaker(DatasetMaker):
         self._phrase_height = phrase_height
         self._phrase_font_size = phrase_font_size
         self._class_balanced = class_balanced
-        self._text_encoder_name = text_encoder_name
-        self._text_embedding_dim = text_embedding_dim
-        self._text_embeddings: dict[str, torch.Tensor] = {}
+
+        # Pre-compute text embeddings now that the base class has finished
+        # loading, filtering, and splitting fonts.
+        if self._text_encoder_name:
+            self._precompute_text_embeddings()
 
     def filter_fonts(self) -> None:
         """Remove fonts that don't have the characters needed for phrases."""
@@ -82,11 +91,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             if needed <= font.codepoints
         ]
 
-        # Pre-compute text embeddings after filtering so we only encode
-        # fonts that will actually be used.
-        if self._text_encoder_name:
-            self._precompute_text_embeddings()
-
     def _precompute_text_embeddings(self) -> None:
         """Encode ``description_with_tags()`` for every font family.
 
@@ -99,7 +103,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         # Include model name in cache key so switching encoders
         # invalidates the cache.
         safe_name = self._text_encoder_name.replace("/", "_").replace("-", "_")
-        repo = Path(self._repo_url)
+        repo = self.googlefonts.repo_path
         cache_path = repo / f"text_embeddings_{safe_name}.pt"
         if cache_path.exists():
             print(f"Loading cached text embeddings from {cache_path}")
