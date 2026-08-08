@@ -109,8 +109,18 @@ class FontStyleDatasetMaker(DatasetMaker):
             print(f"Loading cached text embeddings from {cache_path}")
             loaded = torch.load(cache_path, map_location="cpu", weights_only=True)
             if isinstance(loaded, dict):
-                self._text_embeddings = loaded
-                return
+                # Validate: every value must be a non-NaN, non-zero tensor.
+                if loaded and all(
+                    isinstance(v, torch.Tensor)
+                    and not v.isnan().any()
+                    and v.norm(p=2) > 0
+                    for v in loaded.values()
+                ):
+                    self._text_embeddings = loaded
+                    print(f"  → {len(self._text_embeddings)} embeddings loaded")
+                    return
+                else:
+                    print("  → Cache invalid (NaN or zero vector); re-encoding.")
 
         from transformers import AutoTokenizer, AutoModel
 
@@ -125,10 +135,13 @@ class FontStyleDatasetMaker(DatasetMaker):
                 family_descs[font.family] = font.description_with_tags()
 
         family_embs: dict[str, torch.Tensor] = {}
-        zero = torch.zeros(self._text_embedding_dim)
         for family, desc in family_descs.items():
-            if not desc:
-                family_embs[family] = zero.clone()
+            if not desc.strip():
+                # Store a random unit vector so F.normalize is safe and
+                # this family gets a weak, uninformative signal rather
+                # than a zero vector that would produce NaN.
+                v = torch.randn(self._text_embedding_dim)
+                family_embs[family] = F.normalize(v, p=2, dim=-1)
                 continue
             with torch.no_grad():
                 tok = tokenizer(
@@ -146,7 +159,10 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         # Map each font file path → its family's embedding.
         for font in self.googlefonts.fonts:
-            emb = family_embs.get(font.family, zero.clone())
+            emb = family_embs.get(font.family)
+            if emb is None:
+                v = torch.randn(self._text_embedding_dim)
+                emb = F.normalize(v, p=2, dim=-1)
             self._text_embeddings[str(font.path)] = emb
 
         torch.save(self._text_embeddings, cache_path)
@@ -271,13 +287,13 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         # Attach pre-computed text embeddings keyed by font path.
         if self._text_embeddings:
-            text_embs = [
-                self._text_embeddings.get(
-                    str(font.path),
-                    torch.zeros(self._text_embedding_dim),
-                )
-                for font in fonts
-            ]
+            text_embs = []
+            for font in fonts:
+                emb = self._text_embeddings.get(str(font.path))
+                if emb is None:
+                    v = torch.randn(self._text_embedding_dim)
+                    emb = F.normalize(v, p=2, dim=-1)
+                text_embs.append(emb)
             result["text_embeddings"] = torch.stack(text_embs)  # (B, D)
 
         return result

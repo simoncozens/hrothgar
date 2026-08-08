@@ -168,7 +168,9 @@ class FontStyleEmbedder(SaveLoadModel):
         assert self.text_projection is not None, (
             "text_projection not initialised; set text_encoder_name in config"
         )
-        return F.normalize(self.text_projection(text_embeddings), p=2, dim=-1)
+        projected = self.text_projection(text_embeddings)
+        # Guard against zero vectors (fonts with no description).
+        return F.normalize(projected, p=2, dim=-1, eps=1e-8)
 
     def forward(
         self, images: torch.Tensor
