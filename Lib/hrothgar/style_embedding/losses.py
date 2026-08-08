@@ -19,6 +19,7 @@ def multipos_contrastive_loss(
     text_embeddings: torch.Tensor,
     family_labels: list[str],
     temperature: float = 0.07,
+    use_family_positives: bool = True,
 ) -> torch.Tensor:
     """Multi-positive contrastive loss with frozen text conditioning.
 
@@ -27,7 +28,7 @@ def multipos_contrastive_loss(
 
     * Its other view (same font, different phrase).
     * The text embedding for its font family.
-    * Other images from the same font family (both views).
+    * Optionally, other images from the same font family (both views).
 
     The loss is SupCon-style: the negative log-probability of each positive is
     averaged over the positive set, then averaged over all anchors.
@@ -37,6 +38,10 @@ def multipos_contrastive_loss(
         text_embeddings: ``(B, D)`` L2-normalized — one per font.
         family_labels: *2B* family name strings (duplicated for the two views).
         temperature: Softmax temperature (lower = sharper contrast).
+        use_family_positives: When True (default), same-family images in both
+            views are additional positives.  Set False to rely only on the
+            text embedding for cross-weight grouping — useful for debugging
+            overfitting.
 
     Returns:
         Scalar loss.
@@ -100,10 +105,11 @@ def multipos_contrastive_loss(
 
     # 3. Same-family images (excluding self and the other-view positive,
     #    which are already covered by step 1).
-    same_family.fill_diagonal_(0.0)
-    for i in range(N):
-        same_family[i, other[i]] = 0.0
-    pos_mask[:, :N] += same_family  # columns 0..2B-1
+    if use_family_positives:
+        same_family.fill_diagonal_(0.0)
+        for i in range(N):
+            same_family[i, other[i]] = 0.0
+        pos_mask[:, :N] += same_family  # columns 0..2B-1
 
     # ---- Mask self-similarity in sim ------------------------------------
     sim[torch.arange(N), torch.arange(N)] = float("-inf")
@@ -258,6 +264,7 @@ def compute_losses(
             text_embeddings,
             family_labels,
             temperature=temperature,
+            use_family_positives=weights.use_family_positives,
         )
         weight = weights.multipos_contrastive
     else:

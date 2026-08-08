@@ -95,6 +95,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 print(f"After filtering by [{tag_filter}]: {len(tag_names)} tags")
 
         text_encoder_name = getattr(train_args, "text_encoder", None) or ""
+        multipos_family = getattr(train_args, "multipos_family_positives", True)
         config = FontStyleEmbedderConfig(
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
@@ -102,6 +103,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             tag_dropout=train_args.tag_dropout,
             use_category_head=train_args.use_category_head,
             text_encoder_name=text_encoder_name,
+            multipos_use_family_positives=multipos_family,
         )
         model = FontStyleEmbedder(config).to(self.device)
         config.save_sidecar(train_args.model_path)
@@ -138,7 +140,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         )
 
         # ── Loss ────────────────────────────────────────────────────────
-        self.loss_weights = FontStyleEmbeddingLossWeights()
+        self.loss_weights = FontStyleEmbeddingLossWeights(
+            use_family_positives=config.multipos_use_family_positives,
+        )
 
         # ── Bookkeeping ─────────────────────────────────────────────────
         self.model = model
@@ -507,6 +511,11 @@ def _parse_args() -> argparse.Namespace:
                    help="HuggingFace model for frozen text conditioning "
                         "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
                         "Enables multi-positive contrastive loss.")
+    p.add_argument("--no-family-positives", action="store_false",
+                   dest="multipos_family_positives",
+                   help="Disable same-family image positives in multi-positive "
+                        "loss.  Only same-font other-view + text are positives.  "
+                        "Use this if contrastive loss overfits.")
     p.add_argument("--tag", type=str, default=None,
                    help="Optional human-readable tag for the TensorBoard run")
     p.add_argument("--precision", type=str, default="fp32",
