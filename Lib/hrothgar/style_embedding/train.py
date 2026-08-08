@@ -94,12 +94,14 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 tag_names = _filter_tags_by_prefix(tag_names, tag_filter)
                 print(f"After filtering by [{tag_filter}]: {len(tag_names)} tags")
 
+        text_encoder_name = getattr(train_args, "text_encoder", None) or ""
         config = FontStyleEmbedderConfig(
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
             tag_num_classes=train_args.tag_num_classes,
             tag_dropout=train_args.tag_dropout,
             use_category_head=train_args.use_category_head,
+            text_encoder_name=text_encoder_name,
         )
         model = FontStyleEmbedder(config).to(self.device)
         config.save_sidecar(train_args.model_path)
@@ -117,6 +119,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             canary_size=train_args.limit_dataset_size,
             tag_names=tag_names or [],
             tag_num_classes=config.tag_num_classes,
+            text_encoder_name=config.text_encoder_name or None,
+            text_embedding_dim=config.text_embedding_dim,
         )
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
@@ -225,6 +229,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         tag_masks = {k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()}
         family = batch.get("family", None)
         category = batch.get("category")
+        text_embeddings = batch.get("text_embeddings")
+        if text_embeddings is not None:
+            text_embeddings = text_embeddings.to(self.device)
 
         target_tags_2x = {k: torch.cat([v, v], dim=0) for k, v in target_tags.items()}  # type: ignore[arg-type]
         tag_masks_2x = {k: torch.cat([v, v], dim=0) for k, v in tag_masks.items()}  # type: ignore[arg-type]
@@ -244,6 +251,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 family_labels=family_2x,
                 category_logits=category_logits,
                 category_targets=category_2x,
+                text_embeddings=text_embeddings,
             )
 
         return loss, loss_info
@@ -279,6 +287,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 }
                 family = val_batch.get("family", None)
                 category = val_batch.get("category")
+                text_embeddings = val_batch.get("text_embeddings")
+                if text_embeddings is not None:
+                    text_embeddings = text_embeddings.to(self.device)
 
                 target_tags_2x = {
                     k: torch.cat([v, v], dim=0)  # type: ignore[arg-type]
@@ -303,6 +314,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         family_labels=family_2x,
                         category_logits=category_logits,
                         category_targets=category_2x,
+                        text_embeddings=text_embeddings,
                     )
 
                 val_contrastive.append(loss_info["contrastive"])
@@ -489,6 +501,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--use-category-head", action="store_true",
                    help="Add a 6-way broad category classification head "
                         "(Serif/Sans/Handwriting/Script/Monospace/Display)")
+    p.add_argument("--text-encoder", type=str, default=None,
+                   help="HuggingFace model for frozen text conditioning "
+                        "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
+                        "Enables multi-positive contrastive loss.")
     p.add_argument("--tag", type=str, default=None,
                    help="Optional human-readable tag for the TensorBoard run")
     p.add_argument("--precision", type=str, default="fp32",

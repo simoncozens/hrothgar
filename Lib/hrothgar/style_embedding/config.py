@@ -44,6 +44,11 @@ class FontStyleEmbedderConfig:
     # Regularization.
     encoder_dropout: float = 0.3
 
+    # Text conditioning — frozen text encoder provides a training signal
+    # via multi-positive contrastive loss.  Not needed at inference.
+    text_encoder_name: str = ""
+    text_embedding_dim: int = 384
+
     # Training.
     contrastive_temperature: float = 0.07
 
@@ -82,4 +87,5 @@ class FontStyleEmbeddingLossWeights:
     """Weights for each loss term."""
 
     contrastive: float = 1.0
+    multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5

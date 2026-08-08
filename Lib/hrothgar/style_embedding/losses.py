@@ -14,6 +14,84 @@ import torch.nn.functional as F
 from hrothgar.style_embedding.config import FontStyleEmbeddingLossWeights
 
 
+def multipos_contrastive_loss(
+    projections: torch.Tensor,
+    text_embeddings: torch.Tensor,
+    family_labels: list[str],
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """Multi-positive contrastive loss with frozen text conditioning.
+
+    Each image anchor (all 2B views) is contrasted against a joint candidate
+    set of all 2B images plus B text embeddings.  Positives for anchor *i* are:
+
+    * Its other view (same font, different phrase).
+    * The text embedding for its font family.
+    * Other images from the same font family (both views).
+
+    The loss is SupCon-style: the negative log-probability of each positive is
+    averaged over the positive set, then averaged over all anchors.
+
+    Args:
+        projections: ``(2B, D)`` L2-normalized — view 1 stacked on view 2.
+        text_embeddings: ``(B, D)`` L2-normalized — one per font.
+        family_labels: *2B* family name strings (duplicated for the two views).
+        temperature: Softmax temperature (lower = sharper contrast).
+
+    Returns:
+        Scalar loss.
+    """
+    B = projections.shape[0] // 2
+    if B < 2:
+        return torch.tensor(0.0, device=projections.device)
+
+    N = 2 * B          # image anchors
+    M = N + B          # total candidates (images + texts)
+    device = projections.device
+
+    # Build same-family matrix from the 2B duplicated labels.
+    import numpy as np
+
+    fams_arr = np.array(family_labels)  # (2B,)
+    same_family = torch.tensor(
+        fams_arr[:, None] == fams_arr[None, :],
+        device=device,
+        dtype=torch.float32,
+    )  # (2B, 2B)
+
+    # Image-image and image-text similarities.
+    sim_img = torch.matmul(projections, projections.T) / temperature   # (2B, 2B)
+    sim_txt = torch.matmul(projections, text_embeddings.T) / temperature  # (2B, B)
+    sim = torch.cat([sim_img, sim_txt], dim=1)  # (2B, M)
+
+    # ---- Positive mask ---------------------------------------------------
+    pos_mask = torch.zeros(N, M, device=device)
+
+    # 1. Same-font, other view: shifted identity.
+    other = (torch.arange(N, device=device) + B) % N
+    pos_mask[torch.arange(N), other] = 1.0
+
+    # 2. Text embedding: column 2B + font index.
+    font_idx = torch.arange(N, device=device) % B
+    pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
+
+    # 3. Same-family images (excluding self and the other-view positive,
+    #    which are already covered by step 1).
+    same_family.fill_diagonal_(0.0)
+    for i in range(N):
+        same_family[i, other[i]] = 0.0
+    pos_mask[:, :N] += same_family  # columns 0..2B-1
+
+    # ---- Mask self-similarity in sim ------------------------------------
+    sim[torch.arange(N), torch.arange(N)] = float("-inf")
+
+    # ---- SupCon-format loss: mean over positives per anchor --------------
+    log_prob = sim.log_softmax(dim=1)                         # (2B, M)
+    n_pos = pos_mask.sum(dim=1).clamp(min=1)                  # (2B,)
+    loss_per_row = -(pos_mask * log_prob).sum(dim=1) / n_pos  # (2B,)
+    return loss_per_row.mean()
+
+
 def contrastive_loss(
     projections: torch.Tensor,
     temperature: float = 0.07,
@@ -136,6 +214,7 @@ def compute_losses(
     family_labels: Optional[list[str]] = None,
     category_logits: Optional[torch.Tensor] = None,
     category_targets: Optional[torch.Tensor] = None,
+    text_embeddings: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute combined loss and per-term breakdown.
 
@@ -144,12 +223,23 @@ def compute_losses(
     """
     device = projections.device
 
-    # Contrastive loss.
-    contr = contrastive_loss(
-        projections,
-        temperature=temperature,
-        family_labels=family_labels,
-    )
+    # Contrastive loss — use multi-positive text-conditioned variant
+    # when text embeddings are available.
+    if text_embeddings is not None and family_labels is not None:
+        contr = multipos_contrastive_loss(
+            projections,
+            text_embeddings,
+            family_labels,
+            temperature=temperature,
+        )
+        weight = weights.multipos_contrastive
+    else:
+        contr = contrastive_loss(
+            projections,
+            temperature=temperature,
+            family_labels=family_labels,
+        )
+        weight = weights.contrastive
 
     # Tag prediction loss.
     tag_loss = torch.tensor(0.0, device=device)
@@ -166,14 +256,14 @@ def compute_losses(
         cat_loss, cat_accuracy = category_loss(category_logits, category_targets)
 
     total = (
-        weights.contrastive * contr
+        weight * contr
         + weights.tag_prediction * tag_loss
         + cat_loss
     )
 
     loss_info: dict[str, torch.Tensor] = {
         "contrastive": contr.detach(),
-        "contrastive_weighted": (weights.contrastive * contr).detach(),
+        "contrastive_weighted": (weight * contr).detach(),
         "loss": total.detach(),
     }
     if predicted_tags is not None and target_tags:

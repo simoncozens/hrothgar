@@ -14,6 +14,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import BatchSampler, DataLoader
 
 from hrothgar.dataset import DatasetMaker, Dataset
@@ -48,6 +49,8 @@ class FontStyleDatasetMaker(DatasetMaker):
         tag_names: Optional[list[str]] = None,
         tag_num_classes: int = 0,
         class_balanced: bool = True,
+        text_encoder_name: Optional[str] = None,
+        text_embedding_dim: int = 384,
     ):
         super().__init__(
             repo_url=str(repo_url),
@@ -63,6 +66,9 @@ class FontStyleDatasetMaker(DatasetMaker):
         self._phrase_height = phrase_height
         self._phrase_font_size = phrase_font_size
         self._class_balanced = class_balanced
+        self._text_encoder_name = text_encoder_name
+        self._text_embedding_dim = text_embedding_dim
+        self._text_embeddings: dict[str, torch.Tensor] = {}
 
     def filter_fonts(self) -> None:
         """Remove fonts that don't have the characters needed for phrases."""
@@ -75,6 +81,76 @@ class FontStyleDatasetMaker(DatasetMaker):
             for font in self.googlefonts.fonts
             if needed <= font.codepoints
         ]
+
+        # Pre-compute text embeddings after filtering so we only encode
+        # fonts that will actually be used.
+        if self._text_encoder_name:
+            self._precompute_text_embeddings()
+
+    def _precompute_text_embeddings(self) -> None:
+        """Encode ``description_with_tags()`` for every font family.
+
+        Descriptions are shared across weights of the same static family, so
+        we encode once per *family* and map each font file path to its
+        family's embedding.  Results are cached to disk for reuse.
+        """
+        assert self._text_encoder_name is not None
+
+        # Include model name in cache key so switching encoders
+        # invalidates the cache.
+        safe_name = self._text_encoder_name.replace("/", "_").replace("-", "_")
+        repo = Path(self._repo_url)
+        cache_path = repo / f"text_embeddings_{safe_name}.pt"
+        if cache_path.exists():
+            print(f"Loading cached text embeddings from {cache_path}")
+            loaded = torch.load(cache_path, map_location="cpu", weights_only=True)
+            if isinstance(loaded, dict):
+                self._text_embeddings = loaded
+                return
+
+        from transformers import AutoTokenizer, AutoModel
+
+        print(f"Encoding text descriptions with {self._text_encoder_name} …")
+        tokenizer = AutoTokenizer.from_pretrained(self._text_encoder_name)
+        model = AutoModel.from_pretrained(self._text_encoder_name).eval()
+
+        # Collect unique descriptions per family.
+        family_descs: dict[str, str] = {}
+        for font in self.googlefonts.fonts:
+            if font.family not in family_descs:
+                family_descs[font.family] = font.description_with_tags()
+
+        family_embs: dict[str, torch.Tensor] = {}
+        zero = torch.zeros(self._text_embedding_dim)
+        for family, desc in family_descs.items():
+            if not desc:
+                family_embs[family] = zero.clone()
+                continue
+            with torch.no_grad():
+                tok = tokenizer(
+                    desc, return_tensors="pt",
+                    truncation=True, max_length=512,
+                    padding=True,
+                )
+                out = model(**tok)
+                # Mean pooling over tokens, excluding padding.
+                mask = tok["attention_mask"].unsqueeze(-1)  # (1, L, 1)
+                emb = (out.last_hidden_state * mask).sum(dim=1)  # (1, D)
+                emb = emb / mask.sum(dim=1).clamp(min=1)
+                emb = F.normalize(emb, p=2, dim=-1)
+                family_embs[family] = emb.squeeze(0).cpu()
+
+        # Map each font file path → its family's embedding.
+        for font in self.googlefonts.fonts:
+            emb = family_embs.get(font.family, zero.clone())
+            self._text_embeddings[str(font.path)] = emb
+
+        torch.save(self._text_embeddings, cache_path)
+        print(
+            f"Encoded {len(family_embs)} families "
+            f"→ {len(self._text_embeddings)} font files; "
+            f"cached to {cache_path}"
+        )
 
     def train_set(self):
         return Dataset(
@@ -181,13 +257,26 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
         families = [font.family for font in fonts]
 
-        return {
+        result: dict = {
             "images": images,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,
             "family": families,
         }
+
+        # Attach pre-computed text embeddings keyed by font path.
+        if self._text_embeddings:
+            text_embs = [
+                self._text_embeddings.get(
+                    str(font.path),
+                    torch.zeros(self._text_embedding_dim),
+                )
+                for font in fonts
+            ]
+            result["text_embeddings"] = torch.stack(text_embs)  # (B, D)
+
+        return result
 
 
 def _render_and_resize(
