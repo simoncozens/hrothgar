@@ -123,6 +123,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             tag_num_classes=config.tag_num_classes,
             text_encoder_name=config.text_encoder_name or None,
             text_embedding_dim=config.text_embedding_dim,
+            class_balanced=not getattr(train_args, "no_class_balance", False),
         )
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
@@ -516,6 +517,13 @@ def _parse_args() -> argparse.Namespace:
                    help="Disable same-family image positives in multi-positive "
                         "loss.  Only same-font other-view + text are positives.  "
                         "Use this if contrastive loss overfits.")
+    p.add_argument("--no-class-balance", action="store_true",
+                   help="Disable class-balanced batch sampling.  Without this, "
+                        "each batch is guaranteed to contain fonts from all 6 "
+                        "categories, creating only trivially-easy negatives.  "
+                        "Disabling it allows harder within-category contrasts "
+                        "(e.g. Garamond vs Caslon) at the cost of potential "
+                        "category imbalance.")
     p.add_argument("--tag", type=str, default=None,
                    help="Optional human-readable tag for the TensorBoard run")
     p.add_argument("--precision", type=str, default="fp32",
