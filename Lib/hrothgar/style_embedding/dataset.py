@@ -26,10 +26,18 @@ from hrothgar.dataset_constants import LATIN_CORE
 # Phrases used for contrastive views.  Two different phrases per font
 # teach the model that style is invariant to the rendered text content.
 CONTRASTIVE_PHRASES = [
-    "THE quick brown fox 1234",
-    "HAMBURGE hamburger 5678",
-    "123 SHOPLIFT shoplift 123",
-    "adhesion ADHESION 9876",
+    "abcdefghijklmnopqrstuvwxyz",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "Pack my box with five dozen liquor jugs.",
+    "The quick brown fox jumps over the lazy dog.",
+    "Sphinx of black quartz, judge my vow.",
+    "How vexingly quick daft zebras jump!",
+    "The five boxing wizards jump quickly.",
+    "PACK MY BOX WITH FIVE DOZEN LIQUOR JUGS.",
+    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.",
+    "SPHINX OF BLACK QUARTZ, JUDGE MY VOW.",
+    "HOW VEXINGLY QUICK DAFT ZEBRAS JUMP!",
+    "THE FIVE BOXING WIZARDS JUMP QUICKLY.",
 ]
 
 # Canonical style-category and theme tags used for tag-weighted
