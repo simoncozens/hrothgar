@@ -254,7 +254,15 @@ class FontStyleDatasetMaker(DatasetMaker):
                 num_workers=16,
                 pin_memory=True,
             )
-        return super().train_loader()
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            collate_fn=self.collate_fn,
+            num_workers=16,
+            pin_memory=True,
+        )
 
     def collate_fn(self, batch: list[dict]) -> dict:
         """Collate font-level items into a training batch.

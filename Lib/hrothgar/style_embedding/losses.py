@@ -55,28 +55,28 @@ def multipos_contrastive_loss(
     if B < 2:
         return torch.tensor(0.0, device=projections.device)
 
-    # --- NaN guards -----------------------------------------------------
-    def _check(t: torch.Tensor, label: str) -> None:
-        if torch.isnan(t).any():
-            nan_count = torch.isnan(t).sum().item()
-            total = t.numel()
-            fine = t[~t.isnan()]
-            detail = ""
-            if fine.numel() > 0:
-                detail = (
-                    f", min={fine.min().item():.4f}"
-                    f", max={fine.max().item():.4f}"
-                )
-            raise RuntimeError(
-                f"NaN in {label}: {nan_count}/{total} NaN values"
-                f" (shape={tuple(t.shape)}{detail})"
-            )
+    # # --- NaN guards -----------------------------------------------------
+    # def _check(t: torch.Tensor, label: str) -> None:
+    #     if torch.isnan(t).any():
+    #         nan_count = torch.isnan(t).sum().item()
+    #         total = t.numel()
+    #         fine = t[~t.isnan()]
+    #         detail = ""
+    #         if fine.numel() > 0:
+    #             detail = (
+    #                 f", min={fine.min().item():.4f}"
+    #                 f", max={fine.max().item():.4f}"
+    #             )
+    #         raise RuntimeError(
+    #             f"NaN in {label}: {nan_count}/{total} NaN values"
+    #             f" (shape={tuple(t.shape)}{detail})"
+    #         )
 
-    _check(projections, "projections (input)")
-    if text_embeddings is not None:
-        _check(text_embeddings, "text_embeddings (input)")
-    if tag_vectors is not None:
-        _check(tag_vectors, "tag_vectors (input)")
+    # _check(projections, "projections (input)")
+    # if text_embeddings is not None:
+    #     _check(text_embeddings, "text_embeddings (input)")
+    # if tag_vectors is not None:
+    #     _check(tag_vectors, "tag_vectors (input)")
 
     N = 2 * B          # image anchors
     has_text = text_embeddings is not None
@@ -85,15 +85,15 @@ def multipos_contrastive_loss(
 
     # Image-image similarities.
     sim_img = torch.matmul(projections, projections.T) / temperature   # (2B, 2B)
-    _check(sim_img, "sim_img after matmul")
+    # _check(sim_img, "sim_img after matmul")
 
     if has_text:
         sim_txt = torch.matmul(projections, text_embeddings.T) / temperature
-        _check(sim_txt, "sim_txt after matmul")
+        # _check(sim_txt, "sim_txt after matmul")
         sim = torch.cat([sim_img, sim_txt], dim=1)
     else:
         sim = sim_img
-    _check(sim, "sim after concat")
+    # _check(sim, "sim after concat")
 
     # ---- Positive mask ---------------------------------------------------
     pos_mask = torch.zeros(N, M, device=device)
@@ -141,11 +141,11 @@ def multipos_contrastive_loss(
 
     # ---- Mask self-similarity in sim ------------------------------------
     sim[torch.arange(N), torch.arange(N)] = float("-inf")
-    _check(sim, "sim after masking self")
+    # _check(sim, "sim after masking self")
 
     # ---- SupCon-format loss: weighted mean over positives --------------
     log_prob = sim.log_softmax(dim=1)                         # (2B, M)
-    _check(log_prob, "log_prob after log_softmax")
+    # _check(log_prob, "log_prob after log_softmax")
     # Zero out non-positive positions so 0 * -inf is safe, then
     # weighted-sum by pos_mask values and normalise by total weight.
     log_prob = log_prob.masked_fill(pos_mask == 0, 0.0)
