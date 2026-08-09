@@ -20,28 +20,37 @@ def multipos_contrastive_loss(
     family_labels: list[str],
     temperature: float = 0.07,
     use_family_positives: bool = True,
+    tag_vectors: Optional[torch.Tensor] = None,
+    tag_threshold: float = 0.1,
 ) -> torch.Tensor:
     """Multi-positive contrastive loss with frozen text conditioning.
 
     Each image anchor (all 2B views) is contrasted against a joint candidate
     set of all 2B images plus B text embeddings.  Positives for anchor *i* are:
 
-    * Its other view (same font, different phrase).
-    * The text embedding for its font family.
-    * Optionally, other images from the same font family (both views).
+    * Its other view (same font, different phrase) — hard positive.
+    * The text embedding for its font family — hard positive.
+    * When ``tag_vectors`` is provided: other images weighted by tag cosine
+      similarity (soft positive).  When absent and ``use_family_positives``
+      is True: binary same-family positives.
 
     The loss is SupCon-style: the negative log-probability of each positive is
-    averaged over the positive set, then averaged over all anchors.
+    averaged over the positive set (weighted when soft), then averaged over
+    all anchors.
 
     Args:
         projections: ``(2B, D)`` L2-normalized — view 1 stacked on view 2.
         text_embeddings: ``(B, D)`` L2-normalized — one per font.
         family_labels: *2B* family name strings (duplicated for the two views).
         temperature: Softmax temperature (lower = sharper contrast).
-        use_family_positives: When True (default), same-family images in both
-            views are additional positives.  Set False to rely only on the
-            text embedding for cross-weight grouping — useful for debugging
-            overfitting.
+        use_family_positives: Ignored when ``tag_vectors`` is provided.
+            When True (default) and no tag vectors, same-family images in both
+            views are additional hard positives.
+        tag_vectors: Optional ``(B, num_tags)`` tag value vectors (centiles
+            in [0, 1]).  Cosine similarity between tag vectors provides soft
+            positive weights for cross-font image image pairs.
+        tag_threshold: Minimum cosine similarity to count as a positive
+            (default 0.1).  Below-threshold values are zeroed.
 
     Returns:
         Scalar loss.
@@ -69,20 +78,12 @@ def multipos_contrastive_loss(
 
     _check(projections, "projections (input)")
     _check(text_embeddings, "text_embeddings (input)")
+    if tag_vectors is not None:
+        _check(tag_vectors, "tag_vectors (input)")
 
     N = 2 * B          # image anchors
     M = N + B          # total candidates (images + texts)
     device = projections.device
-
-    # Build same-family matrix from the 2B duplicated labels.
-    import numpy as np
-
-    fams_arr = np.array(family_labels)  # (2B,)
-    same_family = torch.tensor(
-        fams_arr[:, None] == fams_arr[None, :],
-        device=device,
-        dtype=torch.float32,
-    )  # (2B, 2B)
 
     # Image-image and image-text similarities.
     sim_img = torch.matmul(projections, projections.T) / temperature   # (2B, 2B)
@@ -95,33 +96,58 @@ def multipos_contrastive_loss(
     # ---- Positive mask ---------------------------------------------------
     pos_mask = torch.zeros(N, M, device=device)
 
-    # 1. Same-font, other view: shifted identity.
+    # 1. Same-font, other view: shifted identity (hard positive).
     other = (torch.arange(N, device=device) + B) % N
     pos_mask[torch.arange(N), other] = 1.0
 
-    # 2. Text embedding: column 2B + font index.
+    # 2. Text embedding: column 2B + font index (hard positive).
     font_idx = torch.arange(N, device=device) % B
     pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
 
-    # 3. Same-family images (excluding self and the other-view positive,
-    #    which are already covered by step 1).
-    if use_family_positives:
+    # 3. Image-image soft positives: tag-weighted when available,
+    #    binary same-family otherwise.
+    if tag_vectors is not None:
+        # Normalize tag vectors and compute cosine similarity.
+        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)   # (B, T)
+        tag_sim = torch.matmul(tag_norm, tag_norm.T)               # (B, B)
+        # Threshold: zero out very weak similarities.
+        tag_sim = torch.where(tag_sim > tag_threshold, tag_sim,
+                              torch.zeros_like(tag_sim))
+        # Duplicate to (2B, 2B) for the two views.
+        top = torch.cat([tag_sim, tag_sim], dim=1)   # (B, 2B)
+        bot = torch.cat([tag_sim, tag_sim], dim=1)   # (B, 2B)
+        img_pos = torch.cat([top, bot], dim=0)        # (2B, 2B)
+        # Exclude self and the other-view positive.
+        img_pos.fill_diagonal_(0.0)
+        for i in range(N):
+            img_pos[i, other[i]] = 0.0
+        pos_mask[:, :N] += img_pos
+    elif use_family_positives:
+        import numpy as np
+
+        fams_arr = np.array(family_labels)  # (2B,)
+        same_family = torch.tensor(
+            fams_arr[:, None] == fams_arr[None, :],
+            device=device,
+            dtype=torch.float32,
+        )  # (2B, 2B)
         same_family.fill_diagonal_(0.0)
         for i in range(N):
             same_family[i, other[i]] = 0.0
-        pos_mask[:, :N] += same_family  # columns 0..2B-1
+        pos_mask[:, :N] += same_family
 
     # ---- Mask self-similarity in sim ------------------------------------
     sim[torch.arange(N), torch.arange(N)] = float("-inf")
     _check(sim, "sim after masking self")
 
-    # ---- SupCon-format loss: mean over positives per anchor --------------
+    # ---- SupCon-format loss: weighted mean over positives --------------
     log_prob = sim.log_softmax(dim=1)                         # (2B, M)
     _check(log_prob, "log_prob after log_softmax")
-    # Avoid 0 * -inf = NaN: zero out non-positive positions before summing.
+    # Zero out non-positive positions so 0 * -inf is safe, then
+    # weighted-sum by pos_mask values and normalise by total weight.
     log_prob = log_prob.masked_fill(pos_mask == 0, 0.0)
     n_pos = pos_mask.sum(dim=1).clamp(min=1)                  # (2B,)
-    loss_per_row = -log_prob.sum(dim=1) / n_pos               # (2B,)
+    loss_per_row = -(pos_mask * log_prob).sum(dim=1) / n_pos  # (2B,)
     return loss_per_row.mean()
 
 
@@ -248,6 +274,7 @@ def compute_losses(
     category_logits: Optional[torch.Tensor] = None,
     category_targets: Optional[torch.Tensor] = None,
     text_embeddings: Optional[torch.Tensor] = None,
+    tag_vectors: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute combined loss and per-term breakdown.
 
@@ -265,6 +292,7 @@ def compute_losses(
             family_labels,
             temperature=temperature,
             use_family_positives=weights.use_family_positives,
+            tag_vectors=tag_vectors,
         )
         weight = weights.multipos_contrastive
     else:

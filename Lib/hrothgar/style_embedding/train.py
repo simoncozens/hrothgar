@@ -234,6 +234,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         tag_masks = {k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()}
         family = batch.get("family", None)
         category = batch.get("category")
+        tag_vectors = batch.get("tag_vectors")
+        if tag_vectors is not None:
+            tag_vectors = tag_vectors.to(self.device)
         text_embeddings = batch.get("text_embeddings")
         if text_embeddings is not None:
             text_embeddings = text_embeddings.to(self.device)
@@ -258,6 +261,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 category_logits=category_logits,
                 category_targets=category_2x,
                 text_embeddings=text_embeddings,
+                tag_vectors=tag_vectors,
             )
 
         return loss, loss_info
@@ -293,6 +297,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 }
                 family = val_batch.get("family", None)
                 category = val_batch.get("category")
+                tag_vectors = val_batch.get("tag_vectors")
+                if tag_vectors is not None:
+                    tag_vectors = tag_vectors.to(self.device)
                 text_embeddings = val_batch.get("text_embeddings")
                 if text_embeddings is not None:
                     text_embeddings = text_embeddings.to(self.device)
@@ -322,6 +329,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         category_logits=category_logits,
                         category_targets=category_2x,
                         text_embeddings=text_embeddings,
+                        tag_vectors=tag_vectors,
                     )
 
                 val_contrastive.append(loss_info["contrastive"])

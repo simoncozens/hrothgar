@@ -32,6 +32,54 @@ CONTRASTIVE_PHRASES = [
     "adhesion ADHESION 9876",
 ]
 
+# Canonical style-category and theme tags used for tag-weighted
+# multi-positive contrastive examples.  These capture the major stylistic
+# dimensions along which fonts vary, and are treated as a continuous
+# vector (centile values normalised to [0, 1]).
+STYLE_CATEGORY_TAGS = [
+    "/Sans/Geometric",
+    "/Sans/Glyphic",
+    "/Sans/Grotesque",
+    "/Sans/Humanist",
+    "/Sans/Neo Grotesque",
+    "/Sans/Rounded",
+    "/Sans/Superellipse",
+    "/Script/Formal",
+    "/Script/Handwritten",
+    "/Script/Informal",
+    "/Script/Upright Script",
+    "/Serif/Didone",
+    "/Serif/Fat Face",
+    "/Serif/Humanist Venetian",
+    "/Serif/Modern",
+    "/Serif/Old Style Garalde",
+    "/Serif/Scotch",
+    "/Serif/Transitional",
+    "/Slab/Clarendon",
+    "/Slab/Geometric",
+    "/Slab/Humanist",
+]
+
+THEME_TAGS = [
+    "/Theme/Art Deco",
+    "/Theme/Art Nouveau",
+    "/Theme/Blackletter",
+    "/Theme/Blobby",
+    "/Theme/Brush",
+    "/Theme/Distressed",
+    "/Theme/Inline",
+    "/Theme/Medieval",
+    "/Theme/Pixel",
+    "/Theme/Shaded",
+    "/Theme/Stencil",
+    "/Theme/Techno",
+    "/Theme/Tuscan",
+    "/Theme/Wacky",
+    "/Theme/Woodtype",
+]
+
+ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + THEME_TAGS
+
 
 class FontStyleDatasetMaker(DatasetMaker):
     """Dataset maker for font-level style embedding (phrase input)."""
@@ -277,12 +325,26 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
         families = [font.family for font in fonts]
 
+        # Build per-font tag vectors for tag-weighted contrastive positives.
+        # Each vector is (num_style_tags,) with centile values in [0, 1].
+        # Missing tags default to 0.
+        style_vectors: list[torch.Tensor] = []
+        for font in fonts:
+            font_tags = font.tags()
+            vec = torch.tensor(
+                [font_tags.get(tag, 0.0) / 100.0 for tag in ALL_STYLE_TAGS],
+                dtype=torch.float32,
+            )
+            style_vectors.append(vec)
+        tag_vectors = torch.stack(style_vectors)  # (B, num_style_tags)
+
         result: dict = {
             "images": images,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,
             "family": families,
+            "tag_vectors": tag_vectors,
         }
 
         # Attach pre-computed text embeddings keyed by font path.
