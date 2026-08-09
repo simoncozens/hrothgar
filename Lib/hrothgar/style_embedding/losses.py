@@ -16,41 +16,37 @@ from hrothgar.style_embedding.config import FontStyleEmbeddingLossWeights
 
 def multipos_contrastive_loss(
     projections: torch.Tensor,
-    text_embeddings: torch.Tensor,
     family_labels: list[str],
+    *,
+    text_embeddings: Optional[torch.Tensor] = None,
+    tag_vectors: Optional[torch.Tensor] = None,
     temperature: float = 0.07,
     use_family_positives: bool = True,
-    tag_vectors: Optional[torch.Tensor] = None,
     tag_threshold: float = 0.1,
 ) -> torch.Tensor:
-    """Multi-positive contrastive loss with frozen text conditioning.
+    """Multi-positive contrastive loss with optional text / tag conditioning.
 
     Each image anchor (all 2B views) is contrasted against a joint candidate
-    set of all 2B images plus B text embeddings.  Positives for anchor *i* are:
+    set of all 2B images plus (optionally) B text embeddings.  Positives:
 
     * Its other view (same font, different phrase) — hard positive.
-    * The text embedding for its font family — hard positive.
+    * When ``text_embeddings`` is provided: the text embedding for its font
+      family — hard positive.
     * When ``tag_vectors`` is provided: other images weighted by tag cosine
       similarity (soft positive).  When absent and ``use_family_positives``
       is True: binary same-family positives.
 
-    The loss is SupCon-style: the negative log-probability of each positive is
-    averaged over the positive set (weighted when soft), then averaged over
-    all anchors.
+    At least one of ``text_embeddings`` or ``tag_vectors`` should be provided
+    for the multi-positive path to be useful.
 
     Args:
         projections: ``(2B, D)`` L2-normalized — view 1 stacked on view 2.
-        text_embeddings: ``(B, D)`` L2-normalized — one per font.
         family_labels: *2B* family name strings (duplicated for the two views).
-        temperature: Softmax temperature (lower = sharper contrast).
-        use_family_positives: Ignored when ``tag_vectors`` is provided.
-            When True (default) and no tag vectors, same-family images in both
-            views are additional hard positives.
-        tag_vectors: Optional ``(B, num_tags)`` tag value vectors (centiles
-            in [0, 1]).  Cosine similarity between tag vectors provides soft
-            positive weights for cross-font image image pairs.
-        tag_threshold: Minimum cosine similarity to count as a positive
-            (default 0.1).  Below-threshold values are zeroed.
+        text_embeddings: Optional ``(B, D)`` L2-normalized.
+        tag_vectors: Optional ``(B, num_tags)`` tag centiles in [0, 1].
+        temperature: Softmax temperature.
+        use_family_positives: Only used when neither text nor tags are given.
+        tag_threshold: Minimum cosine similarity for tag-based positives.
 
     Returns:
         Scalar loss.
@@ -77,20 +73,26 @@ def multipos_contrastive_loss(
             )
 
     _check(projections, "projections (input)")
-    _check(text_embeddings, "text_embeddings (input)")
+    if text_embeddings is not None:
+        _check(text_embeddings, "text_embeddings (input)")
     if tag_vectors is not None:
         _check(tag_vectors, "tag_vectors (input)")
 
     N = 2 * B          # image anchors
-    M = N + B          # total candidates (images + texts)
+    has_text = text_embeddings is not None
+    M = N + (B if has_text else 0)   # total candidates
     device = projections.device
 
-    # Image-image and image-text similarities.
+    # Image-image similarities.
     sim_img = torch.matmul(projections, projections.T) / temperature   # (2B, 2B)
-    sim_txt = torch.matmul(projections, text_embeddings.T) / temperature  # (2B, B)
     _check(sim_img, "sim_img after matmul")
-    _check(sim_txt, "sim_txt after matmul")
-    sim = torch.cat([sim_img, sim_txt], dim=1)  # (2B, M)
+
+    if has_text:
+        sim_txt = torch.matmul(projections, text_embeddings.T) / temperature
+        _check(sim_txt, "sim_txt after matmul")
+        sim = torch.cat([sim_img, sim_txt], dim=1)
+    else:
+        sim = sim_img
     _check(sim, "sim after concat")
 
     # ---- Positive mask ---------------------------------------------------
@@ -100,9 +102,10 @@ def multipos_contrastive_loss(
     other = (torch.arange(N, device=device) + B) % N
     pos_mask[torch.arange(N), other] = 1.0
 
-    # 2. Text embedding: column 2B + font index (hard positive).
-    font_idx = torch.arange(N, device=device) % B
-    pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
+    # 2. Text embedding (hard positive) — only when available.
+    if has_text:
+        font_idx = torch.arange(N, device=device) % B
+        pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
 
     # 3. Image-image soft positives: tag-weighted when available,
     #    binary same-family otherwise.
@@ -283,16 +286,16 @@ def compute_losses(
     """
     device = projections.device
 
-    # Contrastive loss — use multi-positive text-conditioned variant
-    # when text embeddings are available.
-    if text_embeddings is not None and family_labels is not None:
+    # Contrastive loss — use multi-positive variant when text or tag
+    # conditioning is available, otherwise fall back to plain NT-Xent.
+    if text_embeddings is not None or tag_vectors is not None:
         contr = multipos_contrastive_loss(
             projections,
-            text_embeddings,
-            family_labels,
+            family_labels if family_labels is not None else [],
+            text_embeddings=text_embeddings,
+            tag_vectors=tag_vectors,
             temperature=temperature,
             use_family_positives=weights.use_family_positives,
-            tag_vectors=tag_vectors,
         )
         weight = weights.multipos_contrastive
     else:
