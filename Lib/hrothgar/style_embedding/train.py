@@ -282,6 +282,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Per-tag metric accumulators: {tag_name: [values across batches]}.
         val_tag_metrics: dict[str, list[torch.Tensor]] = {}
 
+        # Retrieval metrics — temperature-independent, so comparable across runs.
+        retrieval_top1: list[torch.Tensor] = []
+        retrieval_recall3: list[torch.Tensor] = []
+        retrieval_recall5: list[torch.Tensor] = []
+
         with torch.no_grad():
             for val_batch in itertools.islice(
                 self.test_loader, self.validation_batches
@@ -342,8 +347,40 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                     if key.startswith("tag_acc_") or key.startswith("tag_mse_"):
                         val_tag_metrics.setdefault(key, []).append(value)
 
+                # Retrieval accuracy: for each view-1 embedding, is its
+                # view-2 counterpart the nearest neighbour?  Uses raw
+                # cosine similarity (no temperature) so it is comparable
+                # across runs with different loss hyper-parameters.
+                B = projection.shape[0] // 2
+                v1 = projection[:B]   # (B, D)
+                v2 = projection[B:]   # (B, D)
+                sim = torch.matmul(v1, v2.T)   # (B, B) cosine similarity
+                # Rank view-2 items by similarity (descending).
+                ranks = sim.argsort(dim=-1, descending=True)  # (B, B)
+                # For query i, correct match is at column i.
+                label_col = torch.arange(B, device=ranks.device).unsqueeze(1)  # (B, 1)
+                correct_rank = (ranks == label_col).nonzero(as_tuple=True)[1]  # (B,)
+                retrieval_top1.append((correct_rank < 1).float().mean())
+                retrieval_recall3.append((correct_rank < 3).float().mean())
+                retrieval_recall5.append((correct_rank < 5).float().mean())
+
         avg_contrastive = torch.mean(torch.stack(val_contrastive))
         self.write_scalar("Validation/contrastive", avg_contrastive)
+
+        # Log retrieval metrics (temperature-independent).
+        if retrieval_top1:
+            self.write_scalar(
+                "Validation/retrieval_top1",
+                torch.mean(torch.stack(retrieval_top1)),
+            )
+            self.write_scalar(
+                "Validation/retrieval_recall3",
+                torch.mean(torch.stack(retrieval_recall3)),
+            )
+            self.write_scalar(
+                "Validation/retrieval_recall5",
+                torch.mean(torch.stack(retrieval_recall5)),
+            )
 
         if val_tag_pred:
             avg_tag = torch.mean(torch.stack(val_tag_pred))
@@ -371,9 +408,12 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 lines.append(f"{n1:<45} {v1:6.3f} | {n2:<45} {v2:6.3f}\n")
             self.writer.add_text("Validation/per_tag_metrics", "".join(lines), self.global_step)
 
-        # Checkpoint on contrastive loss only — tag prediction overfits early
-        # and shouldn't determine which embedding is best.
-        self.checkpoint_if_best(avg_contrastive)
+        # Checkpoint on retrieval accuracy — temperature-independent so
+        # comparable across runs with different hyper-parameters.
+        if retrieval_top1:
+            self.checkpoint_if_best(torch.mean(torch.stack(retrieval_top1)))
+        else:
+            self.checkpoint_if_best(avg_contrastive)
 
         # Visualize tag predictions if tags are active.
         if self.model.config.tag_names:
