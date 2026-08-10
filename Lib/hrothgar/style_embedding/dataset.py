@@ -44,6 +44,11 @@ CONTRASTIVE_PHRASES = [
 # multi-positive contrastive examples.  These capture the major stylistic
 # dimensions along which fonts vary, and are treated as a continuous
 # vector (centile values normalised to [0, 1]).
+#
+# Parent-category dimensions (e.g. "/Sans", "/Script") are also included
+# so that sub-categories under the same parent share signal.  A font
+# tagged 90% /Sans/Superellipse will also have a 90 in the /Sans column,
+# giving it non-zero cosine similarity with /Sans/Geometric fonts.
 STYLE_CATEGORY_TAGS = [
     "/Sans/Geometric",
     "/Sans/Glyphic",
@@ -68,6 +73,11 @@ STYLE_CATEGORY_TAGS = [
     "/Slab/Humanist",
 ]
 
+# Parent dimensions: for each top-level category (e.g. /Sans), aggregate
+# the max centile across all sub-category tags so the flat vector retains
+# hierarchical structure.
+STYLE_PARENT_TAGS = ["/Sans", "/Script", "/Serif", "/Slab"]
+
 THEME_TAGS = [
     "/Theme/Art Deco",
     "/Theme/Art Nouveau",
@@ -86,7 +96,7 @@ THEME_TAGS = [
     "/Theme/Woodtype",
 ]
 
-ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + THEME_TAGS
+ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + STYLE_PARENT_TAGS + THEME_TAGS
 
 
 class FontStyleDatasetMaker(DatasetMaker):
@@ -343,12 +353,23 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         # Build per-font tag vectors for tag-weighted contrastive positives.
         # Each vector is (num_style_tags,) with centile values in [0, 1].
-        # Missing tags default to 0.
+        # Missing tags default to 0.  Parent dimensions (e.g. "/Sans")
+        # aggregate the max centile across their sub-categories.
         style_vectors: list[torch.Tensor] = []
         for font in fonts:
             font_tags = font.tags()
+            values: dict[str, float] = {}
+            for tag in ALL_STYLE_TAGS:
+                values[tag] = font_tags.get(tag, 0.0) / 100.0
+            # Parent dimensions: max of child values.
+            for parent in STYLE_PARENT_TAGS:
+                child_max = 0.0
+                for child in STYLE_CATEGORY_TAGS:
+                    if child.startswith(parent + "/"):
+                        child_max = max(child_max, values.get(child, 0.0))
+                values[parent] = child_max
             vec = torch.tensor(
-                [font_tags.get(tag, 0.0) / 100.0 for tag in ALL_STYLE_TAGS],
+                [values[tag] for tag in ALL_STYLE_TAGS],
                 dtype=torch.float32,
             )
             style_vectors.append(vec)

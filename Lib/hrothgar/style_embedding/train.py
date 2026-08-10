@@ -411,7 +411,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Checkpoint on retrieval accuracy — temperature-independent so
         # comparable across runs with different hyper-parameters.
         if retrieval_top1:
-            self.checkpoint_if_best(torch.mean(torch.stack(retrieval_top1)))
+            self.checkpoint_if_best(-torch.mean(torch.stack(retrieval_top1)))
         else:
             self.checkpoint_if_best(avg_contrastive)
 
