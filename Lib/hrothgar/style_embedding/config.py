@@ -91,3 +91,4 @@ class FontStyleEmbeddingLossWeights:
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
     use_family_positives: bool = True
+    tag_positive_weight: float = 1.0

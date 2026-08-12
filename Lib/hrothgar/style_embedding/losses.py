@@ -23,6 +23,7 @@ def multipos_contrastive_loss(
     temperature: float = 0.07,
     use_family_positives: bool = True,
     tag_threshold: float = 0.1,
+    tag_weight: float = 1.0,
 ) -> torch.Tensor:
     """Multi-positive contrastive loss with optional text / tag conditioning.
 
@@ -124,7 +125,7 @@ def multipos_contrastive_loss(
         img_pos.fill_diagonal_(0.0)
         for i in range(N):
             img_pos[i, other[i]] = 0.0
-        pos_mask[:, :N] += img_pos
+        pos_mask[:, :N] += tag_weight * img_pos
     elif use_family_positives:
         import numpy as np
 
@@ -296,6 +297,7 @@ def compute_losses(
             tag_vectors=tag_vectors,
             temperature=temperature,
             use_family_positives=weights.use_family_positives,
+            tag_weight=weights.tag_positive_weight,
         )
         weight = weights.multipos_contrastive
     else:

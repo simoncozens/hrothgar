@@ -143,6 +143,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # ── Loss ────────────────────────────────────────────────────────
         self.loss_weights = FontStyleEmbeddingLossWeights(
             use_family_positives=config.multipos_use_family_positives,
+            tag_positive_weight=getattr(train_args, "tag_positive_weight", 1.0),
         )
 
         # ── Bookkeeping ─────────────────────────────────────────────────
@@ -572,6 +573,11 @@ def _parse_args() -> argparse.Namespace:
                         "Disabling it allows harder within-category contrasts "
                         "(e.g. Garamond vs Caslon) at the cost of potential "
                         "category imbalance.")
+    p.add_argument("--tag-positive-weight", type=float, default=1.0,
+                   help="Weight of tag-based soft positives in contrastive loss "
+                        "(0.0 = pure visual, 1.0 = full tag signal).  "
+                        "Use small values (e.g. 0.1) for gentle style nudges "
+                        "on top of a converged visual model.")
     p.add_argument("--tag", type=str, default=None,
                    help="Optional human-readable tag for the TensorBoard run")
     p.add_argument("--precision", type=str, default="fp32",
