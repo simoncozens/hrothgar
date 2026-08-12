@@ -2,12 +2,17 @@
 
 This module reuses the shared font split logic from ``hrothgar.dataset`` and
 provides a collation function tailored to the AR generator inputs.
+
+Style is provided as pre-computed font-level embedding vectors from
+``FontStyleEmbedder``.  Embeddings are computed once per font during
+dataset initialisation and cached in memory.
 """
 
 from __future__ import annotations
 
-from typing import Set
 import random
+import math
+from typing import Optional, Sequence, Set
 
 import torch
 from torch.utils.data import BatchSampler, DataLoader
@@ -18,11 +23,17 @@ from hrothgar.ar.style_sampling import (
     _font_has_codepoint,
     _has_non_empty_glyph,
     _is_blank_rendering,
-    _sample_style_codepoints,
 )
-from hrothgar.dataset_constants import LATIN_CORE, LATIN_KERNEL
 from hrothgar.dataset import Dataset, DatasetMaker
+from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont
+from hrothgar.render import render_phrase
+from hrothgar.style_embedding.model import FontStyleEmbedder
+
+
+# Phrase rendered to produce the font-level style embedding.  This is
+# the same input the FontStyleEmbedder was trained on.
+_EMBEDDING_PHRASE = "THE quick brown fox jumps over the lazy dog. 1234567890"
 
 
 class _OversampledTargetDataset(Dataset):
@@ -52,28 +63,28 @@ class _OversampledTargetDataset(Dataset):
 class ARPhase1DatasetMaker(DatasetMaker):
     """Dataset maker for AR phase-1 visual pretraining.
 
-    This class reuses the same train/test split and item ordering logic as the
-    GTok dataset maker, but emits AR-specific batches during collation.
+    Pre-computes a font-level style embedding for every font so that
+    collation only requires a dictionary lookup — no rendering or CNN
+    forward passes happen inside the training loop.
     """
 
     def __init__(
         self,
         repo_url: str,
         batch_size: int,
+        *,
+        font_style_embedder: FontStyleEmbedder,
+        embedder_device: torch.device,
         having: Optional[Set[int]] = None,
         target_codepoints: Optional[Sequence[int]] = None,
         canary_size: Optional[int] = None,
         image_size: int = 128,
-        style_glyph_count: int = 8,
-        common_style_codepoints: Optional[Sequence[int]] = None,
         class_balanced: bool = False,
         split_seed: int = 1234,
         target_codepoint_oversample_factor: int = 8,
         target_only: bool = False,
     ) -> None:
         target_codepoint_set = set(target_codepoints) if target_codepoints else None
-        if common_style_codepoints and style_glyph_count < len(common_style_codepoints):
-            style_glyph_count = len(common_style_codepoints)
         super().__init__(
             repo_url=repo_url,
             batch_size=batch_size,
@@ -83,21 +94,62 @@ class ARPhase1DatasetMaker(DatasetMaker):
             image_size=image_size,
             split_seed=split_seed,
         )
-        if style_glyph_count <= 0:
-            raise ValueError(
-                f"style_glyph_count must be positive, got {style_glyph_count}"
-            )
         if target_codepoint_oversample_factor <= 0:
             raise ValueError(
                 "target_codepoint_oversample_factor must be positive, got "
                 f"{target_codepoint_oversample_factor}"
             )
-        self.style_glyph_count = style_glyph_count
-        self.common_style_codepoints = common_style_codepoints
         self.class_balanced = class_balanced
         self.extra_target_codepoints = target_codepoint_set
         self.target_codepoint_oversample_factor = target_codepoint_oversample_factor
         self.target_only = target_only
+
+        # Pre-compute font-level style embeddings for all fonts.
+        self._font_embedding: dict[str, torch.Tensor] = {}
+        self._precompute_font_embeddings(font_style_embedder, embedder_device)
+
+    def _precompute_font_embeddings(
+        self, embedder: FontStyleEmbedder, device: torch.device
+    ) -> None:
+        """Render a phrase for each font and encode it into a style vector."""
+        all_fonts = self.train_fonts + self.test_fonts
+        if not all_fonts:
+            return
+
+        embedder.eval()
+        embedder.to(device)
+        for font in all_fonts:
+            try:
+                image = render_phrase(
+                    font.path,
+                    _EMBEDDING_PHRASE,
+                    size=embedder.config.phrase_font_size,
+                    width=embedder.config.phrase_width,
+                    height=embedder.config.phrase_height,
+                )
+            except Exception as exc:
+                print(
+                    f"WARNING: Failed to render embedding phrase for "
+                    f"{font.family!r} ({font.path}): {exc}"
+                )
+                image = None
+
+            if image is not None:
+                # render_phrase returns RGBA; FontStyleEmbedder expects RGB.
+                image = image[:, :, :3]
+                tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
+                tensor = tensor.to(device, dtype=torch.float32) / 255.0
+                with torch.no_grad():
+                    embedding = embedder.encode(tensor).squeeze(0).cpu()
+                self._font_embedding[font.path] = embedding
+
+        # If any font couldn't be rendered, use the mean of available
+        # embeddings as a fallback so training doesn't crash.
+        if self._font_embedding:
+            fallback = torch.stack(list(self._font_embedding.values())).mean(dim=0)
+            for font in all_fonts:
+                if font.path not in self._font_embedding:
+                    self._font_embedding[font.path] = fallback
 
     def filter_fonts(self):
         self.googlefonts.fonts = [
@@ -116,8 +168,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         if self.target_only:
             return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().train_codepoint_filter(font_codepoints)
-        # Restrict to LATIN_CORE — _unicode_to_latincore can only handle these,
-        # and fonts often include Cyrillic, Greek, symbols, etc. outside this set.
         chars = set(chars) & set(LATIN_CORE)
         if self.extra_target_codepoints is None:
             return chars
@@ -127,7 +177,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         if self.target_only:
             return set(font_codepoints) & (self.extra_target_codepoints or set())
         chars = super().test_codepoint_filter(font_codepoints)
-        # Restrict to LATIN_CORE — _unicode_to_latincore can only handle these.
         chars = set(chars) & set(LATIN_CORE)
         if self.extra_target_codepoints is None:
             return chars
@@ -166,25 +215,22 @@ class ARPhase1DatasetMaker(DatasetMaker):
         Returns:
         - ``target_rendering``: target font glyph image (ground truth)
         - ``content_rendering``: same codepoint rendered by the reference font
-        - ``style_renderings``: style support set from the target font
+        - ``font_style_embedding``: pre-computed font-level style vector
         Plus metadata useful for debugging and future adaptation wiring.
         """
-
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
         target_renderings = []
-
         content_renderings = []
-        style_renderings = []
-        style_chars = []
         descriptions = []
         all_metrics: list[torch.Tensor] = []
         advance_widths: list[float] = []
+        font_embeddings: list[torch.Tensor] = []
+        font_embedding_fallback = torch.zeros(1)  # will be overwritten
 
         for item in batch:
             font: GoogleFont = item["font"]
             char = item["char"]
             reference_font = font.reference_font() or font
-
             upem = float(font.hb_face.upem)
 
             axis_pos = font.random_axis_position()
@@ -194,8 +240,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
             target_rendering = render_with_font(char)
 
-            # If reference font lacks a usable glyph for this character, fall back
-            # to the target font so content conditioning is never blank.
+            # Content rendering fallback.
             if not _font_has_codepoint(
                 reference_font, char
             ) or not _has_non_empty_glyph(reference_font, char):
@@ -206,29 +251,10 @@ class ARPhase1DatasetMaker(DatasetMaker):
                 content_render = render_with_font(char)
             content_renderings.append(torch.tensor(content_render))
 
-            sampled_style_chars = _sample_style_codepoints(
-                font=font,
-                target_char=char,
-                style_glyph_count=self.style_glyph_count,
-                common_style_codepoints=self.common_style_codepoints,
-            )
-            rendered_styles = []
-            sanitized_style_chars = []
-
-            for cp in sampled_style_chars:
-                style_render = render_with_font(cp)
-                if _is_blank_rendering(style_render):
-                    cp = char
-                    style_render = render_with_font(cp)
-                sanitized_style_chars.append(cp)
-                rendered_styles.append(torch.tensor(style_render))
-
             target_renderings.append(torch.tensor(target_rendering))
-            style_chars.append(sanitized_style_chars)
-            style_renderings.append(torch.stack(rendered_styles))
             descriptions.append(font.description_with_tags_and_display())
 
-            # Font-level vertical metrics + glyph-level advance width.
+            # Font-level metrics + advance width.
             vm = font.vertical_metrics()
             gid_for_advance = hb.Font(font.hb_face).get_nominal_glyph(char)
             aw = font.advance_width(gid_for_advance) / upem if upem > 0 else 0.0
@@ -242,12 +268,14 @@ class ARPhase1DatasetMaker(DatasetMaker):
                 aw,
             ]))
 
+            # Pre-computed font style embedding.
+            font_embeddings.append(self._font_embedding[font.path])
+
         return {
             "char": chars,
             "target_rendering": torch.stack(target_renderings),
             "content_rendering": torch.stack(content_renderings),
-            "style_renderings": torch.stack(style_renderings),
-            "style_chars": torch.tensor(style_chars, dtype=torch.long),
+            "font_style_embedding": torch.stack(font_embeddings),
             "description": descriptions,
             "metrics": torch.stack(all_metrics),
             "advance_width": torch.tensor(advance_widths),

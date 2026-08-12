@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Optional
+
 
 @dataclass
 class ARModelConfig:
-    """Configuration for the MaskGIT glyph generator."""
+    """Configuration for the MaskGIT glyph generator.
+
+    Style conditioning is provided as a pre-computed font-level embedding
+    vector produced by ``FontStyleEmbedder``.  The embedding replaces the
+    per-glyph StyleEncoder + FeatureFusionModule path entirely.
+    """
 
     image_size: int = 128
     encoder_feature_dim: int = 256
-
-    style_encoder_base_channels: int = 32
-
-    aggregator_num_layers: int = 3
-    aggregator_num_heads: int = 8
-
-    # Number of global style tokens to pool the CNN style feature map into
-    # via learned-query cross-attention.  0 or negative = per-position
-    # cross-attention (legacy).  Default 16 gives every content position
-    # the same compact, globally-consistent style summary.
-    style_pool_tokens: int = 16
 
     decoder_hidden_dim: int = 832
     decoder_num_layers: int = 16
@@ -27,28 +22,15 @@ class ARModelConfig:
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
-    style_dropout: float = 0.2
-
-    # Global style vector: pool frozen G-Tok ViT features into a single
-    # (B, encoder_feature_dim) vector and broadcast-add it to every
-    # spatial position of the fused conditioning map.  This gives every
-    # generation token an identical, globally-consistent style signal —
-    # helpful for scripts (e.g. Latin) whose glyphs carry sparse,
-    # non-redundant style cues.
-    use_global_style: bool = True
-    # Dropout probability applied to the global style vector (per-batch).
-    global_style_dropout: float = 0.2
-
-    content_only_prob: float = 0.0
-    style_only_prob: float = 0.0
+    # Dropout applied to the font style embedding (per-batch).
+    font_style_dropout: float = 0.2
 
     freeze_gtok: bool = True
 
     maskgit_num_inference_steps: int = 8
     maskgit_temperature: float = 1.0
 
-    # Metric conditioning (concern 3: baseline/x-height/width alignment).
-    # If False, the metric embedder and width head are not created.
+    # Metric conditioning (baseline / x-height / width alignment).
     use_metrics: bool = True
     metric_embedding_hidden_dim: int = 128
     width_head_hidden_dim: int = 128
@@ -62,11 +44,6 @@ class ARModelConfig:
     def __post_init__(self) -> None:
         if self.image_size <= 0:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
-        if self.encoder_feature_dim % self.aggregator_num_heads != 0:
-            raise ValueError(
-                "encoder_feature_dim must be divisible by aggregator_num_heads "
-                f"(got {self.encoder_feature_dim} and {self.aggregator_num_heads})"
-            )
         if self.decoder_hidden_dim % self.decoder_num_heads != 0:
             raise ValueError(
                 "decoder_hidden_dim must be divisible by decoder_num_heads "

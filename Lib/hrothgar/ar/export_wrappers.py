@@ -122,6 +122,12 @@ class _EncoderExport(nn.Module):
 
     def __init__(self, model: nn.Module, K: int) -> None:
         super().__init__()
+        if not hasattr(model, "style_encoder") or model.style_encoder is None:
+            raise RuntimeError(
+                "CoreML encoder export is not supported for the font-level "
+                "style path.  Use a checkpoint trained with the legacy "
+                "glyph-level StyleEncoder."
+            )
         # Flatten content encoder to avoid for-loop tracing.
         ce = model.content_encoder
         self.ce_conv_in = ce.conv_in

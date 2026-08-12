@@ -161,8 +161,15 @@ def main() -> None:
 
     # ---- Stage 1: Encoder ----
     print("\n=== Stage 1: Encoder ===")
+    if not hasattr(pt_model, "style_encoder") or pt_model.style_encoder is None:
+        raise RuntimeError(
+            "CoreML debug comparison requires the legacy glyph-level "
+            "StyleEncoder.  The current model uses font-level embeddings."
+        )
     with torch.no_grad():
-        pt_cm = pt_model.build_conditioning_map(content_pt, style_pt, latincore_idx)
+        pt_cm = pt_model.build_conditioning_map(
+            content_pt, latincore_idx, style_reference_images=style_pt
+        )
     pt_cm_np = pt_cm.cpu().numpy()
 
     cm_cm = cm_encoder.predict({
