@@ -106,8 +106,8 @@ class GlyphWidthHead(nn.Module):
         )
 
     def forward(self, pooled_embeddings: torch.Tensor) -> torch.Tensor:
-        """Predict advance width ``(B, 1)`` from ``(B, input_dim)``."""
-        return self.net(pooled_embeddings)
+        """Predict advance width ``(B,)`` from ``(B, input_dim)``."""
+        return self.net(pooled_embeddings).squeeze(-1)
 
 
 # ---------------------------------------------------------------------------

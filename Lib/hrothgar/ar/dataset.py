@@ -15,6 +15,7 @@ import math
 from typing import Optional, Sequence, Set
 
 import torch
+import tqdm
 from torch.utils.data import BatchSampler, DataLoader
 
 import uharfbuzz as hb
@@ -118,7 +119,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
         embedder.eval()
         embedder.to(device)
-        for font in all_fonts:
+        for font in tqdm.tqdm(all_fonts):
             try:
                 image = render_phrase(
                     font.path,
