@@ -48,6 +48,12 @@ class FontStyleEmbedderConfig:
     layout_codepoint_dim: int = 64
     layout_samples: int = 4
 
+    # Shape head.  Reconstructs each hidden glyph's bbox-normalized square image
+    # from the summary vector + glyph-slot identity.
+    use_shape: bool = True
+    shape_codepoint_dim: int = 64
+    shape_samples: int = 4
+
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
 
@@ -114,5 +120,6 @@ class FontStyleEmbeddingLossWeights:
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
     layout: float = 1.0
+    shape: float = 1.0
     use_family_positives: bool = True
     tag_positive_weight: float = 1.0

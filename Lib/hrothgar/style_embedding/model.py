@@ -284,6 +284,15 @@ class FontStyleEmbedder(SaveLoadModel):
                 codepoint_dim=config.layout_codepoint_dim,
             )
 
+        self.shape_head: Optional[ReconstructionHead] = None
+        if config.use_shape:
+            self.shape_head = ReconstructionHead(
+                style_dim=config.encoder_feature_dim,
+                num_slots=len(config.input_codepoints),
+                codepoint_dim=config.shape_codepoint_dim,
+                glyph_size=config.glyph_size,
+            )
+
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
 
         # Projection head for contrastive loss.
@@ -380,6 +389,25 @@ class FontStyleEmbedder(SaveLoadModel):
             "layout_head is disabled; set use_layout=True"
         )
         return self.layout_head(style, slot_indices)
+
+    def reconstruct_shape(
+        self,
+        style: torch.Tensor,
+        slot_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reconstruct bbox-normalized square glyphs from style + slot indices.
+
+        Args:
+            style: ``(M, encoder_feature_dim)`` style summaries.
+            slot_indices: ``(M,)`` indices into ``config.input_codepoints``.
+
+        Returns:
+            ``(M, 1, glyph_size, glyph_size)`` greyscale glyphs in [0, 1].
+        """
+        assert self.shape_head is not None, (
+            "shape_head is disabled; set use_shape=True"
+        )
+        return self.shape_head(style, slot_indices)
 
     def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
         """Project frozen text embeddings into the contrastive projection space."""

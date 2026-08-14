@@ -250,11 +250,13 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         glyphs = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
         glyph_bboxes = torch.zeros(b, g, 4, dtype=torch.float32)
+        shape_targets = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
         for i, font in enumerate(fonts):
             for j, cp in enumerate(self._input_codepoints):
                 glyph = _render_glyph(font, cp, size)
                 glyphs[i, j, 0] = glyph
                 glyph_bboxes[i, j] = _ink_bbox(glyph, size)
+                shape_targets[i, j, 0] = _normalize_shape(glyph, size)
 
         # Two independent random visibility masks (the two contrastive views).
         mask_a = torch.rand(b, g) > self._mask_probability
@@ -323,6 +325,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             "glyph_mask": glyph_mask,
             "target_glyphs": glyphs,
             "glyph_bboxes": glyph_bboxes,
+            "shape_targets": shape_targets,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,
@@ -365,6 +368,29 @@ def _ink_bbox(glyph: torch.Tensor, size: int) -> torch.Tensor:
     y0 = ys.min().float()
     y1 = ys.max().float()
     return torch.tensor([x0, y0, x1, y1], dtype=torch.float32) / size
+
+
+def _normalize_shape(glyph: torch.Tensor, size: int) -> torch.Tensor:
+    """Crop a glyph to its ink bbox and stretch it to a ``(size, size)`` square.
+
+    This removes absolute placement/scale while keeping the within-bbox shape.
+    Aspect ratio is intentionally *not* preserved — the layout head carries the
+    width/height that this normalization discards.
+    """
+    ink = glyph < 0.5
+    if not ink.any():
+        return torch.ones(size, size)
+    ys, xs = ink.nonzero(as_tuple=True)
+    x0 = int(xs.min().item())
+    x1 = int(xs.max().item())
+    y0 = int(ys.min().item())
+    y1 = int(ys.max().item())
+    crop = glyph[y0 : y1 + 1, x0 : x1 + 1]
+    if crop.numel() == 0:
+        return torch.ones(size, size)
+    crop = crop[None, None, :, :]  # (1, 1, h, w)
+    out = F.interpolate(crop, size=(size, size), mode="bilinear", align_corners=False)
+    return out[0, 0]  # (size, size)
 
 
 class _ClassBalancedBatchSampler(BatchSampler):
