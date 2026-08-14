@@ -26,6 +26,7 @@ dependencies = [
     "einops>=0.8.0",
     "glyphloss",
     "skia-python",
+    "matplotlib",
 ]
 
 [project.optional-dependencies]
