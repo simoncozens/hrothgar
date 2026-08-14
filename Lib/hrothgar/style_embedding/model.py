@@ -1,8 +1,9 @@
-"""Font-level style embedder from phrase renderings.
+"""Font-level style embedder from a fixed set of glyph renderings.
 
-Renders a short phrase in a font, encodes the image with a CNN,
-global-average-pools to a single embedding, and projects through
-contrastive + tag-prediction + category heads.
+Encodes each glyph with a shared CNN, attention-pools each glyph's spatial
+features into a small number of tokens, then aggregates the per-glyph tokens
+into a global style token set plus a 256-d summary vector.  The summary vector
+feeds contrastive, tag-prediction, and category heads.
 """
 
 from __future__ import annotations
@@ -13,11 +14,154 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from hrothgar.upstream.style_encoder import StyleEncoder
 from hrothgar.style_embedding.config import FontStyleEmbedderConfig
 from hrothgar.utils import SaveLoadModel
 
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
+
+
+class GlyphEncoder(nn.Module):
+    """Small shared CNN: (1, H, W) -> (out_dim, H/ds, W/ds)."""
+
+    def __init__(
+        self,
+        base_channels: int = 32,
+        out_dim: int = 256,
+        downsample: int = 4,
+    ) -> None:
+        super().__init__()
+        if downsample not in (2, 4, 8):
+            raise ValueError(f"downsample must be 2, 4, or 8, got {downsample}")
+
+        layers: list[nn.Module] = []
+        c = 1
+        # Initial block (no downsampling).
+        layers.extend(self._block(c, base_channels, stride=1))
+        c = base_channels
+
+        # Strided blocks until the requested spatial reduction is reached.
+        while downsample >= 2:
+            layers.extend(self._block(c, c * 2, stride=2))
+            c *= 2
+            downsample //= 2
+
+        # Final projection to the target channel count.
+        layers.append(nn.Conv2d(c, out_dim, 3, padding=1))
+        self.net = nn.Sequential(*layers)
+
+    @staticmethod
+    def _block(in_c: int, out_c: int, stride: int) -> list[nn.Module]:
+        groups = min(8, out_c)
+        return [
+            nn.Conv2d(in_c, out_c, 3, stride=stride, padding=1),
+            nn.GroupNorm(groups, out_c),
+            nn.SiLU(),
+        ]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class AttentionPool(nn.Module):
+    """Pool a spatial feature map into ``num_queries`` tokens via learned queries."""
+
+    def __init__(self, dim: int, num_queries: int) -> None:
+        super().__init__()
+        self.queries = nn.Parameter(torch.randn(num_queries, dim) * (dim ** -0.5))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (N, C, h, w) -> (N, Q, C)
+        n, c, h, w = x.shape
+        k = x.flatten(2).transpose(1, 2)  # (N, h*w, C)
+        q = self.queries.unsqueeze(0).expand(n, -1, -1)  # (N, Q, C)
+        attn = torch.bmm(q, k.transpose(1, 2)) * (c ** -0.5)  # (N, Q, h*w)
+        attn = F.softmax(attn, dim=-1)
+        return torch.bmm(attn, k)  # (N, Q, C)
+
+
+class PerceiverBlock(nn.Module):
+    """Cross-attention from learned latents to a token sequence (1 block + FFN)."""
+
+    def __init__(self, dim: int, num_latents: int, num_heads: int = 8) -> None:
+        super().__init__()
+        self.latents = nn.Parameter(torch.randn(num_latents, dim) * (dim ** -0.5))
+        self.cross_attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.GELU(),
+            nn.Linear(dim * 4, dim),
+        )
+        self.norm2 = nn.LayerNorm(dim)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        key_padding_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        # x: (B, S, C) -> (B, K, C)
+        b = x.shape[0]
+        lat = self.latents.unsqueeze(0).expand(b, -1, -1)  # (B, K, C)
+        h, _ = self.cross_attn(
+            lat, x, x,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        lat = self.norm1(lat + h)
+        lat = self.norm2(lat + self.ffn(lat))
+        return lat
+
+
+class ReconstructionHead(nn.Module):
+    """Decode a glyph from a style summary + glyph-slot identity.
+
+    Input is a single style vector (``style_dim``) concatenated with a learned
+    embedding for the glyph slot.  A small transposed-conv decoder maps that
+    to a ``(1, glyph_size, glyph_size)`` greyscale glyph in [0, 1].
+    """
+
+    def __init__(
+        self,
+        style_dim: int,
+        num_slots: int,
+        codepoint_dim: int = 64,
+        glyph_size: int = 64,
+        hidden: int = 256,
+    ) -> None:
+        super().__init__()
+        self.glyph_size = glyph_size
+        self.hidden = hidden
+        self.start = glyph_size // 16
+        self.codepoint_embedding = nn.Embedding(num_slots, codepoint_dim)
+
+        in_dim = style_dim + codepoint_dim
+        self.linear = nn.Linear(in_dim, hidden * self.start * self.start)
+
+        layers: list[nn.Module] = []
+        c = hidden
+        cur = self.start
+        while cur < glyph_size:
+            c_out = max(c // 2, 32)
+            layers.append(nn.ConvTranspose2d(c, c_out, 4, 2, 1))
+            layers.append(nn.GroupNorm(min(8, c_out), c_out))
+            layers.append(nn.SiLU())
+            c = c_out
+            cur *= 2
+        layers.append(nn.Conv2d(c, 1, 3, padding=1))
+        layers.append(nn.Sigmoid())
+        self.decoder = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        style: torch.Tensor,
+        slot_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        # style: (M, style_dim), slot_indices: (M,) long in [0, num_slots)
+        cp = self.codepoint_embedding(slot_indices)  # (M, codepoint_dim)
+        x = torch.cat([style, cp], dim=-1)  # (M, in_dim)
+        x = self.linear(x)  # (M, hidden * start * start)
+        x = x.reshape(-1, self.hidden, self.start, self.start)
+        return self.decoder(x)  # (M, 1, glyph_size, glyph_size)
 
 
 class TagPredictionHead(nn.Module):
@@ -73,30 +217,36 @@ class CategoryPredictionHead(nn.Module):
 
 
 class FontStyleEmbedder(SaveLoadModel):
-    """Font-level style embedder from phrase renderings.
-
-    Encodes a single phrase rendering into a font embedding suitable for
-    contrastive retrieval, tag prediction, and generator conditioning.
-    """
+    """Font-level style embedder from a fixed set of glyph renderings."""
 
     def __init__(self, config: FontStyleEmbedderConfig):
         super().__init__()
         self.config = config
 
-        # CNN encoder operating on the square phrase image.
-        # 8× downsampling: 512 → 64×64 feature map → GAP → 1D vector.
-        downsample_ratio = 8
-        self.encoder = StyleEncoder(
-            C_in=3,
-            C=config.encoder_base_channels,
-            C_out=config.encoder_feature_dim,
-            norm="in",
-            activ="relu",
-            pad_type="reflect",
-            sigmoid=False,
-            scale_var=True,
-            downsample_ratio=downsample_ratio,
+        self.encoder = GlyphEncoder(
+            base_channels=config.encoder_base_channels,
+            out_dim=config.encoder_feature_dim,
+            downsample=config.encoder_downsample,
         )
+        self.glyph_pool = AttentionPool(
+            config.encoder_feature_dim,
+            config.per_glyph_tokens,
+        )
+        self.aggregator = PerceiverBlock(
+            config.encoder_feature_dim,
+            config.style_latents,
+            config.aggregation_heads,
+        )
+
+        self.reconstruction_head: Optional[ReconstructionHead] = None
+        if config.use_reconstruction:
+            self.reconstruction_head = ReconstructionHead(
+                style_dim=config.encoder_feature_dim,
+                num_slots=len(config.input_codepoints),
+                codepoint_dim=config.reconstruction_codepoint_dim,
+                glyph_size=config.glyph_size,
+            )
+
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
 
         # Projection head for contrastive loss.
@@ -136,35 +286,66 @@ class FontStyleEmbedder(SaveLoadModel):
                 config.text_embedding_dim, config.projection_dim
             )
 
-    def encode(self, images: torch.Tensor) -> torch.Tensor:
-        """Encode phrase images into font embeddings.
+    def encode(
+        self,
+        images: torch.Tensor,
+        glyph_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Encode glyph sets into font embeddings.
 
         Args:
-            images: ``(B, 3, H, W)`` — square phrase renderings.
+            images: ``(B, G, 1, H, W)`` greyscale glyph renderings in [0, 1].
+            glyph_mask: Optional ``(B, G)`` boolean, ``True`` = glyph visible.
+                Masked (False) glyphs are ignored by the aggregator.
 
         Returns:
             ``(B, encoder_feature_dim)`` font embedding.
         """
-        B, C, H, W = images.shape
-        assert C == 3, f"Expected RGB images, got {C} channels"
+        b, g, c, h, w = images.shape
+        assert c == 1, f"Expected single-channel glyphs, got {c} channels"
 
-        # Normalize to [-1, 1] (matches StyleEncoder convention).
-        x = (images.float() - 0.5) / 0.5
+        flat = images.flatten(0, 1)  # (B*G, 1, H, W)
+        features = self.encoder(flat)  # (B*G, F, h', w')
+        tokens = self.glyph_pool(features)  # (B*G, T, F)
+        tokens = tokens.reshape(
+            b, g * self.config.per_glyph_tokens, self.config.encoder_feature_dim
+        )
 
-        features = self.encoder(x)            # (B, encoder_feature_dim, H', W')
-        features = self.enc_dropout(features)
-        embedding = features.mean(dim=[-2, -1])  # (B, encoder_feature_dim)
-        return embedding
+        key_padding_mask = None
+        if glyph_mask is not None:
+            # nn.MultiheadAttention key_padding_mask: True = ignore this token.
+            pad = ~glyph_mask  # (B, G)
+            key_padding_mask = (
+                pad.unsqueeze(2)
+                .expand(b, g, self.config.per_glyph_tokens)
+                .reshape(b, g * self.config.per_glyph_tokens)
+            )
 
-    def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
-        """Project frozen text embeddings into the contrastive projection space.
+        latents = self.aggregator(tokens, key_padding_mask=key_padding_mask)
+        summary = latents.mean(dim=1)  # (B, F)
+        return self.enc_dropout(summary)
+
+    def reconstruct(
+        self,
+        style: torch.Tensor,
+        slot_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reconstruct glyphs from style summaries + glyph-slot indices.
 
         Args:
-            text_embeddings: ``(B, text_embedding_dim)`` — raw frozen embeddings.
+            style: ``(M, encoder_feature_dim)`` style summaries.
+            slot_indices: ``(M,)`` indices into ``config.input_codepoints``.
 
         Returns:
-            ``(B, projection_dim)`` L2-normalized projections.
+            ``(M, 1, glyph_size, glyph_size)`` greyscale glyphs in [0, 1].
         """
+        assert self.reconstruction_head is not None, (
+            "reconstruction_head is disabled; set use_reconstruction=True"
+        )
+        return self.reconstruction_head(style, slot_indices)
+
+    def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
+        """Project frozen text embeddings into the contrastive projection space."""
         assert self.text_projection is not None, (
             "text_projection not initialised; set text_encoder_name in config"
         )
@@ -173,11 +354,12 @@ class FontStyleEmbedder(SaveLoadModel):
         projected = self.text_projection(text_embeddings)
         if torch.isnan(projected).any():
             raise RuntimeError("NaN in text_projection output")
-        # Guard against zero vectors (fonts with no description).
         return F.normalize(projected, p=2, dim=-1, eps=1e-8)
 
     def forward(
-        self, images: torch.Tensor
+        self,
+        images: torch.Tensor,
+        glyph_mask: Optional[torch.Tensor] = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -187,12 +369,13 @@ class FontStyleEmbedder(SaveLoadModel):
         """Full forward pass.
 
         Args:
-            images: ``(B, 3, H, W)`` phrase renderings (two views stacked).
+            images: ``(B, G, 1, H, W)`` greyscale glyph renderings.
+            glyph_mask: Optional ``(B, G)`` boolean visibility mask.
 
         Returns:
             ``(embedding, projection, tags, category_logits)``.
         """
-        embedding = self.encode(images)
+        embedding = self.encode(images, glyph_mask=glyph_mask)
         projection = F.normalize(self.projection(embedding), p=2, dim=-1)
 
         tags: Optional[dict[str, torch.Tensor]] = None

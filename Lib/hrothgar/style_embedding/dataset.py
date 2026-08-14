@@ -1,54 +1,32 @@
-"""Dataset and collation for font style embedding training (phrase input).
+"""Dataset and collation for font style embedding training (glyph-set input).
 
-Each batch item is one font.  The collate function renders two different phrases
-for each font to create contrastive views.  Variable fonts additionally get
-different axis positions per view.
+Each batch item is one font.  The collate renders the fixed glyph set for each
+font and produces two masked views (random visible-glyph subsets) so the
+contrastive objective learns invariance to *which* glyphs are shown.
 """
 
 from __future__ import annotations
 
-import random
 import math
+import random
 from pathlib import Path
 from typing import Optional, Sequence
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import BatchSampler, DataLoader
+from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import DatasetMaker, Dataset
-from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
-from hrothgar.render import render_phrase
+from hrothgar.dataset import DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
+from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
+from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
 
-
-# Phrases used for contrastive views.  Two different phrases per font
-# teach the model that style is invariant to the rendered text content.
-CONTRASTIVE_PHRASES = [
-    "abcdefghijklmnopqrstuvwxyz",
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-    "Pack my box with five dozen liquor jugs.",
-    "The quick brown fox jumps over the lazy dog.",
-    "Sphinx of black quartz, judge my vow.",
-    "How vexingly quick daft zebras jump!",
-    "The five boxing wizards jump quickly.",
-    "PACK MY BOX WITH FIVE DOZEN LIQUOR JUGS.",
-    "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.",
-    "SPHINX OF BLACK QUARTZ, JUDGE MY VOW.",
-    "HOW VEXINGLY QUICK DAFT ZEBRAS JUMP!",
-    "THE FIVE BOXING WIZARDS JUMP QUICKLY.",
-]
 
 # Canonical style-category and theme tags used for tag-weighted
 # multi-positive contrastive examples.  These capture the major stylistic
 # dimensions along which fonts vary, and are treated as a continuous
 # vector (centile values normalised to [0, 1]).
-#
-# Parent-category dimensions (e.g. "/Sans", "/Script") are also included
-# so that sub-categories under the same parent share signal.  A font
-# tagged 90% /Sans/Superellipse will also have a 90 in the /Sans column,
-# giving it non-zero cosine similarity with /Sans/Geometric fonts.
 STYLE_CATEGORY_TAGS = [
     "/Sans/Geometric",
     "/Sans/Glyphic",
@@ -73,9 +51,6 @@ STYLE_CATEGORY_TAGS = [
     "/Slab/Humanist",
 ]
 
-# Parent dimensions: for each top-level category (e.g. /Sans), aggregate
-# the max centile across all sub-category tags so the flat vector retains
-# hierarchical structure.
 STYLE_PARENT_TAGS = ["/Sans", "/Script", "/Serif", "/Slab"]
 
 THEME_TAGS = [
@@ -99,17 +74,30 @@ THEME_TAGS = [
 ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + STYLE_PARENT_TAGS + THEME_TAGS
 
 
+class _FontDataset(TorchDataset):
+    """Yields one font per item (no per-glyph expansion)."""
+
+    def __init__(self, fonts: Sequence[GoogleFont]):
+        self.fonts = list(fonts)
+
+    def __len__(self) -> int:
+        return len(self.fonts)
+
+    def __getitem__(self, idx: int) -> dict:
+        return {"font": self.fonts[idx]}
+
+
 class FontStyleDatasetMaker(DatasetMaker):
-    """Dataset maker for font-level style embedding (phrase input)."""
+    """Dataset maker for font-level style embedding (glyph-set input)."""
 
     def __init__(
         self,
         repo_url: str | Path,
         batch_size: int,
         *,
-        phrase_width: int = 768,
-        phrase_height: int = 128,
-        phrase_font_size: int = 72,
+        glyph_size: int = 64,
+        input_codepoints: Optional[Sequence[int]] = None,
+        mask_probability: float = 0.5,
         split_seed: int = 1234,
         canary_size: Optional[int] = None,
         tag_names: Optional[list[str]] = None,
@@ -118,39 +106,31 @@ class FontStyleDatasetMaker(DatasetMaker):
         text_encoder_name: Optional[str] = None,
         text_embedding_dim: int = 384,
     ):
-        # Set text-encoder fields *before* super().__init__() so they exist
-        # in case filter_fonts() needs them (though pre-computation is deferred
-        # to after init is complete).
         self._text_encoder_name = text_encoder_name
         self._text_embedding_dim = text_embedding_dim
         self._text_embeddings: dict[str, torch.Tensor] = {}
+        self._input_codepoints = list(input_codepoints) if input_codepoints is not None else list(DEFAULT_INPUT_CODEPOINTS)
+        self._glyph_size = glyph_size
+        self._mask_probability = mask_probability
 
         super().__init__(
             repo_url=str(repo_url),
             batch_size=batch_size,
-            image_size=phrase_width,  # base class stores this; we use our own params
+            image_size=glyph_size,
             split_seed=split_seed,
             canary_size=canary_size,
             character_set=list(LATIN_CORE),
         )
         self._tag_names = tag_names or []
         self._tag_num_classes = tag_num_classes
-        self._phrase_width = phrase_width
-        self._phrase_height = phrase_height
-        self._phrase_font_size = phrase_font_size
         self._class_balanced = class_balanced
 
-        # Pre-compute text embeddings now that the base class has finished
-        # loading, filtering, and splitting fonts.
         if self._text_encoder_name:
             self._precompute_text_embeddings()
 
     def filter_fonts(self) -> None:
-        """Remove fonts that don't have the characters needed for phrases."""
-        needed = set()
-        for phrase in CONTRASTIVE_PHRASES:
-            needed.update(ord(c) for c in phrase if not c.isspace())
-
+        """Remove fonts that don't have every glyph in the input set."""
+        needed = set(self._input_codepoints)
         self.googlefonts.fonts = [
             font
             for font in self.googlefonts.fonts
@@ -158,16 +138,9 @@ class FontStyleDatasetMaker(DatasetMaker):
         ]
 
     def _precompute_text_embeddings(self) -> None:
-        """Encode ``description_with_tags()`` for every font family.
-
-        Descriptions are shared across weights of the same static family, so
-        we encode once per *family* and map each font file path to its
-        family's embedding.  Results are cached to disk for reuse.
-        """
+        """Encode ``description_with_tags()`` for every font family."""
         assert self._text_encoder_name is not None
 
-        # Include model name in cache key so switching encoders
-        # invalidates the cache.
         safe_name = self._text_encoder_name.replace("/", "_").replace("-", "_")
         repo = self.googlefonts.repo_path
         cache_path = repo / f"text_embeddings_{safe_name}.pt"
@@ -175,7 +148,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             print(f"Loading cached text embeddings from {cache_path}")
             loaded = torch.load(cache_path, map_location="cpu", weights_only=True)
             if isinstance(loaded, dict):
-                # Validate: every value must be a non-NaN, non-zero tensor.
                 if loaded and all(
                     isinstance(v, torch.Tensor)
                     and not v.isnan().any()
@@ -194,7 +166,6 @@ class FontStyleDatasetMaker(DatasetMaker):
         tokenizer = AutoTokenizer.from_pretrained(self._text_encoder_name)
         model = AutoModel.from_pretrained(self._text_encoder_name).eval()
 
-        # Collect unique descriptions per family.
         family_descs: dict[str, str] = {}
         for font in self.googlefonts.fonts:
             if font.family not in family_descs:
@@ -203,9 +174,6 @@ class FontStyleDatasetMaker(DatasetMaker):
         family_embs: dict[str, torch.Tensor] = {}
         for family, desc in family_descs.items():
             if not desc.strip():
-                # Store a random unit vector so F.normalize is safe and
-                # this family gets a weak, uninformative signal rather
-                # than a zero vector that would produce NaN.
                 v = torch.randn(self._text_embedding_dim)
                 family_embs[family] = F.normalize(v, p=2, dim=-1)
                 continue
@@ -216,14 +184,12 @@ class FontStyleDatasetMaker(DatasetMaker):
                     padding=True,
                 )
                 out = model(**tok)
-                # Mean pooling over tokens, excluding padding.
-                mask = tok["attention_mask"].unsqueeze(-1)  # (1, L, 1)
-                emb = (out.last_hidden_state * mask).sum(dim=1)  # (1, D)
+                mask = tok["attention_mask"].unsqueeze(-1)
+                emb = (out.last_hidden_state * mask).sum(dim=1)
                 emb = emb / mask.sum(dim=1).clamp(min=1)
                 emb = F.normalize(emb, p=2, dim=-1)
                 family_embs[family] = emb.squeeze(0).cpu()
 
-        # Map each font file path → its family's embedding.
         for font in self.googlefonts.fonts:
             emb = family_embs.get(font.family)
             if emb is None:
@@ -239,16 +205,10 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
 
     def train_set(self):
-        return Dataset(
-            self.train_fonts,
-            codepoint_filter_fn=lambda cps: set(cps),
-        )
+        return _FontDataset(self.train_fonts)
 
     def test_set(self):
-        return Dataset(
-            self.test_fonts,
-            codepoint_filter_fn=lambda cps: set(cps),
-        )
+        return _FontDataset(self.test_fonts)
 
     def train_loader(self):
         dataset = self.train_set()
@@ -256,7 +216,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             return DataLoader(
                 dataset,
                 batch_sampler=_ClassBalancedBatchSampler(
-                    dataset.order,
+                    self.train_fonts,
                     batch_size=self.batch_size,
                     drop_last=True,
                 ),
@@ -277,49 +237,33 @@ class FontStyleDatasetMaker(DatasetMaker):
     def collate_fn(self, batch: list[dict]) -> dict:
         """Collate font-level items into a training batch.
 
-        Returns two views per font:
-        - View 1: phrase A at axis position 1.
-        - View 2: phrase B at axis position 2 (different phrase, and
-          different axis position for variable fonts).
-
         Returns:
-            dict with keys:
-            - ``"images"``: ``(2*B, 3, H, H)`` — view 1 stacked on view 2,
-              resized to a square.
-            - ``"tags"``, ``"tag_masks"``, ``"category"``, ``"family"`` as before.
+            - ``images``: ``(2B, G, 1, H, W)`` — two masked views stacked.
+            - ``glyph_mask``: ``(2B, G)`` boolean visibility mask.
+            - tags / category / family / tag_vectors / text_embeddings for the
+              B fonts (duplicated to 2B by the training loop).
         """
         fonts: list[GoogleFont] = [item["font"] for item in batch]
+        b = len(fonts)
+        g = len(self._input_codepoints)
+        size = self._glyph_size
 
-        images_v1: list[torch.Tensor] = []
-        images_v2: list[torch.Tensor] = []
+        glyphs = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
+        for i, font in enumerate(fonts):
+            for j, cp in enumerate(self._input_codepoints):
+                glyphs[i, j, 0] = _render_glyph(font, cp, size)
 
-        for font in fonts:
-            axis1 = font.random_axis_position()
-            axis2 = font.random_axis_position()
+        # Two independent random visibility masks (the two contrastive views).
+        mask_a = torch.rand(b, g) > self._mask_probability
+        mask_b = torch.rand(b, g) > self._mask_probability
 
-            # Pick two distinct phrases.
-            p1, p2 = random.sample(CONTRASTIVE_PHRASES, 2)
+        # Zero-out invisible glyphs so the reconstruction target (added later)
+        # is never leaked into the encoder input.
+        view_a = glyphs * mask_a[:, :, None, None, None]
+        view_b = glyphs * mask_b[:, :, None, None, None]
 
-            # Render and resize to square.
-            img1 = _render_and_resize(
-                font, p1, self._phrase_font_size, axis1,
-                self._phrase_width, self._phrase_height,
-            )
-            img2 = _render_and_resize(
-                font, p2, self._phrase_font_size, axis2,
-                self._phrase_width, self._phrase_height,
-            )
-            images_v1.append(img1)
-            images_v2.append(img2)
-
-        images = torch.cat([
-            torch.stack(images_v1),
-            torch.stack(images_v2),
-        ], dim=0)  # (2B, 3, H, W)
-
-        # Apply colour jitter for augmentation — prevents memorisation of
-        # exact pixel values.
-        images = _augment_batch(images)
+        images = torch.cat([view_a, view_b], dim=0)  # (2B, G, 1, H, W)
+        glyph_mask = torch.cat([mask_a, mask_b], dim=0)  # (2B, G)
 
         # Tags.
         tags: dict[str, torch.Tensor] = {}
@@ -351,17 +295,13 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
         families = [font.family for font in fonts]
 
-        # Build per-font tag vectors for tag-weighted contrastive positives.
-        # Each vector is (num_style_tags,) with centile values in [0, 1].
-        # Missing tags default to 0.  Parent dimensions (e.g. "/Sans")
-        # aggregate the max centile across their sub-categories.
+        # Per-font tag vectors for tag-weighted contrastive positives.
         style_vectors: list[torch.Tensor] = []
         for font in fonts:
             font_tags = font.tags()
             values: dict[str, float] = {}
             for tag in ALL_STYLE_TAGS:
                 values[tag] = font_tags.get(tag, 0.0) / 100.0
-            # Parent dimensions: max of child values.
             for parent in STYLE_PARENT_TAGS:
                 child_max = 0.0
                 for child in STYLE_CATEGORY_TAGS:
@@ -377,6 +317,8 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         result: dict = {
             "images": images,
+            "glyph_mask": glyph_mask,
+            "target_glyphs": glyphs,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,
@@ -384,7 +326,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             "tag_vectors": tag_vectors,
         }
 
-        # Attach pre-computed text embeddings keyed by font path.
         if self._text_embeddings:
             text_embs = []
             for font in fonts:
@@ -398,48 +339,11 @@ class FontStyleDatasetMaker(DatasetMaker):
         return result
 
 
-def _render_and_resize(
-    font: GoogleFont,
-    phrase: str,
-    font_size: int,
-    axis_position,
-    phrase_width: int,
-    phrase_height: int,
-) -> torch.Tensor:
-    """Render a phrase in a font and resize to a target (W, H) RGB tensor."""
-    import torchvision.transforms.functional as TF
-
-    arr = render_phrase(
-        str(font.path), phrase,
-        size=font_size,
-        axis_position=axis_position if axis_position and len(axis_position) > 0 else None,
-        width=phrase_width,
-        height=phrase_height,
-    )
-    # arr is (H, W, 4) RGBA uint8 — strip alpha for RGB.
-    img = torch.from_numpy(arr[..., :3].copy()).permute(2, 0, 1).float() / 255.0
-    return img
-
-
-def _augment_batch(images: torch.Tensor) -> torch.Tensor:
-    """Apply colour jitter to prevent memorisation of exact pixel values.
-
-    Each image in the batch gets independent jitter so the two views of the
-    same font differ in brightness/contrast as well as phrase text.
-    """
-    import torchvision.transforms.functional as TF
-
-    B = images.shape[0]
-    out = []
-    for i in range(B):
-        img = images[i]
-        # Random brightness/contrast jitter.
-        b = float(torch.empty(1).uniform_(0.85, 1.15).item())
-        c = float(torch.empty(1).uniform_(0.85, 1.15).item())
-        img = TF.adjust_brightness(img, b)
-        img = TF.adjust_contrast(img, c)
-        out.append(img)
-    return torch.stack(out)
+def _render_glyph(font: GoogleFont, codepoint: int, size: int) -> torch.Tensor:
+    """Render a single glyph to a ``(size, size)`` greyscale tensor in [0, 1]."""
+    arr = font.render(codepoint, size=size)  # (3, size, size) float32 [0, 1]
+    gray = arr[0].copy() if arr.ndim == 3 else arr
+    return torch.from_numpy(gray)
 
 
 class _ClassBalancedBatchSampler(BatchSampler):
@@ -447,18 +351,18 @@ class _ClassBalancedBatchSampler(BatchSampler):
 
     def __init__(
         self,
-        order: list[tuple],
+        fonts: Sequence[GoogleFont],
         *,
         batch_size: int,
         drop_last: bool,
     ) -> None:
+        self.fonts = list(fonts)
         self.batch_size = batch_size
         self.drop_last = drop_last
-        self.dataset_size = len(order)
 
         class_to_indices: dict[str, list[int]] = {}
-        for idx, (font, _char) in enumerate(order):
-            cls = font.category()  # one of ALL_CATEGORIES
+        for idx, font in enumerate(self.fonts):
+            cls = font.category()
             class_to_indices.setdefault(cls, []).append(idx)
 
         if not class_to_indices:
@@ -469,8 +373,8 @@ class _ClassBalancedBatchSampler(BatchSampler):
 
     def __len__(self) -> int:
         if self.drop_last:
-            return self.dataset_size // self.batch_size
-        return math.ceil(self.dataset_size / self.batch_size)
+            return len(self.fonts) // self.batch_size
+        return math.ceil(len(self.fonts) / self.batch_size)
 
     def __iter__(self):
         num_classes = len(self.classes)

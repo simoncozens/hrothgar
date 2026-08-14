@@ -4,28 +4,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Fixed glyph set rendered as the embedder input.  This is the Latin core
+# (upper/lower/digits) plus two punctuation marks chosen to be style-revealing.
+DEFAULT_INPUT_CHARS = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789"
+    "&?"
+)
+DEFAULT_INPUT_CODEPOINTS = [ord(c) for c in DEFAULT_INPUT_CHARS]
+
 
 @dataclass
 class FontStyleEmbedderConfig:
     """Configuration for the font-level style embedder.
 
-    The model renders a short phrase (e.g. "THE quick brown fox 1234") in the
-    target font, encodes the resulting image with a CNN, global-average-pools
-    to a single embedding vector, and projects through contrastive and
-    tag-prediction heads.
+    The model renders a fixed set of glyphs (``input_codepoints``) for each
+    font, encodes each glyph with a shared CNN, attention-pools each glyph's
+    spatial features into a small number of tokens, and then aggregates those
+    per-glyph tokens into a global style token set plus a 256-d summary vector.
     """
 
     # Input rendering.
-    # Native render size for the phrase image.
-    phrase_font_size: int = 30
-    # Target size for phrase rendering
-    # Rectangular (8:1) preserves text shape without dead pixels.
-    phrase_height: int = 64
-    phrase_width: int = phrase_height * 8
+    input_codepoints: list[int] = field(
+        default_factory=lambda: list(DEFAULT_INPUT_CODEPOINTS)
+    )
+    glyph_size: int = 64
 
-    # CNN encoder (matches StyleEncoder convention).
-    encoder_base_channels: int = 16
+    # CNN encoder.
+    encoder_base_channels: int = 32
     encoder_feature_dim: int = 256
+    encoder_downsample: int = 4  # 64 -> 16
+
+    # Hierarchical pooling.
+    per_glyph_tokens: int = 4
+    style_latents: int = 16
+    aggregation_heads: int = 8
+
+    # Masked-glyph reconstruction head.  Reconstructs hidden glyphs from the
+    # summary vector + glyph-slot identity, forcing the summary to retain
+    # generation-relevant fine detail.
+    use_reconstruction: bool = True
+    reconstruction_codepoint_dim: int = 64
+    reconstruction_samples: int = 4
 
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
@@ -58,6 +79,7 @@ class FontStyleEmbedderConfig:
         import json
         from pathlib import Path as _Path
         from dataclasses import asdict
+
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
         with config_path.open("w", encoding="utf-8") as f:
             json.dump(asdict(self), f, indent=2, sort_keys=True)
@@ -69,6 +91,7 @@ class FontStyleEmbedderConfig:
         import json
         import dataclasses
         from pathlib import Path as _Path
+
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
         if not config_path.exists():
             config_path = _Path(str(model_path)).with_suffix(".conf.json")
@@ -90,5 +113,6 @@ class FontStyleEmbeddingLossWeights:
     contrastive: float = 1.0
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
+    reconstruction: float = 1.0
     use_family_positives: bool = True
     tag_positive_weight: float = 1.0

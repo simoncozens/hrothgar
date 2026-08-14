@@ -119,6 +119,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
 
         embedder.eval()
         embedder.to(device)
+        print("Precomputing font-level style embeddings for all fonts...")
         for font in tqdm.tqdm(all_fonts):
             try:
                 image = render_phrase(

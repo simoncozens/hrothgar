@@ -16,7 +16,6 @@ from hrothgar.style_embedding.config import (
 from hrothgar.style_embedding.model import FontStyleEmbedder
 from hrothgar.style_embedding.dataset import (
     FontStyleDatasetMaker,
-    CONTRASTIVE_PHRASES,
 )
 from hrothgar.style_embedding.losses import (
     category_loss,
@@ -32,7 +31,6 @@ __all__ = [
     "FontStyleEmbeddingLossWeights",
     "FontStyleEmbeddingTrainingLoop",
     "FontStyleDatasetMaker",
-    "CONTRASTIVE_PHRASES",
     "category_loss",
     "contrastive_loss",
     "tag_prediction_loss",
