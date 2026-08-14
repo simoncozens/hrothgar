@@ -249,9 +249,12 @@ class FontStyleDatasetMaker(DatasetMaker):
         size = self._glyph_size
 
         glyphs = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
+        glyph_bboxes = torch.zeros(b, g, 4, dtype=torch.float32)
         for i, font in enumerate(fonts):
             for j, cp in enumerate(self._input_codepoints):
-                glyphs[i, j, 0] = _render_glyph(font, cp, size)
+                glyph = _render_glyph(font, cp, size)
+                glyphs[i, j, 0] = glyph
+                glyph_bboxes[i, j] = _ink_bbox(glyph, size)
 
         # Two independent random visibility masks (the two contrastive views).
         mask_a = torch.rand(b, g) > self._mask_probability
@@ -319,6 +322,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             "images": images,
             "glyph_mask": glyph_mask,
             "target_glyphs": glyphs,
+            "glyph_bboxes": glyph_bboxes,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,
@@ -344,6 +348,23 @@ def _render_glyph(font: GoogleFont, codepoint: int, size: int) -> torch.Tensor:
     arr = font.render(codepoint, size=size)  # (3, size, size) float32 [0, 1]
     gray = arr[0].copy() if arr.ndim == 3 else arr
     return torch.from_numpy(gray)
+
+
+def _ink_bbox(glyph: torch.Tensor, size: int) -> torch.Tensor:
+    """Return the glyph's ink bounding box as normalized ``(x0, y0, x1, y1)``.
+
+    Ink is rendered near 0.0 on a white (1.0) background, so we threshold at
+    0.5 to recover the glyph extent.  Blank glyphs return an all-zero box.
+    """
+    ink = glyph < 0.5
+    if not ink.any():
+        return torch.zeros(4)
+    ys, xs = ink.nonzero(as_tuple=True)
+    x0 = xs.min().float()
+    x1 = xs.max().float()
+    y0 = ys.min().float()
+    y1 = ys.max().float()
+    return torch.tensor([x0, y0, x1, y1], dtype=torch.float32) / size
 
 
 class _ClassBalancedBatchSampler(BatchSampler):

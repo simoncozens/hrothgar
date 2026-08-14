@@ -41,12 +41,12 @@ class FontStyleEmbedderConfig:
     style_latents: int = 16
     aggregation_heads: int = 8
 
-    # Masked-glyph reconstruction head.  Reconstructs hidden glyphs from the
+    # Glyph-layout head.  Predicts hidden glyphs' ink bounding boxes from the
     # summary vector + glyph-slot identity, forcing the summary to retain
-    # generation-relevant fine detail.
-    use_reconstruction: bool = True
-    reconstruction_codepoint_dim: int = 64
-    reconstruction_samples: int = 4
+    # typographic proportions (width / height / sidebearing / placement).
+    use_layout: bool = True
+    layout_codepoint_dim: int = 64
+    layout_samples: int = 4
 
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
@@ -113,6 +113,6 @@ class FontStyleEmbeddingLossWeights:
     contrastive: float = 1.0
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
-    reconstruction: float = 1.0
+    layout: float = 1.0
     use_family_positives: bool = True
     tag_positive_weight: float = 1.0

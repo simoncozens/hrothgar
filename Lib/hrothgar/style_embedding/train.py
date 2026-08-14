@@ -17,7 +17,6 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from glyphloss import glyph_reconstruction_loss
 
 from hrothgar.style_embedding.config import (
     FontStyleEmbedderConfig,
@@ -74,23 +73,21 @@ def _filter_tags_by_prefix(tag_names: list[str], prefixes: str) -> list[str]:
     return result
 
 
-def _reconstruction_loss(
+def _layout_loss(
     model: FontStyleEmbedder,
-    loss_fn,
     style: torch.Tensor,
     glyph_mask: torch.Tensor,
-    target_glyphs: torch.Tensor,
+    glyph_bboxes: torch.Tensor,
     num_samples: int,
 ) -> torch.Tensor:
-    """Reconstruct ``num_samples`` hidden glyphs per font from the style vector.
+    """Predict ``num_samples`` hidden glyphs' ink bounding boxes per font.
 
     Args:
-        model: the style embedder (provides ``reconstruct``).
-        loss_fn: callable ``(pred, target) -> scalar`` in [0, 1] image space.
+        model: the style embedder (provides ``predict_layout``).
         style: ``(B, F)`` summary vectors for one contrastive view.
         glyph_mask: ``(B, G)`` boolean, ``True`` = visible.
-        target_glyphs: ``(B, G, 1, H, W)`` full unmasked renderings.
-        num_samples: number of hidden glyphs to reconstruct per font.
+        glyph_bboxes: ``(B, G, 4)`` normalized ``(x0, y0, x1, y1)`` targets.
+        num_samples: number of hidden glyphs to predict per font.
     """
     b = style.shape[0]
     hidden = ~glyph_mask  # (B, G)
@@ -106,18 +103,10 @@ def _reconstruction_loss(
         .reshape(-1)
     )
     slots = sampled.reshape(-1)
-    recon = model.reconstruct(style[font_idx], slots)
-    targets = target_glyphs[font_idx, slots]
+    pred = model.predict_layout(style[font_idx], slots)
+    targets = glyph_bboxes[font_idx, slots]
     # Compute in float32 so the loss is dtype-consistent under mixed precision.
-    return loss_fn(recon.float(), targets.float())
-
-
-def _glyph_strip(glyphs: torch.Tensor) -> torch.Tensor:
-    """Arrange ``(M, 1, H, W)`` glyphs into a ``(1, H, M*W)`` horizontal strip."""
-    m = glyphs.shape[0]
-    h = glyphs.shape[2]
-    w = glyphs.shape[3]
-    return glyphs.squeeze(1).permute(1, 0, 2).reshape(1, h, m * w)
+    return F.l1_loss(pred.float(), targets.float())
 
 
 # ── Training loop ───────────────────────────────────────────────────────────
@@ -150,7 +139,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             style_latents=getattr(train_args, "style_latents", 16),
             encoder_downsample=getattr(train_args, "encoder_downsample", 4),
             aggregation_heads=getattr(train_args, "aggregation_heads", 8),
-            reconstruction_samples=getattr(train_args, "reconstruction_samples", 4),
+            layout_samples=getattr(train_args, "layout_samples", 4),
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
             tag_num_classes=train_args.tag_num_classes,
@@ -202,11 +191,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         self.loss_weights = FontStyleEmbeddingLossWeights(
             use_family_positives=config.multipos_use_family_positives,
             tag_positive_weight=getattr(train_args, "tag_positive_weight", 1.0),
-            reconstruction=getattr(train_args, "reconstruction_weight", 1.0),
+            layout=getattr(train_args, "layout_weight", 1.0),
         )
-
-        # Edge/contour-focused reconstruction loss (handles thin weights).
-        self.reconstruction_loss_fn = glyph_reconstruction_loss
 
         # ── Bookkeeping ─────────────────────────────────────────────────
         self.model = model
@@ -294,7 +280,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Images are already (2B, G, 1, H, W) — view 1 stacked on view 2.
         images = batch["images"].to(self.device)
         glyph_mask = batch["glyph_mask"].to(self.device)
-        target_glyphs = batch["target_glyphs"].to(self.device)
+        glyph_bboxes = batch["glyph_bboxes"].to(self.device)
         target_tags = {k: v.to(self.device) for k, v in batch["tags"].items()}
         tag_masks = {k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()}
         family = batch.get("family", None)
@@ -331,23 +317,21 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 tag_vectors=tag_vectors,
             )
 
-            if self.model.config.use_reconstruction:
+            if self.model.config.use_layout:
                 b = glyph_mask.shape[0] // 2
-                k = self.model.config.reconstruction_samples
-                recon_loss = 0.5 * (
-                    _reconstruction_loss(
-                        self.model, self.reconstruction_loss_fn,
-                        _embedding[:b], glyph_mask[:b], target_glyphs, k
+                k = self.model.config.layout_samples
+                layout_loss = 0.5 * (
+                    _layout_loss(
+                        self.model, _embedding[:b], glyph_mask[:b], glyph_bboxes, k
                     )
-                    + _reconstruction_loss(
-                        self.model, self.reconstruction_loss_fn,
-                        _embedding[b:], glyph_mask[b:], target_glyphs, k
+                    + _layout_loss(
+                        self.model, _embedding[b:], glyph_mask[b:], glyph_bboxes, k
                     )
                 )
-                loss = loss + self.loss_weights.reconstruction * recon_loss
-                loss_info["reconstruction"] = recon_loss.detach()
-                loss_info["reconstruction_weighted"] = (
-                    self.loss_weights.reconstruction * recon_loss
+                loss = loss + self.loss_weights.layout * layout_loss
+                loss_info["layout"] = layout_loss.detach()
+                loss_info["layout_weighted"] = (
+                    self.loss_weights.layout * layout_loss
                 ).detach()
 
         return loss, loss_info
@@ -373,8 +357,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         retrieval_recall3: list[torch.Tensor] = []
         retrieval_recall5: list[torch.Tensor] = []
 
-        # Reconstruction loss on held-out fonts.
-        val_recon: list[torch.Tensor] = []
+        # Layout (bounding-box) loss on held-out fonts.
+        val_layout: list[torch.Tensor] = []
 
         with torch.no_grad():
             for val_batch in itertools.islice(
@@ -382,7 +366,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             ):
                 images = val_batch["images"].to(self.device)
                 glyph_mask = val_batch["glyph_mask"].to(self.device)
-                target_glyphs = val_batch["target_glyphs"].to(self.device)
+                glyph_bboxes = val_batch["glyph_bboxes"].to(self.device)
                 target_tags = {
                     k: v.to(self.device)
                     for k, v in val_batch["tags"].items()
@@ -430,20 +414,18 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         tag_vectors=tag_vectors,
                     )
 
-                    if self.model.config.use_reconstruction:
+                    if self.model.config.use_layout:
                         b = glyph_mask.shape[0] // 2
-                        k = self.model.config.reconstruction_samples
-                        recon_loss = 0.5 * (
-                            _reconstruction_loss(
-                                self.model, self.reconstruction_loss_fn,
-                                _emb[:b], glyph_mask[:b], target_glyphs, k
+                        k = self.model.config.layout_samples
+                        layout_loss = 0.5 * (
+                            _layout_loss(
+                                self.model, _emb[:b], glyph_mask[:b], glyph_bboxes, k
                             )
-                            + _reconstruction_loss(
-                                self.model, self.reconstruction_loss_fn,
-                                _emb[b:], glyph_mask[b:], target_glyphs, k
+                            + _layout_loss(
+                                self.model, _emb[b:], glyph_mask[b:], glyph_bboxes, k
                             )
                         )
-                        val_recon.append(recon_loss)
+                        val_layout.append(layout_loss)
 
                 val_contrastive.append(loss_info["contrastive"])
                 if "tag_prediction" in loss_info:
@@ -498,9 +480,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             avg_cat_acc = torch.mean(torch.stack(val_cat_acc))
             self.write_scalar("Validation/category_accuracy", avg_cat_acc)
 
-        if val_recon:
-            avg_recon = torch.mean(torch.stack(val_recon))
-            self.write_scalar("Validation/reconstruction", avg_recon)
+        if val_layout:
+            avg_layout = torch.mean(torch.stack(val_layout))
+            self.write_scalar("Validation/layout", avg_layout)
 
         # Log per-tag metrics and write a sorted summary to TensorBoard.
         if val_tag_metrics:
@@ -527,9 +509,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         else:
             self.checkpoint_if_best(avg_contrastive)
 
-        # Visualize reconstruction (always, when enabled) and tags (when active).
-        if self.model.config.use_reconstruction:
-            self.visualize_reconstruction()
+        # Visualize layout (always, when enabled) and tags (when active).
+        if self.model.config.use_layout:
+            self.visualize_layout()
         if self.model.config.tag_names:
             self.visualize()
 
@@ -539,51 +521,86 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
     # Visualisation
     # ------------------------------------------------------------------
 
-    def visualize_reconstruction(self):
-        """Render GT vs reconstructed hidden glyphs for a few validation fonts."""
-        if not self.model.config.use_reconstruction:
+    def visualize_layout(self):
+        """Overlay ground-truth vs predicted glyph bounding boxes."""
+        if not self.model.config.use_layout:
             return
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Rectangle
 
         val_batch = next(iter(self.test_loader))
         images = val_batch["images"].to(self.device)
         glyph_mask = val_batch["glyph_mask"].to(self.device)
         target_glyphs = val_batch["target_glyphs"].to(self.device)
+        glyph_bboxes = val_batch["glyph_bboxes"].to(self.device)
 
         b = glyph_mask.shape[0] // 2
         mask_v1 = glyph_mask[:b]
-        target_v1 = target_glyphs  # (b, G, 1, H, W)
 
         with torch.no_grad():
             with self._autocast_context():
                 embedding, _proj, _tags, _cat = self.model(
                     images, glyph_mask=glyph_mask
                 )
-            style_v1 = embedding[:b]
+        style_v1 = embedding[:b]
 
-            n_fonts = min(4, b)
-            k = 8
-            rows: list[torch.Tensor] = []
-            for i in range(n_fonts):
-                hidden = (~mask_v1[i]).nonzero(as_tuple=False).squeeze(-1)
-                if hidden.numel() < k:
-                    continue
-                slots = hidden[:k]
-                style = style_v1[i : i + 1].expand(k, -1)
+        n_fonts = min(2, b)
+        k = 6
+        fig, axes = plt.subplots(n_fonts, k, figsize=(k * 1.1, n_fonts * 1.1))
+        if n_fonts == 1:
+            axes = axes[None, :]
+
+        for i in range(n_fonts):
+            hidden = (~mask_v1[i]).nonzero(as_tuple=False).squeeze(-1)
+            if hidden.numel() < k:
+                continue
+            slots = hidden[:k]
+            style = style_v1[i : i + 1].expand(k, -1)
+            with torch.no_grad():
                 with self._autocast_context():
-                    recon = self.model.reconstruct(style, slots)
-                gt = target_v1[i, slots]
-                row = torch.cat(
-                    [_glyph_strip(gt.float()), _glyph_strip(recon.float())], dim=2
-                )
-                rows.append(row)
+                    pred = self.model.predict_layout(style, slots)
 
-        if rows:
-            montage = torch.cat(rows, dim=1)  # stack rows vertically
-            self.writer.add_image(
-                "Validation/reconstruction_montage",
-                montage.clamp(0, 1),
-                self.global_step,
-            )
+            for j, s in enumerate(slots):
+                glyph = target_glyphs[i, s, 0].cpu().numpy()  # (H, W)
+                h, w = glyph.shape
+                ax = axes[i, j]
+                ax.imshow(glyph, cmap="gray", vmin=0.0, vmax=1.0)
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+                scale = np.array([w, h, w, h], dtype=np.float32)
+                gt = glyph_bboxes[i, s].float().cpu().numpy() * scale
+                pr = pred[j].float().cpu().numpy() * scale
+                ax.add_patch(Rectangle(
+                    (gt[0], gt[1]), gt[2] - gt[0], gt[3] - gt[1],
+                    fill=False, edgecolor="lime", linewidth=1.0,
+                ))
+                ax.add_patch(Rectangle(
+                    (pr[0], pr[1]), pr[2] - pr[0], pr[3] - pr[1],
+                    fill=False, edgecolor="red", linewidth=1.0,
+                ))
+
+        for ax_row in axes:
+            for ax in ax_row:
+                ax.axis("off")
+
+        fig.suptitle(
+            f"GT bbox = green, pred bbox = red (step {self.global_step})", fontsize=8
+        )
+        fig.tight_layout()
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, facecolor="white")
+        buf.seek(0)
+        img = plt.imread(buf)
+        buf.close()
+        plt.close(fig)
+
+        img_tensor = torch.from_numpy(img).permute(2, 0, 1)
+        self.writer.add_image("Validation/layout", img_tensor, self.global_step)
 
     def visualize(self):
         """Render tag prediction comparison charts for a few validation fonts."""
@@ -725,10 +742,10 @@ def _parse_args() -> argparse.Namespace:
                    help="Attention heads in the cross-glyph aggregator.")
     p.add_argument("--mask-probability", type=float, default=0.5,
                    help="Probability a glyph is masked out of a contrastive view.")
-    p.add_argument("--reconstruction-samples", type=int, default=4,
-                   help="Hidden glyphs reconstructed per view per font.")
-    p.add_argument("--reconstruction-weight", type=float, default=1.0,
-                   help="Weight of the masked-glyph reconstruction loss.")
+    p.add_argument("--layout-samples", type=int, default=4,
+                   help="Hidden glyphs whose bounding box is predicted per view.")
+    p.add_argument("--layout-weight", type=float, default=1.0,
+                   help="Weight of the glyph-layout (bounding-box) loss.")
     p.add_argument("--tags", type=str, default=None,
                    help="Comma-separated tag names to predict, or 'all'")
     p.add_argument("--tag-filter", type=str, default=None,

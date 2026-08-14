@@ -201,7 +201,12 @@ def main() -> None:
         default="models/style_embedding.pth",
         help="Path to the frozen FontStyleEmbedder checkpoint (needs a .conf.json sidecar).",
     )
-    p.add_argument("--char", default="a", help="Letter to render (default: a).")
+    p.add_argument(
+        "--char",
+        default="a",
+        help="Letter(s) to render for image distance. Pass several (e.g. 'aefg') "
+             "for a less noisy multi-glyph distance (default: a).",
+    )
     p.add_argument("--size", type=int, default=128, help="Glyph render size.")
     p.add_argument("--max-fonts", type=int, default=200, help="Number of fonts to sample.")
     p.add_argument("--seed", type=int, default=1234)
@@ -228,27 +233,37 @@ def main() -> None:
     embedder = load_embedder(args.embedder_path, device)
 
     print("Loading fonts…")
-    char_cp = ord(args.char)
-    gf = GoogleFonts(args.repo, having={char_cp})
+    chars = list(args.char)
+    having = {ord(c) for c in chars}
+    gf = GoogleFonts(args.repo, having=having)
     fonts = gf.fonts
     rng = random.Random(args.seed)
     rng.shuffle(fonts)
     fonts = fonts[: args.max_fonts]
     print(f"Sampled {len(fonts)} fonts.")
 
-    # Build embeddings and renderings, dropping blank glyphs.
+    # Build embeddings and per-char renderings, dropping blank glyphs.
     embeddings = []
-    renderings = []
+    renderings_by_char: list[list[torch.Tensor]] = [[] for _ in chars]
     kept = []
     for font in fonts:
-        try:
-            glyph = font.render(char_cp, size=args.size)
-        except Exception:
-            continue
-        glyph = np.asarray(glyph, dtype=np.float32)
-        if glyph.ndim != 3 or glyph.shape[0] != 3:
-            continue
-        if glyph[0].min() > 0.995:  # blank glyph
+        char_imgs = []
+        ok = True
+        for c in chars:
+            try:
+                glyph = font.render(ord(c), size=args.size)
+            except Exception:
+                ok = False
+                break
+            glyph = np.asarray(glyph, dtype=np.float32)
+            if glyph.ndim != 3 or glyph.shape[0] != 3:
+                ok = False
+                break
+            if glyph[0].min() > 0.995:  # blank glyph
+                ok = False
+                break
+            char_imgs.append(torch.from_numpy(glyph))
+        if not ok:
             continue
         try:
             emb = embed_font(font, embedder, device)
@@ -256,7 +271,8 @@ def main() -> None:
             print(f"  skipped {font.path.name}: {exc}")
             continue
         embeddings.append(emb)
-        renderings.append(torch.from_numpy(glyph))
+        for ci in range(len(chars)):
+            renderings_by_char[ci].append(char_imgs[ci])
         kept.append(font)
 
     n = len(kept)
@@ -264,10 +280,12 @@ def main() -> None:
         raise SystemExit("Not enough renderable fonts; try a different --char or repo.")
 
     emb = torch.stack(embeddings).numpy()  # (N, D)
-    imgs = torch.stack(renderings)  # (N, 3, H, W)
+    imgs_by_char = [
+        torch.stack(renderings_by_char[ci]) for ci in range(len(chars))
+    ]  # list of (N, 3, H, W)
 
     print(f"\n{'-' * 60}")
-    print(f"Fonts: {n}   Char: {args.char!r}   Embedding dim: {emb.shape[1]}")
+    print(f"Fonts: {n}   Glyph(s): {args.char!r}   Embedding dim: {emb.shape[1]}")
     print(f"Device: {device}")
     print(f"{'-' * 60}")
 
@@ -277,20 +295,26 @@ def main() -> None:
     d_emb_l2 = euclidean_distances(emb)
     d_emb_cos = cosine_distances(emb)
 
-    # Image distances.
+    # Image distances (averaged across the requested glyphs when multi-char).
     image_dists: dict[str, np.ndarray] = {}
     if "l1" in metrics:
-        print("Computing pairwise L1…")
-        image_dists["l1"] = pairwise_l1(imgs)
+        print(f"Computing pairwise L1 across {len(chars)} glyph(s)…")
+        image_dists["l1"] = np.mean(
+            [pairwise_l1(imgs) for imgs in imgs_by_char], axis=0
+        )
     if "ssim" in metrics:
-        print("Computing pairwise (1-SSIM)…")
-        image_dists["ssim"] = pairwise_ssim(imgs)
+        print(f"Computing pairwise (1-SSIM) across {len(chars)} glyph(s)…")
+        image_dists["ssim"] = np.mean(
+            [pairwise_ssim(imgs) for imgs in imgs_by_char], axis=0
+        )
     if "lpips" in metrics:
-        print("Computing pairwise LPIPS…")
+        print(f"Computing pairwise LPIPS across {len(chars)} glyph(s)…")
         from hrothgar.gtok.llamagen_lpips import LPIPS
 
         lpips = LPIPS().to(device).eval()
-        image_dists["lpips"] = pairwise_lpips(imgs.to(device), lpips)
+        image_dists["lpips"] = np.mean(
+            [pairwise_lpips(imgs.to(device), lpips) for imgs in imgs_by_char], axis=0
+        )
 
     # Report correlation + collapse for each combination.
     for img_name, d_img in image_dists.items():

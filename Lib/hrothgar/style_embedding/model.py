@@ -164,6 +164,44 @@ class ReconstructionHead(nn.Module):
         return self.decoder(x)  # (M, 1, glyph_size, glyph_size)
 
 
+class LayoutHead(nn.Module):
+    """Predict a glyph's normalized ink bounding box from style + glyph slot.
+
+    Output is ``(x0, y0, x1, y1)`` in [0, 1], i.e. the glyph's left sidebearing,
+    top placement, width and height relative to the rendered frame.  This is a
+    readout from the style summary — not from metrics — so a low loss proves the
+    summary has captured typographic proportions.
+    """
+
+    def __init__(
+        self,
+        style_dim: int,
+        num_slots: int,
+        codepoint_dim: int = 64,
+        hidden_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.codepoint_embedding = nn.Embedding(num_slots, codepoint_dim)
+        in_dim = style_dim + codepoint_dim
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 4),
+            nn.Sigmoid(),
+        )
+
+    def forward(
+        self,
+        style: torch.Tensor,
+        slot_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        cp = self.codepoint_embedding(slot_indices)  # (M, codepoint_dim)
+        x = torch.cat([style, cp], dim=-1)  # (M, in_dim)
+        return self.net(x)  # (M, 4) in [0, 1]
+
+
 class TagPredictionHead(nn.Module):
     """Predict tag values from the embedding.
 
@@ -238,13 +276,12 @@ class FontStyleEmbedder(SaveLoadModel):
             config.aggregation_heads,
         )
 
-        self.reconstruction_head: Optional[ReconstructionHead] = None
-        if config.use_reconstruction:
-            self.reconstruction_head = ReconstructionHead(
+        self.layout_head: Optional[LayoutHead] = None
+        if config.use_layout:
+            self.layout_head = LayoutHead(
                 style_dim=config.encoder_feature_dim,
                 num_slots=len(config.input_codepoints),
-                codepoint_dim=config.reconstruction_codepoint_dim,
-                glyph_size=config.glyph_size,
+                codepoint_dim=config.layout_codepoint_dim,
             )
 
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
@@ -325,24 +362,24 @@ class FontStyleEmbedder(SaveLoadModel):
         summary = latents.mean(dim=1)  # (B, F)
         return self.enc_dropout(summary)
 
-    def reconstruct(
+    def predict_layout(
         self,
         style: torch.Tensor,
         slot_indices: torch.Tensor,
     ) -> torch.Tensor:
-        """Reconstruct glyphs from style summaries + glyph-slot indices.
+        """Predict glyph ink bounding boxes from style summaries + slot indices.
 
         Args:
             style: ``(M, encoder_feature_dim)`` style summaries.
             slot_indices: ``(M,)`` indices into ``config.input_codepoints``.
 
         Returns:
-            ``(M, 1, glyph_size, glyph_size)`` greyscale glyphs in [0, 1].
+            ``(M, 4)`` normalized ``(x0, y0, x1, y1)`` in [0, 1].
         """
-        assert self.reconstruction_head is not None, (
-            "reconstruction_head is disabled; set use_reconstruction=True"
+        assert self.layout_head is not None, (
+            "layout_head is disabled; set use_layout=True"
         )
-        return self.reconstruction_head(style, slot_indices)
+        return self.layout_head(style, slot_indices)
 
     def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
         """Project frozen text embeddings into the contrastive projection space."""
