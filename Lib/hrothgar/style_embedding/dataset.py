@@ -97,7 +97,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         *,
         glyph_size: int = 64,
         input_codepoints: Optional[Sequence[int]] = None,
-        mask_probability: float = 0.5,
+        glyph_sample_size: int = 32,
         split_seed: int = 1234,
         canary_size: Optional[int] = None,
         tag_names: Optional[list[str]] = None,
@@ -111,7 +111,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         self._text_embeddings: dict[str, torch.Tensor] = {}
         self._input_codepoints = list(input_codepoints) if input_codepoints is not None else list(DEFAULT_INPUT_CODEPOINTS)
         self._glyph_size = glyph_size
-        self._mask_probability = mask_probability
+        self._glyph_sample_size = glyph_sample_size
 
         super().__init__(
             repo_url=str(repo_url),
@@ -238,37 +238,52 @@ class FontStyleDatasetMaker(DatasetMaker):
         """Collate font-level items into a training batch.
 
         Returns:
-            - ``images``: ``(2B, G, 1, H, W)`` — two masked views stacked.
-            - ``glyph_mask``: ``(2B, G)`` boolean visibility mask.
+            - ``images``: ``(2B, s, 1, H, W)`` — two disjoint masked views stacked.
+            - ``glyph_mask``: ``(2B, s)`` boolean visibility mask.
+            - ``codepoint_indices``: ``(B, s)`` glyph-vocabulary index per sample.
             - tags / category / family / tag_vectors / text_embeddings for the
               B fonts (duplicated to 2B by the training loop).
         """
         fonts: list[GoogleFont] = [item["font"] for item in batch]
         b = len(fonts)
-        g = len(self._input_codepoints)
+        g = len(self._input_codepoints)  # full glyph vocabulary
+        s = self._glyph_sample_size
         size = self._glyph_size
 
-        glyphs = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
-        glyph_bboxes = torch.zeros(b, g, 4, dtype=torch.float32)
-        shape_targets = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
+        glyphs = torch.zeros(b, s, 1, size, size, dtype=torch.float32)
+        glyph_bboxes = torch.zeros(b, s, 4, dtype=torch.float32)
+        shape_targets = torch.zeros(b, s, 1, size, size, dtype=torch.float32)
+        codepoint_indices = torch.zeros(b, s, dtype=torch.long)
+        mask_a = torch.zeros(b, s, dtype=torch.bool)
+        mask_b = torch.zeros(b, s, dtype=torch.bool)
+
         for i, font in enumerate(fonts):
-            for j, cp in enumerate(self._input_codepoints):
-                glyph = _render_glyph(font, cp, size)
+            # Sample s glyphs (indices into the full vocabulary) without replacement.
+            idx = random.sample(range(g), s)
+            idx.sort()
+            # Split positions into two disjoint halves for the two views.
+            perm = random.sample(range(s), s)
+            half = s // 2
+            half_a = perm[:half]
+            half_b = perm[half:]
+
+            for j, cp_idx in enumerate(idx):
+                glyph = _render_glyph(font, self._input_codepoints[cp_idx], size)
                 glyphs[i, j, 0] = glyph
                 glyph_bboxes[i, j] = _ink_bbox(glyph, size)
                 shape_targets[i, j, 0] = _normalize_shape(glyph, size)
+                codepoint_indices[i, j] = cp_idx
 
-        # Two independent random visibility masks (the two contrastive views).
-        mask_a = torch.rand(b, g) > self._mask_probability
-        mask_b = torch.rand(b, g) > self._mask_probability
+            mask_a[i, half_a] = True
+            mask_b[i, half_b] = True
 
-        # Zero-out invisible glyphs so the reconstruction target (added later)
-        # is never leaked into the encoder input.
+        # Zero-out invisible glyphs so the reconstruction target is never leaked
+        # into the encoder input.
         view_a = glyphs * mask_a[:, :, None, None, None]
         view_b = glyphs * mask_b[:, :, None, None, None]
 
-        images = torch.cat([view_a, view_b], dim=0)  # (2B, G, 1, H, W)
-        glyph_mask = torch.cat([mask_a, mask_b], dim=0)  # (2B, G)
+        images = torch.cat([view_a, view_b], dim=0)  # (2B, s, 1, H, W)
+        glyph_mask = torch.cat([mask_a, mask_b], dim=0)  # (2B, s)
 
         # Tags.
         tags: dict[str, torch.Tensor] = {}
@@ -323,6 +338,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         result: dict = {
             "images": images,
             "glyph_mask": glyph_mask,
+            "codepoint_indices": codepoint_indices,
             "target_glyphs": glyphs,
             "glyph_bboxes": glyph_bboxes,
             "shape_targets": shape_targets,

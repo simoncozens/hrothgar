@@ -30,6 +30,8 @@ class FontStyleEmbedderConfig:
         default_factory=lambda: list(DEFAULT_INPUT_CODEPOINTS)
     )
     glyph_size: int = 128
+    # Number of glyphs sampled per font per step (memory + robustness).
+    glyph_sample_size: int = 32
 
     # CNN encoder.
     encoder_base_channels: int = 32

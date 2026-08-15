@@ -77,6 +77,7 @@ def _filter_tags_by_prefix(tag_names: list[str], prefixes: str) -> list[str]:
 def _layout_loss(
     model: FontStyleEmbedder,
     style: torch.Tensor,
+    codepoint_indices: torch.Tensor,
     glyph_mask: torch.Tensor,
     glyph_bboxes: torch.Tensor,
     num_samples: int,
@@ -86,13 +87,13 @@ def _layout_loss(
     Args:
         model: the style embedder (provides ``predict_layout``).
         style: ``(B, F)`` summary vectors for one contrastive view.
-        glyph_mask: ``(B, G)`` boolean, ``True`` = visible.
-        glyph_bboxes: ``(B, G, 4)`` normalized ``(x0, y0, x1, y1)`` targets.
+        codepoint_indices: ``(B, s)`` glyph-vocabulary index per sample.
+        glyph_mask: ``(B, s)`` boolean, ``True`` = visible.
+        glyph_bboxes: ``(B, s, 4)`` normalized ``(x0, y0, x1, y1)`` targets.
         num_samples: number of hidden glyphs to predict per font.
     """
     b = style.shape[0]
-    hidden = ~glyph_mask  # (B, G)
-    # Uniform over hidden slots (+ epsilon so multinomial never sees all-zeros).
+    hidden = ~glyph_mask  # (B, s)
     probs = hidden.float() + 1e-8
     probs = probs / probs.sum(dim=1, keepdim=True)
     sampled = torch.multinomial(probs, num_samples=num_samples, replacement=True)
@@ -104,7 +105,8 @@ def _layout_loss(
         .reshape(-1)
     )
     slots = sampled.reshape(-1)
-    pred = model.predict_layout(style[font_idx], slots)
+    cp = codepoint_indices[font_idx, slots]
+    pred = model.predict_layout(style[font_idx], cp)
     targets = glyph_bboxes[font_idx, slots]
     # Compute in float32 so the loss is dtype-consistent under mixed precision.
     return F.l1_loss(pred.float(), targets.float())
@@ -114,6 +116,7 @@ def _shape_loss(
     model: FontStyleEmbedder,
     loss_fn,
     latents: torch.Tensor,
+    codepoint_indices: torch.Tensor,
     glyph_mask: torch.Tensor,
     shape_targets: torch.Tensor,
     num_samples: int,
@@ -124,12 +127,13 @@ def _shape_loss(
         model: the style embedder (provides ``reconstruct_shape``).
         loss_fn: callable ``(pred, target) -> scalar`` in [0, 1] image space.
         latents: ``(B, K, F)`` style tokens for one contrastive view.
-        glyph_mask: ``(B, G)`` boolean, ``True`` = visible.
-        shape_targets: ``(B, G, 1, H, W)`` bbox-normalized square targets.
+        codepoint_indices: ``(B, s)`` glyph-vocabulary index per sample.
+        glyph_mask: ``(B, s)`` boolean, ``True`` = visible.
+        shape_targets: ``(B, s, 1, H, W)`` bbox-normalized square targets.
         num_samples: number of hidden glyphs to reconstruct per font.
     """
     b = latents.shape[0]
-    hidden = ~glyph_mask  # (B, G)
+    hidden = ~glyph_mask  # (B, s)
     probs = hidden.float() + 1e-8
     probs = probs / probs.sum(dim=1, keepdim=True)
     sampled = torch.multinomial(probs, num_samples=num_samples, replacement=True)
@@ -141,7 +145,8 @@ def _shape_loss(
         .reshape(-1)
     )
     slots = sampled.reshape(-1)
-    recon = model.reconstruct_shape(latents[font_idx], slots)
+    cp = codepoint_indices[font_idx, slots]
+    recon = model.reconstruct_shape(latents[font_idx], cp)
     targets = shape_targets[font_idx, slots]
     return loss_fn(recon.float(), targets.float())
 
@@ -211,6 +216,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         multipos_family = getattr(train_args, "multipos_family_positives", True)
         config = FontStyleEmbedderConfig(
             glyph_size=getattr(train_args, "glyph_size", 64),
+            glyph_sample_size=getattr(train_args, "glyph_sample_size", 32),
             per_glyph_tokens=getattr(train_args, "per_glyph_tokens", 4),
             style_latents=getattr(train_args, "style_latents", 16),
             encoder_downsample=getattr(train_args, "encoder_downsample", 4),
@@ -240,8 +246,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             repo_url=str(train_args.dataset_path),
             batch_size=train_args.batch_size,
             glyph_size=config.glyph_size,
+            glyph_sample_size=config.glyph_sample_size,
             input_codepoints=config.input_codepoints,
-            mask_probability=getattr(train_args, "mask_probability", 0.5),
             canary_size=train_args.limit_dataset_size,
             tag_names=tag_names or [],
             tag_num_classes=config.tag_num_classes,
@@ -361,6 +367,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Images are already (2B, G, 1, H, W) — view 1 stacked on view 2.
         images = batch["images"].to(self.device)
         glyph_mask = batch["glyph_mask"].to(self.device)
+        codepoint_indices = batch["codepoint_indices"].to(self.device)
         glyph_bboxes = batch["glyph_bboxes"].to(self.device)
         shape_targets = batch["shape_targets"].to(self.device)
         target_tags = {k: v.to(self.device) for k, v in batch["tags"].items()}
@@ -404,10 +411,12 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 k = self.model.config.layout_samples
                 layout_loss = 0.5 * (
                     _layout_loss(
-                        self.model, _embedding[:b], glyph_mask[:b], glyph_bboxes, k
+                        self.model, _embedding[:b], codepoint_indices,
+                        glyph_mask[:b], glyph_bboxes, k
                     )
                     + _layout_loss(
-                        self.model, _embedding[b:], glyph_mask[b:], glyph_bboxes, k
+                        self.model, _embedding[b:], codepoint_indices,
+                        glyph_mask[b:], glyph_bboxes, k
                     )
                 )
                 loss = loss + self.loss_weights.layout * layout_loss
@@ -422,11 +431,13 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 shape_loss = 0.5 * (
                     _shape_loss(
                         self.model, self.shape_loss_fn,
-                        latents[:b], glyph_mask[:b], shape_targets, k
+                        latents[:b], codepoint_indices,
+                        glyph_mask[:b], shape_targets, k
                     )
                     + _shape_loss(
                         self.model, self.shape_loss_fn,
-                        latents[b:], glyph_mask[b:], shape_targets, k
+                        latents[b:], codepoint_indices,
+                        glyph_mask[b:], shape_targets, k
                     )
                 )
                 loss = loss + self.loss_weights.shape * shape_loss
@@ -471,6 +482,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 glyph_mask = val_batch["glyph_mask"].to(self.device)
                 glyph_bboxes = val_batch["glyph_bboxes"].to(self.device)
                 shape_targets = val_batch["shape_targets"].to(self.device)
+                codepoint_indices = val_batch["codepoint_indices"].to(self.device)
                 target_tags = {
                     k: v.to(self.device)
                     for k, v in val_batch["tags"].items()
@@ -523,10 +535,12 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         k = self.model.config.layout_samples
                         layout_loss = 0.5 * (
                             _layout_loss(
-                                self.model, _emb[:b], glyph_mask[:b], glyph_bboxes, k
+                                self.model, _emb[:b], codepoint_indices,
+                                glyph_mask[:b], glyph_bboxes, k
                             )
                             + _layout_loss(
-                                self.model, _emb[b:], glyph_mask[b:], glyph_bboxes, k
+                                self.model, _emb[b:], codepoint_indices,
+                                glyph_mask[b:], glyph_bboxes, k
                             )
                         )
                         val_layout.append(layout_loss)
@@ -537,11 +551,13 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         shape_loss = 0.5 * (
                             _shape_loss(
                                 self.model, self.shape_loss_fn,
-                                latents[:b], glyph_mask[:b], shape_targets, k
+                                latents[:b], codepoint_indices,
+                                glyph_mask[:b], shape_targets, k
                             )
                             + _shape_loss(
                                 self.model, self.shape_loss_fn,
-                                latents[b:], glyph_mask[b:], shape_targets, k
+                                latents[b:], codepoint_indices,
+                                glyph_mask[b:], shape_targets, k
                             )
                         )
                         val_shape.append(shape_loss)
@@ -661,6 +677,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         glyph_mask = val_batch["glyph_mask"].to(self.device)
         target_glyphs = val_batch["target_glyphs"].to(self.device)
         glyph_bboxes = val_batch["glyph_bboxes"].to(self.device)
+        codepoint_indices = val_batch["codepoint_indices"].to(self.device)
 
         b = glyph_mask.shape[0] // 2
         mask_v1 = glyph_mask[:b]
@@ -683,10 +700,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             if hidden.numel() < k:
                 continue
             slots = hidden[:k]
+            cp = codepoint_indices[i, slots]
             style = style_v1[i : i + 1].expand(k, -1)
             with torch.no_grad():
                 with self._autocast_context():
-                    pred = self.model.predict_layout(style, slots)
+                    pred = self.model.predict_layout(style, cp)
 
             for j, s in enumerate(slots):
                 glyph = target_glyphs[i, s, 0].cpu().numpy()  # (H, W)
@@ -725,7 +743,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         plt.close(fig)
 
         img_tensor = torch.from_numpy(img).permute(2, 0, 1)
-        self.writer.add_image("Validation/layout", img_tensor, self.global_step)
+        self.writer.add_image("Validation/layout_image", img_tensor, self.global_step)
 
     def visualize_shape(self):
         """Show original vs shape-reconstructed-and-placed glyphs."""
@@ -736,6 +754,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         images = val_batch["images"].to(self.device)
         glyph_mask = val_batch["glyph_mask"].to(self.device)
         target_glyphs = val_batch["target_glyphs"].to(self.device)
+        codepoint_indices = val_batch["codepoint_indices"].to(self.device)
 
         b = glyph_mask.shape[0] // 2
         mask_v1 = glyph_mask[:b]
@@ -757,12 +776,13 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             if hidden.numel() < k:
                 continue
             slots = hidden[:k]
+            cp = codepoint_indices[i, slots]
             style = style_v1[i : i + 1].expand(k, -1)
             lat = latents_v1[i : i + 1].expand(k, -1, -1)
             with torch.no_grad():
                 with self._autocast_context():
-                    pred_bbox = self.model.predict_layout(style, slots)
-                    pred_shape = self.model.reconstruct_shape(lat, slots)
+                    pred_bbox = self.model.predict_layout(style, cp)
+                    pred_shape = self.model.reconstruct_shape(lat, cp)
 
             orig = target_glyphs[i, slots].float()  # (k, 1, h, w)
             comps = [
@@ -775,7 +795,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         if rows:
             montage = torch.cat(rows, dim=1)
             self.writer.add_image(
-                "Validation/shape", montage.clamp(0, 1), self.global_step
+                "Validation/shape_image", montage.clamp(0, 1), self.global_step
             )
 
     def visualize(self):
@@ -916,8 +936,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Spatial downsample ratio of the per-glyph encoder.")
     p.add_argument("--aggregation-heads", type=int, default=8,
                    help="Attention heads in the cross-glyph aggregator.")
-    p.add_argument("--mask-probability", type=float, default=0.5,
-                   help="Probability a glyph is masked out of a contrastive view.")
+    p.add_argument("--glyph-sample-size", type=int, default=32,
+                   help="Number of glyphs sampled per font per step "
+                        "(split into two disjoint views for contrastive learning).")
     p.add_argument("--layout-samples", type=int, default=4,
                    help="Hidden glyphs whose bounding box is predicted per view.")
     p.add_argument("--layout-weight", type=float, default=1.0,
