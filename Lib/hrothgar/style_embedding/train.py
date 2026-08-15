@@ -113,7 +113,7 @@ def _layout_loss(
 def _shape_loss(
     model: FontStyleEmbedder,
     loss_fn,
-    style: torch.Tensor,
+    latents: torch.Tensor,
     glyph_mask: torch.Tensor,
     shape_targets: torch.Tensor,
     num_samples: int,
@@ -123,25 +123,25 @@ def _shape_loss(
     Args:
         model: the style embedder (provides ``reconstruct_shape``).
         loss_fn: callable ``(pred, target) -> scalar`` in [0, 1] image space.
-        style: ``(B, F)`` summary vectors for one contrastive view.
+        latents: ``(B, K, F)`` style tokens for one contrastive view.
         glyph_mask: ``(B, G)`` boolean, ``True`` = visible.
         shape_targets: ``(B, G, 1, H, W)`` bbox-normalized square targets.
         num_samples: number of hidden glyphs to reconstruct per font.
     """
-    b = style.shape[0]
+    b = latents.shape[0]
     hidden = ~glyph_mask  # (B, G)
     probs = hidden.float() + 1e-8
     probs = probs / probs.sum(dim=1, keepdim=True)
     sampled = torch.multinomial(probs, num_samples=num_samples, replacement=True)
 
     font_idx = (
-        torch.arange(b, device=style.device)
+        torch.arange(b, device=latents.device)
         .unsqueeze(1)
         .expand(b, num_samples)
         .reshape(-1)
     )
     slots = sampled.reshape(-1)
-    recon = model.reconstruct_shape(style[font_idx], slots)
+    recon = model.reconstruct_shape(latents[font_idx], slots)
     targets = shape_targets[font_idx, slots]
     return loss_fn(recon.float(), targets.float())
 
@@ -381,7 +381,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
 
         with self._autocast_context():
-            _embedding, projection, predicted_tags, category_logits = self.model(
+            _embedding, projection, predicted_tags, category_logits, latents = self.model(
                 images, glyph_mask=glyph_mask
             )
 
@@ -422,11 +422,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 shape_loss = 0.5 * (
                     _shape_loss(
                         self.model, self.shape_loss_fn,
-                        _embedding[:b], glyph_mask[:b], shape_targets, k
+                        latents[:b], glyph_mask[:b], shape_targets, k
                     )
                     + _shape_loss(
                         self.model, self.shape_loss_fn,
-                        _embedding[b:], glyph_mask[b:], shape_targets, k
+                        latents[b:], glyph_mask[b:], shape_targets, k
                     )
                 )
                 loss = loss + self.loss_weights.shape * shape_loss
@@ -501,7 +501,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
 
                 with self._autocast_context():
-                    _emb, projection, predicted_tags, category_logits = self.model(
+                    _emb, projection, predicted_tags, category_logits, latents = self.model(
                         images, glyph_mask=glyph_mask
                     )
                     _loss, loss_info = compute_losses(
@@ -537,11 +537,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         shape_loss = 0.5 * (
                             _shape_loss(
                                 self.model, self.shape_loss_fn,
-                                _emb[:b], glyph_mask[:b], shape_targets, k
+                                latents[:b], glyph_mask[:b], shape_targets, k
                             )
                             + _shape_loss(
                                 self.model, self.shape_loss_fn,
-                                _emb[b:], glyph_mask[b:], shape_targets, k
+                                latents[b:], glyph_mask[b:], shape_targets, k
                             )
                         )
                         val_shape.append(shape_loss)
@@ -667,7 +667,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
         with torch.no_grad():
             with self._autocast_context():
-                embedding, _proj, _tags, _cat = self.model(
+                embedding, _proj, _tags, _cat, _latents = self.model(
                     images, glyph_mask=glyph_mask
                 )
         style_v1 = embedding[:b]
@@ -725,7 +725,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         plt.close(fig)
 
         img_tensor = torch.from_numpy(img).permute(2, 0, 1)
-        self.writer.add_image("layout", img_tensor, self.global_step)
+        self.writer.add_image("Validation/layout", img_tensor, self.global_step)
 
     def visualize_shape(self):
         """Show original vs shape-reconstructed-and-placed glyphs."""
@@ -742,10 +742,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
         with torch.no_grad():
             with self._autocast_context():
-                embedding, _proj, _tags, _cat = self.model(
+                embedding, _proj, _tags, _cat, latents = self.model(
                     images, glyph_mask=glyph_mask
                 )
         style_v1 = embedding[:b]
+        latents_v1 = latents[:b]
 
         n_fonts = min(2, b)
         k = 6
@@ -757,10 +758,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 continue
             slots = hidden[:k]
             style = style_v1[i : i + 1].expand(k, -1)
+            lat = latents_v1[i : i + 1].expand(k, -1, -1)
             with torch.no_grad():
                 with self._autocast_context():
                     pred_bbox = self.model.predict_layout(style, slots)
-                    pred_shape = self.model.reconstruct_shape(style, slots)
+                    pred_shape = self.model.reconstruct_shape(lat, slots)
 
             orig = target_glyphs[i, slots].float()  # (k, 1, h, w)
             comps = [
@@ -773,7 +775,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         if rows:
             montage = torch.cat(rows, dim=1)
             self.writer.add_image(
-                "shape", montage.clamp(0, 1), self.global_step
+                "Validation/shape", montage.clamp(0, 1), self.global_step
             )
 
     def visualize(self):
@@ -794,7 +796,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
         with torch.no_grad():
             with self._autocast_context():
-                _emb, _proj, predicted_tags, category_logits = self.model(
+                _emb, _proj, predicted_tags, category_logits, _latents = self.model(
                     images_v1, glyph_mask=glyph_mask_v1
                 )
 

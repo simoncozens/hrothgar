@@ -29,7 +29,7 @@ class FontStyleEmbedderConfig:
     input_codepoints: list[int] = field(
         default_factory=lambda: list(DEFAULT_INPUT_CODEPOINTS)
     )
-    glyph_size: int = 64
+    glyph_size: int = 128
 
     # CNN encoder.
     encoder_base_channels: int = 32
