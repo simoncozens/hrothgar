@@ -56,6 +56,12 @@ class FontStyleEmbedderConfig:
     shape_codepoint_dim: int = 64
     shape_samples: int = 4
 
+    # When True, the shape head additionally conditions on a per-font spatial
+    # style map (mean-pooled per-glyph CNN features) instead of only the pooled
+    # global style tokens, so it can reproduce spatially-varying fine detail
+    # (terminals, curve squareness).
+    use_spatial_style: bool = False
+
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
 
