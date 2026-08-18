@@ -1,7 +1,7 @@
 """Font style embedding module.
 
-Provides a ``FontStyleEmbedder`` that renders short phrases in a font and
-produces a compact global style embedding.  The embedding is trained with
+Provides a ``FontStyleEmbedder`` that renders a fixed set of glyphs in a font
+and produces a compact global style embedding.  The embedding is trained with
 contrastive and tag-prediction objectives, making it suitable for:
 
 - Similar-font search

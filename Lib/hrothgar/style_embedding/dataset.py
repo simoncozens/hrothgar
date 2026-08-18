@@ -21,6 +21,7 @@ from hrothgar.dataset import DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
+from hrothgar.style_embedding.render_utils import render_glyph
 
 
 # Canonical style-category and theme tags used for tag-weighted
@@ -268,7 +269,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             half_b = perm[half:]
 
             for j, cp_idx in enumerate(idx):
-                glyph = _render_glyph(font, self._input_codepoints[cp_idx], size)
+                glyph = render_glyph(font, self._input_codepoints[cp_idx], size)
                 glyphs[i, j, 0] = glyph
                 glyph_bboxes[i, j] = _ink_bbox(glyph, size)
                 shape_targets[i, j, 0] = _normalize_shape(glyph, size)
@@ -360,13 +361,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             result["text_embeddings"] = torch.stack(text_embs)  # (B, D)
 
         return result
-
-
-def _render_glyph(font: GoogleFont, codepoint: int, size: int) -> torch.Tensor:
-    """Render a single glyph to a ``(size, size)`` greyscale tensor in [0, 1]."""
-    arr = font.render(codepoint, size=size)  # (3, size, size) float32 [0, 1]
-    gray = arr[0].copy() if arr.ndim == 3 else arr
-    return torch.from_numpy(gray)
 
 
 def _ink_bbox(glyph: torch.Tensor, size: int) -> torch.Tensor:

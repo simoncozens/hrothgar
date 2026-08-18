@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from hrothgar.googlefonts import Font
 from hrothgar.style_embedding.config import FontStyleEmbedderConfig
 from hrothgar.utils import SaveLoadModel
 
@@ -433,6 +434,56 @@ class FontStyleEmbedder(SaveLoadModel):
         """Encode glyph sets into the summary style embedding."""
         summary, _, _ = self.encode_with_tokens(images, glyph_mask=glyph_mask)
         return self.enc_dropout(summary)
+
+    def compute_embedding(
+        self,
+        font: Font,
+        device: Optional[torch.device] = None,
+        axis_position: Optional[list[float]] = None,
+    ) -> torch.Tensor:
+        """Render a font's full input set and return its style embedding.
+
+        This is the single source of truth for turning a font into the vector
+        consumed by downstream tasks (similarity search, tag prediction, and
+        the AR generator).  It renders the same glyph set and applies the same
+        rendering logic used by the training dataset, so the two can never
+        drift apart.
+
+        Args:
+            font: Any ``Font`` (e.g. ``GoogleFont``) exposing ``render``.
+            device: Optional device to run the forward pass on.  If ``None``,
+                the model's current device is used.
+            axis_position: Optional variable-font axis values passed through
+                to ``font.render``.
+
+        Returns:
+            ``(encoder_feature_dim,)`` summary embedding on CPU.  In eval mode
+            this is the summary vector without dropout, matching what the AR
+            dataset stores as the generator's style input.
+        """
+        from hrothgar.style_embedding.render_utils import render_input_set
+
+        images = render_input_set(
+            font,
+            self.config.input_codepoints,
+            self.config.glyph_size,
+            axis_position=axis_position,
+        ).unsqueeze(0)  # (1, G, 1, H, W)
+
+        # ``Font.render`` silently returns an all-white image on failure, so
+        # surface blank glyphs here so callers (e.g. the AR dataset) can apply
+        # their unrenderable-font fallback instead of embedding blank space.
+        blank = images.amin(dim=(-2, -1)) > 0.995  # (1, G, 1)
+        if bool(blank.any()):
+            cp_idx = int(blank.squeeze(0).squeeze(1).nonzero()[0].item())
+            cp = self.config.input_codepoints[cp_idx]
+            raise ValueError(f"blank glyph {chr(cp)!r} (U+{cp:04X}) for {font.path}")
+
+        if device is not None:
+            images = images.to(device)
+
+        with torch.no_grad():
+            return self.encode(images).squeeze(0).cpu()
 
     def predict_layout(
         self,

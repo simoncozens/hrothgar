@@ -28,13 +28,7 @@ from hrothgar.ar.style_sampling import (
 from hrothgar.dataset import Dataset, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont
-from hrothgar.render import render_phrase
 from hrothgar.style_embedding.model import FontStyleEmbedder
-
-
-# Phrase rendered to produce the font-level style embedding.  This is
-# the same input the FontStyleEmbedder was trained on.
-_EMBEDDING_PHRASE = "THE quick brown fox jumps over the lazy dog. 1234567890"
 
 
 class _OversampledTargetDataset(Dataset):
@@ -112,7 +106,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
     def _precompute_font_embeddings(
         self, embedder: FontStyleEmbedder, device: torch.device
     ) -> None:
-        """Render a phrase for each font and encode it into a style vector."""
+        """Encode each font's full input glyph set into a style vector."""
         all_fonts = self.train_fonts + self.test_fonts
         if not all_fonts:
             return
@@ -122,28 +116,14 @@ class ARPhase1DatasetMaker(DatasetMaker):
         print("Precomputing font-level style embeddings for all fonts...")
         for font in tqdm.tqdm(all_fonts):
             try:
-                image = render_phrase(
-                    font.path,
-                    _EMBEDDING_PHRASE,
-                    size=embedder.config.phrase_font_size,
-                    width=embedder.config.phrase_width,
-                    height=embedder.config.phrase_height,
-                )
+                embedding = embedder.compute_embedding(font, device=device)
             except Exception as exc:
                 print(
-                    f"WARNING: Failed to render embedding phrase for "
+                    f"WARNING: Failed to render embedding for "
                     f"{font.family!r} ({font.path}): {exc}"
                 )
-                image = None
-
-            if image is not None:
-                # render_phrase returns RGBA; FontStyleEmbedder expects RGB.
-                image = image[:, :, :3]
-                tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0)
-                tensor = tensor.to(device, dtype=torch.float32) / 255.0
-                with torch.no_grad():
-                    embedding = embedder.encode(tensor).squeeze(0).cpu()
-                self._font_embedding[font.path] = embedding
+                continue
+            self._font_embedding[font.path] = embedding
 
         # If any font couldn't be rendered, use the mean of available
         # embeddings as a fallback so training doesn't crash.
