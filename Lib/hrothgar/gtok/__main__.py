@@ -26,6 +26,7 @@ import torch
 
 from hrothgar.googlefonts import find_google_font_by_basename
 from hrothgar.gtok.model import load_model
+from hrothgar.gtok.preprocess import crop_to_ink
 from hrothgar.utils import pick_device
 
 
@@ -128,10 +129,11 @@ def main() -> None:
         print(f"Rendering character {chr(char)!r} ({codepoint})")
         rendered = font.render(char, size=image_size)
 
-    # rendered is (3, H, W) float32
-    input_tensor = torch.tensor(rendered, dtype=torch.float32, device=device).unsqueeze(
-        0
+    # rendered is (3, H, W) float32; normalize to the ink bbox (GTok input policy).
+    rendered_tensor = crop_to_ink(
+        torch.tensor(rendered, dtype=torch.float32, device=device), image_size
     )
+    input_tensor = rendered_tensor.unsqueeze(0)
 
     with torch.no_grad():
         reconstructed_tensor, _ = model(input_tensor)

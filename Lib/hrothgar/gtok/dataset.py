@@ -21,6 +21,7 @@ from torch.utils.data import (
 )
 
 from hrothgar.dataset import LATIN_CORE, DatasetMaker
+from hrothgar.gtok.preprocess import crop_to_ink
 
 # Dataset-level oversampling policy for underperforming style buckets.
 # Keep this in source (not CLI args) so training setup is reproducible from code.
@@ -316,13 +317,13 @@ class GTokDatasetMaker(DatasetMaker):
             axis_pos = item["axis_position"]
             if self.render_time_augmentation:
                 axis_pos = font.random_axis_position()
-            renderings.append(
-                torch.tensor(
-                    font.render(
-                        item["char"], size=self.image_size, axis_position=axis_pos
-                    )
-                )
+            rendered = torch.tensor(
+                font.render(
+                    item["char"], size=self.image_size, axis_position=axis_pos
+                ),
+                dtype=torch.float32,
             )
+            renderings.append(crop_to_ink(rendered, self.image_size))
         renderings = torch.stack(renderings)
         descriptions = [
             item["font"].description_with_tags_and_display() for item in batch
