@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from glyphloss import GlyphReconstructionLoss
+from hrothgar.glyphloss_curvature import CurvatureWeightedGlyphLoss
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok import compute_gtok_loss
 from hrothgar.gtok.config import GtokConfig, GtokLossWeights
@@ -46,6 +47,7 @@ class GtokTrainingLoop(TrainingLoop):
     def post_init(self, train_args):
         gtok_config_kwargs = {
             "image_size": train_args.image_size,
+            "bidirectional_decoder": getattr(train_args, "bidirectional_decoder", False),
         }
         config = GtokConfig(**gtok_config_kwargs)
         config.save_sidecar(train_args.model_path)
@@ -115,7 +117,23 @@ class GtokTrainingLoop(TrainingLoop):
                     "skipping targeted validation."
                 )
         self.perceptual_loss_fn = None  # VGG().to(self.device)
-        self.glyphloss_fn = GlyphReconstructionLoss(lambda_pixel=0.0).to(self.device)
+        spectral_weight = getattr(train_args, "glyphloss_spectral_weight", 2.5)
+        curvature_weight = getattr(train_args, "curvature_weight", 20.0)
+        if curvature_weight > 0:
+            self.glyphloss_fn = CurvatureWeightedGlyphLoss(
+                k=curvature_weight,
+                lambda_pixel=0.0,
+                lambda_spectral=spectral_weight,
+            ).to(self.device)
+            print(
+                "Using curvature-weighted glyphloss "
+                f"(k={curvature_weight}, lambda_spectral={spectral_weight})"
+            )
+        else:
+            self.glyphloss_fn = GlyphReconstructionLoss(
+                lambda_pixel=0.0, lambda_spectral=spectral_weight
+            ).to(self.device)
+            print(f"Using glyphloss (lambda_spectral={spectral_weight})")
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(self.device)
         self.lpips = LPIPS().to(self.device)
         self.model = model
@@ -346,6 +364,36 @@ if __name__ == "__main__":
             "Exclude fonts with display_score() above this threshold. "
             "Display fonts have extreme stylistic variation that a shared "
             "codebook struggles to represent.  Set to 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--curvature-weight",
+        type=float,
+        default=20.0,
+        help=(
+            "Curvature upweighting for the glyphloss instance (k in 1 + k·κ). "
+            "Amplifies corners/terminals relative to straight edges. "
+            "Set to 0 to use a plain (non-curvature-weighted) glyphloss."
+        ),
+    )
+    parser.add_argument(
+        "--glyphloss-spectral-weight",
+        type=float,
+        default=2.5,
+        help=(
+            "Frequency (spectral) term weight for the glyphloss instance. "
+            "The installed glyphloss defaults to 1.5; 2.5 upweights "
+            "high-frequency edge/terminal detail."
+        ),
+    )
+    parser.add_argument(
+        "--bidirectional-decoder",
+        action="store_true",
+        help=(
+            "Use a bidirectional (non-causal) ViT decoder for reconstruction. "
+            "The causal decoder was a leftover from sequential AR decoding; "
+            "MaskGIT passes the full token grid at once, so bidirectional "
+            "context is safe and typically improves fine-detail fidelity."
         ),
     )
     args = parser.parse_args()

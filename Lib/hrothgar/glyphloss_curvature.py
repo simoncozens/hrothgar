@@ -1,4 +1,4 @@
-"""Curvature-weighted glyph reconstruction loss.
+"""Curvature-weighted glyph reconstruction loss (shared).
 
 ``glyphloss`` concentrates on the anti-aliased edge (grey pixels) and penalises
 edge *sharpness* (gradient magnitude) and *orientation* (gradient direction), but
@@ -30,7 +30,7 @@ def curvature_mask(target: torch.Tensor, mag_thresh: float = 0.05) -> torch.Tens
     """Return normalised level-set curvature κ ∈ [0, 1] for the target.
 
     Args:
-        target: ``(B, C, H, W)`` glyph image in [0, 1] (C = 1 for greyscale).
+        target: ``(B, C, H, W)`` glyph image in [0, 1].
         mag_thresh: gradient-magnitude floor for "on the contour" gating.
 
     Returns:

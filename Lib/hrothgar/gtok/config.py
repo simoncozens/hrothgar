@@ -27,6 +27,13 @@ class GtokConfig:
     vit_dropout: float = 0.0
     vit_attention_dropout: float = 0.0
 
+    # When True, the ViT image decoder uses full (non-causal) self-attention
+    # instead of the upstream causal transformer.  The causal decoder was a
+    # leftover from sequential AR token decoding; MaskGIT passes the full token
+    # grid at once, so reconstruction no longer needs the causal mask and can
+    # use bidirectional context for better fine-detail fidelity.
+    bidirectional_decoder: bool = False
+
     # Quantization parameters
     quantizer_codebook_size: int = 4096  # Size of the codebook
     quantizer_beta: float = 0.25  # Commitment loss weight

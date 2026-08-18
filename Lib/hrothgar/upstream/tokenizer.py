@@ -251,12 +251,16 @@ class ViTDecoder(nn.Module):
         heads: int,
         mlp_dim: int,
         dim_head: int = 64,
+        bidirectional: bool = False,
     ) -> None:
         super().__init__()
 
         de_pos_embedding = get_2d_sincos_pos_embed(dim, (patch_num, patch_num))
 
-        self.transformer = CausalTransformer(dim, depth, heads, dim_head, mlp_dim)
+        if bidirectional:
+            self.transformer = Transformer(dim, depth, heads, dim_head, mlp_dim)
+        else:
+            self.transformer = CausalTransformer(dim, depth, heads, dim_head, mlp_dim)
         self.de_pos_embedding = nn.Parameter(
             torch.from_numpy(de_pos_embedding).float().unsqueeze(0), requires_grad=False
         )

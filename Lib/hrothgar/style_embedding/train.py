@@ -296,7 +296,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         # Edge/contour-focused loss for the bbox-normalized shape head.
         curvature_weight = getattr(train_args, "curvature_weight", 0.0)
         if curvature_weight > 0:
-            from hrothgar.style_embedding.curvature_loss import CurvatureWeightedGlyphLoss
+            from hrothgar.glyphloss_curvature import CurvatureWeightedGlyphLoss
             self.shape_loss_fn = CurvatureWeightedGlyphLoss(k=curvature_weight)
             print(f"Using curvature-weighted glyphloss (k={curvature_weight})")
         else:

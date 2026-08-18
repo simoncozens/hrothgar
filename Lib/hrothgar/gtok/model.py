@@ -487,14 +487,14 @@ class GtokModel(SaveLoadModel):
             config.quantizer_code_dim, config.vit_hidden_dim
         )
 
-        # ViT Decoder: causal transformer (upstream GAR-Font implementation).
+        # ViT Decoder: causal or bidirectional transformer (upstream GAR-Font).
         self.vit_decoder = UpstreamViTDecoder(
             patch_num=self.token_grid_height,
             dim=config.vit_hidden_dim,
             depth=config.vit_num_layers,
             heads=config.vit_num_heads,
             mlp_dim=config.vit_mlp_dim,
-            dim_head=config.vit_hidden_dim // config.vit_num_heads,
+            bidirectional=config.bidirectional_decoder,
         )
         # Reverse patch projection: ViT output → CNN feature channels.
         self.proj_unpatch = nn.Conv2d(
