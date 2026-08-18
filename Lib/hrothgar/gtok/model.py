@@ -566,10 +566,10 @@ class GtokModel(SaveLoadModel):
         ).to(next(self.parameters()).device)
         print(f"Font classifier: {num_classes} classes — {unique}")
 
-    def load(self, path: str, device: torch.device) -> None:
+    def load(self, path: str, device: torch.device, strict: bool=False) -> None:
         """Load weights with ``strict=False`` to tolerate new heads."""
         state_dict = torch.load(path, map_location=device, weights_only=True)
-        self.load_state_dict(state_dict, strict=False)
+        self.load_state_dict(state_dict, strict=strict)
 
     def encode(
         self,
