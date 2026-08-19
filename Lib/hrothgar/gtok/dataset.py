@@ -21,7 +21,7 @@ from torch.utils.data import (
 )
 
 from hrothgar.dataset import LATIN_CORE, DatasetMaker
-from hrothgar.gtok.preprocess import crop_to_ink
+from hrothgar.glyph_rendering import crop_to_ink
 
 # Dataset-level oversampling policy for underperforming style buckets.
 # Keep this in source (not CLI args) so training setup is reproducible from code.

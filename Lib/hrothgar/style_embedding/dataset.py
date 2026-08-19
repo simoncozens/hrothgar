@@ -21,6 +21,7 @@ from hrothgar.dataset import DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
+from hrothgar.glyph_rendering import crop_to_ink, ink_bbox
 from hrothgar.style_embedding.render_utils import render_glyph
 
 
@@ -271,8 +272,8 @@ class FontStyleDatasetMaker(DatasetMaker):
             for j, cp_idx in enumerate(idx):
                 glyph = render_glyph(font, self._input_codepoints[cp_idx], size)
                 glyphs[i, j, 0] = glyph
-                glyph_bboxes[i, j] = _ink_bbox(glyph, size)
-                shape_targets[i, j, 0] = _normalize_shape(glyph, size)
+                glyph_bboxes[i, j] = ink_bbox(glyph.unsqueeze(0), size)
+                shape_targets[i, j, 0] = crop_to_ink(glyph.unsqueeze(0), size)[0]
                 codepoint_indices[i, j] = cp_idx
 
             mask_a[i, half_a] = True
@@ -361,46 +362,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             result["text_embeddings"] = torch.stack(text_embs)  # (B, D)
 
         return result
-
-
-def _ink_bbox(glyph: torch.Tensor, size: int) -> torch.Tensor:
-    """Return the glyph's ink bounding box as normalized ``(x0, y0, x1, y1)``.
-
-    Ink is rendered near 0.0 on a white (1.0) background, so we threshold at
-    0.5 to recover the glyph extent.  Blank glyphs return an all-zero box.
-    """
-    ink = glyph < 0.5
-    if not ink.any():
-        return torch.zeros(4)
-    ys, xs = ink.nonzero(as_tuple=True)
-    x0 = xs.min().float()
-    x1 = xs.max().float()
-    y0 = ys.min().float()
-    y1 = ys.max().float()
-    return torch.tensor([x0, y0, x1, y1], dtype=torch.float32) / size
-
-
-def _normalize_shape(glyph: torch.Tensor, size: int) -> torch.Tensor:
-    """Crop a glyph to its ink bbox and stretch it to a ``(size, size)`` square.
-
-    This removes absolute placement/scale while keeping the within-bbox shape.
-    Aspect ratio is intentionally *not* preserved — the layout head carries the
-    width/height that this normalization discards.
-    """
-    ink = glyph < 0.5
-    if not ink.any():
-        return torch.ones(size, size)
-    ys, xs = ink.nonzero(as_tuple=True)
-    x0 = int(xs.min().item())
-    x1 = int(xs.max().item())
-    y0 = int(ys.min().item())
-    y1 = int(ys.max().item())
-    crop = glyph[y0 : y1 + 1, x0 : x1 + 1]
-    if crop.numel() == 0:
-        return torch.ones(size, size)
-    crop = crop[None, None, :, :]  # (1, 1, h, w)
-    out = F.interpolate(crop, size=(size, size), mode="bilinear", align_corners=False)
-    return out[0, 0]  # (size, size)
 
 
 class _ClassBalancedBatchSampler(BatchSampler):

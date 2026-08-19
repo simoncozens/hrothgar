@@ -25,8 +25,8 @@ import numpy as np
 import torch
 
 from hrothgar.googlefonts import find_google_font_by_basename
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.gtok.model import load_model
-from hrothgar.gtok.preprocess import crop_to_ink
 from hrothgar.utils import pick_device
 
 

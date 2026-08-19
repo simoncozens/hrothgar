@@ -33,7 +33,7 @@ class ARModelConfig:
     # Metric conditioning (baseline / x-height / width alignment).
     use_metrics: bool = True
     metric_embedding_hidden_dim: int = 128
-    width_head_hidden_dim: int = 128
+    bbox_head_hidden_dim: int = 128
 
     # Training metadata — used at inference to validate inputs.
     # None means "trained on full Latin Core" (the default).

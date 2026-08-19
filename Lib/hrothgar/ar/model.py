@@ -14,8 +14,8 @@ This module implements the vision-only stage of the glyph generator:
 Metric conditioning:
 - ``MetricEmbedder`` injects font vertical metrics + per-glyph advance
   width into the conditioning map for baseline/x-height/width alignment.
-- ``GlyphWidthHead`` predicts advance width from token embeddings as an
-  auxiliary training signal.
+- ``GlyphBBoxHead`` predicts the ink bounding box (width, height) from token
+  embeddings as an auxiliary signal for denormalization.
 
 NFA/GA adaptation:
 - ``enable_nfa_mode()`` freezes the model and injects LoRA adapters into
@@ -61,7 +61,7 @@ class ARModelOutput:
     soft_token_embeddings: torch.Tensor
     target_token_indices: Optional[torch.Tensor]
     token_mask: Optional[torch.Tensor] = None
-    predicted_width: Optional[torch.Tensor] = None
+    predicted_bbox: Optional[torch.Tensor] = None
 
 
 # ---------------------------------------------------------------------------
@@ -90,8 +90,8 @@ class MetricEmbedder(nn.Module):
         return self.net(metrics)
 
 
-class GlyphWidthHead(nn.Module):
-    """Predict glyph advance width from token embeddings."""
+class GlyphBBoxHead(nn.Module):
+    """Predict the ink bbox ``(width, height)`` from token embeddings."""
 
     def __init__(
         self,
@@ -102,12 +102,12 @@ class GlyphWidthHead(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, 2),
         )
 
     def forward(self, pooled_embeddings: torch.Tensor) -> torch.Tensor:
-        """Predict advance width ``(B,)`` from ``(B, input_dim)``."""
-        return self.net(pooled_embeddings).squeeze(-1)
+        """Predict normalized ``(width, height)`` ``(B, 2)``."""
+        return self.net(pooled_embeddings)
 
 
 # ---------------------------------------------------------------------------
@@ -176,16 +176,16 @@ class ARModel(SaveLoadModel):
 
         # Metric conditioning.
         self.metric_embedder: Optional[MetricEmbedder] = None
-        self.width_head: Optional[GlyphWidthHead] = None
+        self.bbox_head: Optional[GlyphBBoxHead] = None
         if config.use_metrics:
             self.metric_embedder = MetricEmbedder(
                 input_dim=6,
                 hidden_dim=config.metric_embedding_hidden_dim,
                 output_dim=config.encoder_feature_dim,
             )
-            self.width_head = GlyphWidthHead(
+            self.bbox_head = GlyphBBoxHead(
                 input_dim=self.codebook_dim,
-                hidden_dim=config.width_head_hidden_dim,
+                hidden_dim=config.bbox_head_hidden_dim,
             )
 
         self._gtok_frozen: bool = False
@@ -468,10 +468,10 @@ class ARModel(SaveLoadModel):
             logits, temperature=1.0
         )
 
-        predicted_width: Optional[torch.Tensor] = None
-        if self.width_head is not None:
+        predicted_bbox: Optional[torch.Tensor] = None
+        if self.bbox_head is not None:
             pooled = soft_token_embeddings.mean(dim=1)
-            predicted_width = self.width_head(pooled)
+            predicted_bbox = self.bbox_head(pooled)
 
         return ARModelOutput(
             logits=logits,
@@ -479,7 +479,7 @@ class ARModel(SaveLoadModel):
             soft_token_embeddings=soft_token_embeddings,
             target_token_indices=target_token_indices,
             token_mask=token_mask,
-            predicted_width=predicted_width,
+            predicted_bbox=predicted_bbox,
         )
 
     @torch.no_grad()
@@ -521,17 +521,17 @@ class ARModel(SaveLoadModel):
             logits, temperature=1.0
         )
 
-        predicted_width: Optional[torch.Tensor] = None
-        if self.width_head is not None:
+        predicted_bbox: Optional[torch.Tensor] = None
+        if self.bbox_head is not None:
             pooled = soft_token_embeddings.mean(dim=1)
-            predicted_width = self.width_head(pooled)
+            predicted_bbox = self.bbox_head(pooled)
 
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
             soft_token_embeddings=soft_token_embeddings,
             target_token_indices=predicted,
-            predicted_width=predicted_width,
+            predicted_bbox=predicted_bbox,
         )
 
     # ------------------------------------------------------------------
@@ -598,7 +598,7 @@ class ARModel(SaveLoadModel):
 
         allowed_missing_prefixes = [
             "gtok.", "token_decoder.", "lookahead_decoders.",
-            "metric_embedder.", "width_head.",
+            "metric_embedder.", "bbox_head.",
             # Obsolete glyph-level style path keys from old checkpoints.
             "style_encoder.", "style_dropout.", "aggregator.",
             "global_style_projection.",
@@ -640,8 +640,8 @@ class ARModel(SaveLoadModel):
             counts["metric_embedder"] = sum(
                 p.numel() for p in self.metric_embedder.parameters()
             )
-        if self.width_head is not None:
-            counts["width_head"] = sum(
-                p.numel() for p in self.width_head.parameters()
+        if self.bbox_head is not None:
+            counts["bbox_head"] = sum(
+                p.numel() for p in self.bbox_head.parameters()
             )
         return counts

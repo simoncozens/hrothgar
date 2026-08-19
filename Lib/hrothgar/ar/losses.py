@@ -19,7 +19,7 @@ class ARLossWeights:
     glyphloss: float = 1.0
     lookahead_cross_entropy: float = 0.1
     perceptual_lpips: float = 2.0
-    width_l1: float = 0.1
+    bbox_l1: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def compute_ar_loss(
     target_images: torch.Tensor,
     *,
     target_token_indices: Optional[torch.Tensor] = None,
-    target_widths: Optional[torch.Tensor] = None,
+    target_bbox: Optional[torch.Tensor] = None,
     weights: ARLossWeights = ARLossWeights(),
     lpips_metric: Optional[object] = None,
 ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
@@ -140,16 +140,16 @@ def compute_ar_loss(
     weighted_perceptual_lpips = weights.perceptual_lpips * perceptual_lpips
     weighted_glyphloss = weights.glyphloss * glyphloss
 
-    # Auxiliary width prediction loss.
-    width_l1 = torch.tensor(0.0, device=target_images.device)
-    weighted_width_l1 = torch.tensor(0.0, device=target_images.device)
+    # Auxiliary ink-bbox (width, height) prediction loss.
+    bbox_l1 = torch.tensor(0.0, device=target_images.device)
+    weighted_bbox_l1 = torch.tensor(0.0, device=target_images.device)
     if (
-        weights.width_l1 > 0
-        and target_widths is not None
-        and model_output.predicted_width is not None
+        weights.bbox_l1 > 0
+        and target_bbox is not None
+        and model_output.predicted_bbox is not None
     ):
-        width_l1 = F.l1_loss(model_output.predicted_width, target_widths)
-        weighted_width_l1 = weights.width_l1 * width_l1
+        bbox_l1 = F.l1_loss(model_output.predicted_bbox, target_bbox)
+        weighted_bbox_l1 = weights.bbox_l1 * bbox_l1
 
     total_loss = (
         weighted_token_cross_entropy
@@ -157,7 +157,7 @@ def compute_ar_loss(
         + weighted_pixel_l1
         + weighted_perceptual_lpips
         + weighted_glyphloss
-        + weighted_width_l1
+        + weighted_bbox_l1
     )
 
     token_accuracy = torch.tensor(0.0, device=target_images.device)
@@ -187,8 +187,8 @@ def compute_ar_loss(
         "weighted_pixel_l1": weighted_pixel_l1,
         "weighted_perceptual_lpips": weighted_perceptual_lpips,
         "weighted_glyphloss": weighted_glyphloss,
-        "width_l1": width_l1.detach(),
-        "weighted_width_l1": weighted_width_l1.detach(),
+        "bbox_l1": bbox_l1.detach(),
+        "weighted_bbox_l1": weighted_bbox_l1.detach(),
     }
     if maskgit_mask is not None:
         terms["n_masked"] = maskgit_mask.sum().float()

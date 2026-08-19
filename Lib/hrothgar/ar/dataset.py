@@ -27,6 +27,7 @@ from hrothgar.ar.style_sampling import (
 )
 from hrothgar.dataset import Dataset, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
+from hrothgar.glyph_rendering import bbox_size, crop_to_ink
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.style_embedding.model import FontStyleEmbedder
 
@@ -205,7 +206,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
         content_renderings = []
         descriptions = []
         all_metrics: list[torch.Tensor] = []
-        advance_widths: list[float] = []
+        bbox_sizes: list[torch.Tensor] = []
         font_embeddings: list[torch.Tensor] = []
         font_embedding_fallback = torch.zeros(1)  # will be overwritten
 
@@ -220,7 +221,10 @@ class ARPhase1DatasetMaker(DatasetMaker):
             def render_with_font(char):
                 return font.render(char, size=self.image_size, axis_position=axis_pos)
 
-            target_rendering = render_with_font(char)
+            target_rendering = render_with_font(char)  # numpy (3, size, size)
+            target_tensor = torch.tensor(target_rendering, dtype=torch.float32)
+            bbox_sizes.append(bbox_size(target_tensor, self.image_size))
+            target_renderings.append(crop_to_ink(target_tensor, self.image_size))
 
             # Content rendering fallback.
             if not _font_has_codepoint(
@@ -231,16 +235,19 @@ class ARPhase1DatasetMaker(DatasetMaker):
             content_render = reference_font.render(char, size=self.image_size)
             if _is_blank_rendering(content_render):
                 content_render = render_with_font(char)
-            content_renderings.append(torch.tensor(content_render))
+            content_renderings.append(
+                crop_to_ink(
+                    torch.tensor(content_render, dtype=torch.float32),
+                    self.image_size,
+                )
+            )
 
-            target_renderings.append(torch.tensor(target_rendering))
             descriptions.append(font.description_with_tags_and_display())
 
-            # Font-level metrics + advance width.
+            # Font-level metrics (advance width kept for conditioning).
             vm = font.vertical_metrics()
             gid_for_advance = hb.Font(font.hb_face).get_nominal_glyph(char)
             aw = font.advance_width(gid_for_advance) / upem if upem > 0 else 0.0
-            advance_widths.append(aw)
             all_metrics.append(torch.tensor([
                 float(vm["ascender"]) / upem if upem > 0 else 0.0,
                 float(vm["descender"]) / upem if upem > 0 else 0.0,
@@ -260,7 +267,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
             "font_style_embedding": torch.stack(font_embeddings),
             "description": descriptions,
             "metrics": torch.stack(all_metrics),
-            "advance_width": torch.tensor(advance_widths),
+            "bbox_size": torch.stack(bbox_sizes),
         }
 
 

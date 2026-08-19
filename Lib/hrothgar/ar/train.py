@@ -193,9 +193,9 @@ class MaskGITTrainingLoop(TrainingLoop):
         metrics = batch.get("metrics")
         if metrics is not None:
             metrics = metrics.to(self.device)
-        target_widths = batch.get("advance_width")
-        if target_widths is not None:
-            target_widths = target_widths.to(self.device)
+        target_bbox = batch.get("bbox_size")
+        if target_bbox is not None:
+            target_bbox = target_bbox.to(self.device)
 
         model_output = self.model(
             content_images,
@@ -210,7 +210,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             target_images,
             weights=self.loss_weights,
             lpips_metric=self.lpips,
-            target_widths=target_widths,
+            target_bbox=target_bbox,
         )
         return loss, loss_info
 
@@ -330,9 +330,9 @@ class MaskGITTrainingLoop(TrainingLoop):
                 batch_metrics = val_batch.get("metrics")
                 if batch_metrics is not None:
                     batch_metrics = batch_metrics.to(self.device)
-                val_target_widths = val_batch.get("advance_width")
-                if val_target_widths is not None:
-                    val_target_widths = val_target_widths.to(self.device)
+                val_target_bbox = val_batch.get("bbox_size")
+                if val_target_bbox is not None:
+                    val_target_bbox = val_target_bbox.to(self.device)
 
                 with self._autocast_context():
                     val_output = self.model(
@@ -346,7 +346,7 @@ class MaskGITTrainingLoop(TrainingLoop):
                     val_output,
                     val_target,
                     weights=self.loss_weights,
-                    target_widths=val_target_widths,
+                    target_bbox=val_target_bbox,
                     lpips_metric = self.lpips
                 )
                 recon = torch.clamp(val_output.reconstructed_images, 0.0, 1.0).float()
