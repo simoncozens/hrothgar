@@ -23,7 +23,7 @@ class ARModelConfig:
     decoder_attention_dropout: float = 0.1
 
     # Dropout applied to the font style embedding (per-batch).
-    font_style_dropout: float = 0.2
+    font_style_dropout: float = 0.5
 
     freeze_gtok: bool = True
 
