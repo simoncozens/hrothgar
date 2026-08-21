@@ -43,6 +43,15 @@ class FontStyleEmbedderConfig:
     style_latents: int = 16
     aggregation_heads: int = 8
 
+    # Pooling strategy: "attention" (structure-preserving), "gram"
+    # (texture, spatial-order destroyed), or "dual" (both, fused).  Gram and
+    # dual modes use a 1x1 channel projection down to ``gram_channels`` before
+    # computing the Gram matrix, then a linear map back to
+    # ``encoder_feature_dim``; dual concatenates both summaries and fuses them
+    # with a linear layer.
+    pooling: str = "attention"
+    gram_channels: int = 32
+
     # Glyph-layout head.  Predicts hidden glyphs' ink bounding boxes from the
     # summary vector + glyph-slot identity, forcing the summary to retain
     # typographic proportions (width / height / sidebearing / placement).
@@ -52,7 +61,7 @@ class FontStyleEmbedderConfig:
 
     # Shape head.  Reconstructs each hidden glyph's bbox-normalized square image
     # from the summary vector + glyph-slot identity.
-    use_shape: bool = True
+    use_shape: bool = False
     shape_codepoint_dim: int = 64
     shape_samples: int = 4
 

@@ -30,11 +30,11 @@ from hrothgar.utils import TrainingLoop, progress_values
 
 # ── Hyper-parameters ────────────────────────────────────────────────────────
 
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.999
 WEIGHT_DECAY = 1e-4
-GRAD_CLIP_NORM = 0.0
+GRAD_CLIP_NORM = 1.0
 
 
 # ── Tag discovery ───────────────────────────────────────────────────────────
@@ -223,6 +223,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             style_latents=getattr(train_args, "style_latents", 16),
             encoder_downsample=getattr(train_args, "encoder_downsample", 4),
             aggregation_heads=getattr(train_args, "aggregation_heads", 8),
+            pooling=getattr(train_args, "pooling", "attention"),
+            gram_channels=getattr(train_args, "gram_channels", 32),
             layout_samples=getattr(train_args, "layout_samples", 4),
             shape_samples=getattr(train_args, "shape_samples", 4),
             use_spatial_style=getattr(train_args, "use_spatial_style", False),
@@ -976,6 +978,11 @@ def _parse_args() -> argparse.Namespace:
                    help="Spatial downsample ratio of the per-glyph encoder.")
     p.add_argument("--aggregation-heads", type=int, default=8,
                    help="Attention heads in the cross-glyph aggregator.")
+    p.add_argument("--pooling", type=str, default="attention",
+                   choices=["attention", "gram", "dual"],
+                   help="Pooling strategy: attention (structure), gram (texture), or dual (both fused).")
+    p.add_argument("--gram-channels", type=int, default=32,
+                   help="Channel count for the 1x1 projection before the Gram matrix.")
     p.add_argument("--glyph-sample-size", type=int, default=32,
                    help="Number of glyphs sampled per font per step "
                         "(split into two disjoint views for contrastive learning).")

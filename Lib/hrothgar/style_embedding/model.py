@@ -308,15 +308,48 @@ class FontStyleEmbedder(SaveLoadModel):
             out_dim=config.encoder_feature_dim,
             downsample=config.encoder_downsample,
         )
-        self.glyph_pool = AttentionPool(
-            config.encoder_feature_dim,
-            config.per_glyph_tokens,
-        )
-        self.aggregator = PerceiverBlock(
-            config.encoder_feature_dim,
-            config.style_latents,
-            config.aggregation_heads,
-        )
+
+        # Gram pooling destroys spatial order, so the layout/shape heads
+        # (which reconstruct spatial structure) are unavailable in gram mode.
+        if config.pooling == "gram":
+            config.use_layout = False
+            config.use_shape = False
+
+        self.glyph_pool: Optional[AttentionPool] = None
+        self.aggregator: Optional[PerceiverBlock] = None
+        self.gram_proj: Optional[nn.Conv2d] = None
+        self.gram_embed: Optional[nn.Linear] = None
+        self.fusion: Optional[nn.Linear] = None
+
+        need_attention = config.pooling in ("attention", "dual")
+        need_gram = config.pooling in ("gram", "dual")
+
+        if need_attention:
+            self.glyph_pool = AttentionPool(
+                config.encoder_feature_dim,
+                config.per_glyph_tokens,
+            )
+            self.aggregator = PerceiverBlock(
+                config.encoder_feature_dim,
+                config.style_latents,
+                config.aggregation_heads,
+            )
+        if need_gram:
+            self.gram_proj = nn.Conv2d(
+                config.encoder_feature_dim, config.gram_channels, 1, bias=False
+            )
+            self.gram_embed = nn.Linear(
+                config.gram_channels * (config.gram_channels + 1) // 2,
+                config.encoder_feature_dim,
+            )
+            self.register_buffer(
+                "_gram_idx",
+                torch.triu_indices(config.gram_channels, config.gram_channels),
+            )
+        if config.pooling == "dual":
+            self.fusion = nn.Linear(
+                2 * config.encoder_feature_dim, config.encoder_feature_dim
+            )
 
         self.layout_head: Optional[LayoutHead] = None
         if config.use_layout:
@@ -398,33 +431,60 @@ class FontStyleEmbedder(SaveLoadModel):
         flat = images.flatten(0, 1)  # (B*G, 1, H, W)
         features = self.encoder(flat)  # (B*G, F, h', w')
 
-        # Per-font spatial style map: mean over visible glyphs' spatial features.
-        f, hs, ws = features.shape[1], features.shape[2], features.shape[3]
-        feat = features.reshape(b, g, f, hs, ws)  # (B, G, F, h', w')
-        if glyph_mask is not None:
-            mask = glyph_mask.reshape(b, g, 1, 1, 1).to(features.dtype)
-            spatial_style = (feat * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
-        else:
-            spatial_style = feat.mean(dim=1)  # (B, F, h', w')
+        pooling = self.config.pooling
+        attention_summary: Optional[torch.Tensor] = None
+        latents: Optional[torch.Tensor] = None
+        spatial_style: Optional[torch.Tensor] = None
+        gram_summary: Optional[torch.Tensor] = None
 
-        tokens = self.glyph_pool(features)  # (B*G, T, F)
-        tokens = tokens.reshape(
-            b, g * self.config.per_glyph_tokens, self.config.encoder_feature_dim
-        )
+        if pooling in ("attention", "dual"):
+            f, hs, ws = features.shape[1], features.shape[2], features.shape[3]
+            feat = features.reshape(b, g, f, hs, ws)
+            if glyph_mask is not None:
+                mask = glyph_mask.reshape(b, g, 1, 1, 1).to(features.dtype)
+                spatial_style = (feat * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+            else:
+                spatial_style = feat.mean(dim=1)  # (B, F, h', w')
 
-        key_padding_mask = None
-        if glyph_mask is not None:
-            # nn.MultiheadAttention key_padding_mask: True = ignore this token.
-            pad = ~glyph_mask  # (B, G)
-            key_padding_mask = (
-                pad.unsqueeze(2)
-                .expand(b, g, self.config.per_glyph_tokens)
-                .reshape(b, g * self.config.per_glyph_tokens)
+            tokens = self.glyph_pool(features)  # (B*G, T, F)
+            tokens = tokens.reshape(
+                b, g * self.config.per_glyph_tokens, self.config.encoder_feature_dim
             )
+            key_padding_mask = None
+            if glyph_mask is not None:
+                pad = ~glyph_mask
+                key_padding_mask = (
+                    pad.unsqueeze(2)
+                    .expand(b, g, self.config.per_glyph_tokens)
+                    .reshape(b, g * self.config.per_glyph_tokens)
+                )
+            latents = self.aggregator(tokens, key_padding_mask=key_padding_mask)
+            attention_summary = latents.mean(dim=1)  # (B, F)
 
-        latents = self.aggregator(tokens, key_padding_mask=key_padding_mask)
-        summary = latents.mean(dim=1)  # (B, F)
-        return summary, latents, spatial_style
+        if pooling in ("gram", "dual"):
+            k = self.config.gram_channels
+            proj = self.gram_proj(features)  # (B*G, K, h', w')
+            n = proj.shape[2] * proj.shape[3]
+            proj = proj.reshape(b, g, k, n)  # (B, G, K, N)
+            flat_proj = proj.reshape(b * g, k, n)
+            gram = torch.bmm(flat_proj, flat_proj.transpose(1, 2)) / n  # (B*G, K, K)
+            gram = gram.reshape(b, g, k, k)
+            if glyph_mask is not None:
+                mask = glyph_mask.to(gram.dtype).reshape(b, g, 1, 1)
+                gram = (gram * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+            else:
+                gram = gram.mean(dim=1)  # (B, K, K)
+            tri = gram[:, self._gram_idx[0], self._gram_idx[1]]  # (B, K(K+1)/2)
+            gram_summary = self.gram_embed(tri)  # (B, encoder_feature_dim)
+
+        if pooling == "dual":
+            summary = self.fusion(
+                torch.cat([attention_summary, gram_summary], dim=-1)
+            )
+            return summary, latents, spatial_style
+        if pooling == "gram":
+            return gram_summary, None, None
+        return attention_summary, latents, spatial_style
 
     def encode(
         self,
