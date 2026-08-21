@@ -66,9 +66,12 @@ class GtokConfig:
     def save_sidecar(self, model_path: Path) -> None:
         from dataclasses import asdict
 
+        from hrothgar.utils import git_short_sha
         config_path = Path(str(model_path).replace(".pth", ".conf.json"))
+        data = asdict(self)
+        data["git_sha"] = git_short_sha()
         with config_path.open("w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2, sort_keys=True)
+            json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
         print(f"Saved GTok config to {config_path}")
 

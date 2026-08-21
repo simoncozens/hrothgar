@@ -66,9 +66,12 @@ class UpscalerConfig:
         from pathlib import Path as _Path
         import json as _json
         from dataclasses import asdict as _asdict
+        from hrothgar.utils import git_short_sha
         config_path = _Path(str(model_path).replace('.pth', '.conf.json'))
+        data = _asdict(self)
+        data['git_sha'] = git_short_sha()
         with config_path.open('w', encoding='utf-8') as f:
-            _json.dump(_asdict(self), f, indent=2, sort_keys=True)
+            _json.dump(data, f, indent=2, sort_keys=True)
         print(f'Saved upscaler config to {config_path}')
 
     @classmethod
@@ -87,7 +90,9 @@ class UpscalerConfig:
             )
         with config_path.open('r', encoding='utf-8') as f:
             data = _json.load(f)
-        return cls(**data)
+        import dataclasses as _dc
+        known = {f.name for f in _dc.fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 class ResidualBlock(nn.Module):

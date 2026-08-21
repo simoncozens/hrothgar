@@ -21,7 +21,6 @@ from hrothgar.dataset import DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
-from hrothgar.glyph_rendering import crop_to_ink, ink_bbox
 from hrothgar.style_embedding.render_utils import render_glyph
 
 
@@ -242,7 +241,6 @@ class FontStyleDatasetMaker(DatasetMaker):
         Returns:
             - ``images``: ``(2B, s, 1, H, W)`` — two disjoint masked views stacked.
             - ``glyph_mask``: ``(2B, s)`` boolean visibility mask.
-            - ``codepoint_indices``: ``(B, s)`` glyph-vocabulary index per sample.
             - tags / category / family / tag_vectors / text_embeddings for the
               B fonts (duplicated to 2B by the training loop).
         """
@@ -253,9 +251,6 @@ class FontStyleDatasetMaker(DatasetMaker):
         size = self._glyph_size
 
         glyphs = torch.zeros(b, s, 1, size, size, dtype=torch.float32)
-        glyph_bboxes = torch.zeros(b, s, 4, dtype=torch.float32)
-        shape_targets = torch.zeros(b, s, 1, size, size, dtype=torch.float32)
-        codepoint_indices = torch.zeros(b, s, dtype=torch.long)
         mask_a = torch.zeros(b, s, dtype=torch.bool)
         mask_b = torch.zeros(b, s, dtype=torch.bool)
 
@@ -272,9 +267,6 @@ class FontStyleDatasetMaker(DatasetMaker):
             for j, cp_idx in enumerate(idx):
                 glyph = render_glyph(font, self._input_codepoints[cp_idx], size)
                 glyphs[i, j, 0] = glyph
-                glyph_bboxes[i, j] = ink_bbox(glyph.unsqueeze(0), size)
-                shape_targets[i, j, 0] = crop_to_ink(glyph.unsqueeze(0), size)[0]
-                codepoint_indices[i, j] = cp_idx
 
             mask_a[i, half_a] = True
             mask_b[i, half_b] = True
@@ -340,10 +332,6 @@ class FontStyleDatasetMaker(DatasetMaker):
         result: dict = {
             "images": images,
             "glyph_mask": glyph_mask,
-            "codepoint_indices": codepoint_indices,
-            "target_glyphs": glyphs,
-            "glyph_bboxes": glyph_bboxes,
-            "shape_targets": shape_targets,
             "tags": tags,
             "tag_masks": tag_masks,
             "category": categories,

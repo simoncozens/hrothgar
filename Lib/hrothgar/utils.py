@@ -29,6 +29,29 @@ def progress_values(loss_info: Dict[str, torch.Tensor]):
     return [(key, float(value.detach().cpu())) for key, value in loss_info.items()]
 
 
+def git_short_sha() -> Optional[str]:
+    """Return the short git commit SHA of the hrothgar checkout, or ``None``.
+
+    Used to stamp model sidecar JSON files so a checkpoint can be traced back
+    to the exact code revision that produced it.  Returns ``None`` (rather than
+    raising) when git is unavailable or the checkout is not a repository.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
 def check_git_clean_and_get_commit_hash(train_args) -> str:
     """Check that the git repository is clean and return the current commit hash."""
     try:

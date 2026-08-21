@@ -20,9 +20,10 @@ class FontStyleEmbedderConfig:
     """Configuration for the font-level style embedder.
 
     The model renders a fixed set of glyphs (``input_codepoints``) for each
-    font, encodes each glyph with a shared CNN, attention-pools each glyph's
-    spatial features into a small number of tokens, and then aggregates those
-    per-glyph tokens into a global style token set plus a 256-d summary vector.
+    font, encodes each glyph with a shared CNN, computes a per-glyph Gram
+    matrix (channel correlations, spatial order destroyed), averages across
+    glyphs, and projects the flattened Gram into a compact texture summary.
+    That summary feeds contrastive, tag-prediction, and category objectives.
     """
 
     # Input rendering.
@@ -38,38 +39,10 @@ class FontStyleEmbedderConfig:
     encoder_feature_dim: int = 256
     encoder_downsample: int = 4  # 64 -> 16
 
-    # Hierarchical pooling.
-    per_glyph_tokens: int = 4
-    style_latents: int = 16
-    aggregation_heads: int = 8
-
-    # Pooling strategy: "attention" (structure-preserving), "gram"
-    # (texture, spatial-order destroyed), or "dual" (both, fused).  Gram and
-    # dual modes use a 1x1 channel projection down to ``gram_channels`` before
-    # computing the Gram matrix, then a linear map back to
-    # ``encoder_feature_dim``; dual concatenates both summaries and fuses them
-    # with a linear layer.
-    pooling: str = "attention"
+    # Gram (texture) pooling.  A 1x1 channel projection reduces the encoder
+    # features to ``gram_channels`` before the Gram matrix is computed, then a
+    # linear map brings the flattened Gram back to ``encoder_feature_dim``.
     gram_channels: int = 32
-
-    # Glyph-layout head.  Predicts hidden glyphs' ink bounding boxes from the
-    # summary vector + glyph-slot identity, forcing the summary to retain
-    # typographic proportions (width / height / sidebearing / placement).
-    use_layout: bool = True
-    layout_codepoint_dim: int = 64
-    layout_samples: int = 4
-
-    # Shape head.  Reconstructs each hidden glyph's bbox-normalized square image
-    # from the summary vector + glyph-slot identity.
-    use_shape: bool = False
-    shape_codepoint_dim: int = 64
-    shape_samples: int = 4
-
-    # When True, the shape head additionally conditions on a per-font spatial
-    # style map (mean-pooled per-glyph CNN features) instead of only the pooled
-    # global style tokens, so it can reproduce spatially-varying fine detail
-    # (terminals, curve squareness).
-    use_spatial_style: bool = False
 
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
@@ -103,9 +76,12 @@ class FontStyleEmbedderConfig:
         from pathlib import Path as _Path
         from dataclasses import asdict
 
+        from hrothgar.utils import git_short_sha
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
+        data = asdict(self)
+        data["git_sha"] = git_short_sha()
         with config_path.open("w", encoding="utf-8") as f:
-            json.dump(asdict(self), f, indent=2, sort_keys=True)
+            json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
 
     @classmethod
@@ -136,7 +112,5 @@ class FontStyleEmbeddingLossWeights:
     contrastive: float = 1.0
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
-    layout: float = 1.0
-    shape: float = 1.0
     use_family_positives: bool = True
     tag_positive_weight: float = 1.0

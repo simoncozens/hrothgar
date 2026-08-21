@@ -55,9 +55,12 @@ class ARModelConfig:
         from pathlib import Path as _Path
         import json as _json
         from dataclasses import asdict as _asdict
+        from hrothgar.utils import git_short_sha
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
+        data = _asdict(self)
+        data["git_sha"] = git_short_sha()
         with config_path.open("w", encoding="utf-8") as f:
-            _json.dump(_asdict(self), f, indent=2, sort_keys=True)
+            _json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
         print(f"Saved AR model config to {config_path}")
 
