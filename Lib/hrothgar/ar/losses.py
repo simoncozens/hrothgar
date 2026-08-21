@@ -14,7 +14,7 @@ from glyphloss import glyph_reconstruction_loss
 class ARLossWeights:
     """Weights for the AR visual-pretraining objectives."""
 
-    token_cross_entropy: float = 0.3
+    token_cross_entropy: float = 1.0
     pixel_l1: float = 1.0
     glyphloss: float = 1.0
     lookahead_cross_entropy: float = 0.1

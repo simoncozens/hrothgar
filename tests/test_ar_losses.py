@@ -20,7 +20,7 @@ def _dummy_output() -> ARModelOutput:
     return ARModelOutput(
         logits=logits,
         reconstructed_images=reconstructed,
-        soft_token_embeddings=soft_embeddings,
+        token_embeddings=soft_embeddings,
         target_token_indices=targets,
     )
 
@@ -62,7 +62,7 @@ def test_compute_ar_loss_accepts_none_targets() -> None:
     output = ARModelOutput(
         logits=output.logits,
         reconstructed_images=output.reconstructed_images,
-        soft_token_embeddings=output.soft_token_embeddings,
+        token_embeddings=output.token_embeddings,
         target_token_indices=None,
     )
     target_images = torch.ones((2, 3, 4, 4), dtype=torch.float32)

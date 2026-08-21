@@ -58,7 +58,7 @@ class ARModelOutput:
 
     logits: torch.Tensor
     reconstructed_images: torch.Tensor
-    soft_token_embeddings: torch.Tensor
+    token_embeddings: torch.Tensor
     target_token_indices: Optional[torch.Tensor]
     token_mask: Optional[torch.Tensor] = None
     predicted_bbox: Optional[torch.Tensor] = None
@@ -376,6 +376,30 @@ class ARModel(SaveLoadModel):
         reconstructed_images = self.gtok.decode(soft_token_embeddings)
         return soft_token_embeddings, reconstructed_images
 
+    def hard_decode(
+        self,
+        logits: torch.Tensor,
+        temperature: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Decode logits into committed (hard) token embeddings + image.
+
+        Uses a straight-through estimator: the forward pass decodes the argmax
+        token, while gradients flow through the soft embedding. This rewards
+        committing to the correct token instead of hedging over a spread
+        distribution.
+        """
+        logits = logits / temperature
+        indices = logits.argmax(dim=-1)  # (B, N)
+        codebook = self.codebook_embeddings()  # (V, D)
+        hard = codebook[indices]  # (B, N, D)
+
+        # Straight-through: forward = hard (committed), backward = soft.
+        soft = torch.softmax(logits, dim=-1) @ codebook  # (B, N, D)
+        token_embeddings = soft + (hard - soft).detach()
+
+        reconstructed_images = self.gtok.decode(token_embeddings)
+        return token_embeddings, reconstructed_images
+
     def target_token_indices_from_images(
         self,
         target_images: torch.Tensor,
@@ -464,19 +488,19 @@ class ARModel(SaveLoadModel):
             )
             token_mask = None
 
-        soft_token_embeddings, reconstructed_images = self.soft_decode(
+        token_embeddings, reconstructed_images = self.hard_decode(
             logits, temperature=1.0
         )
 
         predicted_bbox: Optional[torch.Tensor] = None
         if self.bbox_head is not None:
-            pooled = soft_token_embeddings.mean(dim=1)
+            pooled = token_embeddings.mean(dim=1)
             predicted_bbox = self.bbox_head(pooled)
 
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
-            soft_token_embeddings=soft_token_embeddings,
+            token_embeddings=token_embeddings,
             target_token_indices=target_token_indices,
             token_mask=token_mask,
             predicted_bbox=predicted_bbox,
@@ -517,19 +541,19 @@ class ARModel(SaveLoadModel):
             imgs_feature_map=conditioning_map,
         )
 
-        soft_token_embeddings, reconstructed_images = self.soft_decode(
+        token_embeddings, reconstructed_images = self.hard_decode(
             logits, temperature=1.0
         )
 
         predicted_bbox: Optional[torch.Tensor] = None
         if self.bbox_head is not None:
-            pooled = soft_token_embeddings.mean(dim=1)
+            pooled = token_embeddings.mean(dim=1)
             predicted_bbox = self.bbox_head(pooled)
 
         return ARModelOutput(
             logits=logits,
             reconstructed_images=reconstructed_images,
-            soft_token_embeddings=soft_token_embeddings,
+            token_embeddings=token_embeddings,
             target_token_indices=predicted,
             predicted_bbox=predicted_bbox,
         )

@@ -292,7 +292,7 @@ def test_compute_ar_loss_maskgit_masked_positions_only() -> None:
     output = ARModelOutput(
         logits=logits,
         reconstructed_images=reconstructed,
-        soft_token_embeddings=soft_embeddings,
+        token_embeddings=soft_embeddings,
         target_token_indices=targets,
         token_mask=token_mask,
     )
@@ -320,7 +320,7 @@ def test_compute_ar_loss_maskgit_no_masked_positions() -> None:
     output = ARModelOutput(
         logits=logits,
         reconstructed_images=reconstructed,
-        soft_token_embeddings=soft_embeddings,
+        token_embeddings=soft_embeddings,
         target_token_indices=targets,
         token_mask=token_mask,
     )
