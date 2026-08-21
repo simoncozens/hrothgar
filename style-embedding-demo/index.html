@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Font Style Similarity</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --fg: #1a1a1e;
+      --muted: #6b7280;
+      --border: #d1d5db;
+      --accent: #3b82f6;
+      --panel: #ffffff;
+      --error: #b91c1c;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.5;
+    }
+
+    main {
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 48px 20px;
+    }
+
+    h1 { font-size: 1.5rem; margin: 0 0 4px; }
+    .subtitle { color: var(--muted); margin: 0 0 24px; }
+
+    .status { color: var(--muted); min-height: 1.5em; }
+    .status.error { color: var(--error); }
+
+    .combobox { position: relative; }
+
+    #font-search {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    #font-search:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+    }
+
+    .listbox {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      margin: 0;
+      padding: 4px;
+      list-style: none;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 260px;
+      overflow-y: auto;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      z-index: 10;
+    }
+
+    .listbox li {
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .listbox li.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .listbox li.empty {
+      color: var(--muted);
+      cursor: default;
+    }
+
+    #results { margin-top: 32px; }
+    #results h2 { font-size: 1.1rem; margin: 0 0 12px; }
+
+    #results-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    #results-list li {
+      padding: 10px 12px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+
+    .row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .rank { font-weight: 700; color: var(--accent); min-width: 1.5em; }
+    .family { font-weight: 600; }
+    .filename { color: var(--muted); font-size: 0.85em; }
+    .score {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
+
+    .sample {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+      font-size: 2.6rem;
+    }
+
+    .sample-large {
+      font-size: 3.2rem;
+    }
+
+    #selected { margin-top: 20px; }
+    #selected h2 { font-size: 1.1rem; margin: 0 0 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Font Style Similarity</h1>
+    <p class="subtitle">
+      Pick a font to see the five most stylistically similar fonts.
+    </p>
+
+    <p id="status" class="status">Loading…</p>
+
+    <div class="combobox">
+      <input
+        id="font-search"
+        type="text"
+        role="combobox"
+        aria-expanded="false"
+        aria-controls="font-listbox"
+        aria-autocomplete="list"
+        placeholder="Search fonts…"
+        autocomplete="off"
+        disabled
+      />
+      <ul id="font-listbox" class="listbox" role="listbox" hidden></ul>
+    </div>
+
+    <section id="selected" hidden>
+      <h2>Selected font: <span id="selected-query"></span></h2>
+      <div id="selected-sample" class="sample sample-large">The quick brown fox</div>
+    </section>
+
+    <section id="results" hidden>
+      <h2>Most similar to <span id="results-query"></span></h2>
+      <ol id="results-list"></ol>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
