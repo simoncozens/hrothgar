@@ -3,12 +3,16 @@
 This module implements the vision-only stage of the glyph generator:
 
 1. A frozen G-Tok CNN encoder extracts structural content features.
-2. A pre-computed font-level style embedding (from FontStyleEmbedder)
-   provides the style signal, broadcast to all spatial positions.
-3. The content features and style embedding are added element-wise.
+2. Per-glyph style reference images are encoded by the upstream GAR-Font
+   ``StyleEncoder`` and fused with content via ``FeatureFusionModule``
+   cross-attention, preserving spatial style detail (terminals, serifs,
+   corners, stroke modulation).
+3. A pre-computed font-level style embedding (from FontStyleEmbedder)
+   provides a globally-consistent style signal, broadcast to all spatial
+   positions and added to the fused features.
 4. A bidirectional MaskGIT transformer predicts G-Tok codebook indices
    via masked token prediction (like BERT).
-5. A soft codebook projection feeds the frozen G-Tok decoder to
+5. A hard codebook projection feeds the frozen G-Tok decoder to
    reconstruct images.
 
 Metric conditioning:
@@ -44,7 +48,9 @@ from hrothgar.gtok.model import (
     GtokConfig,
     GtokModel,
 )
+from hrothgar.upstream.feature_fusion_module import FeatureFusionModule
 from hrothgar.upstream.gpt import GPTModelArgs
+from hrothgar.upstream.style_encoder import StyleEncoder
 from hrothgar.utils import SaveLoadModel
 
 # ---------------------------------------------------------------------------
@@ -142,10 +148,37 @@ class ARModel(SaveLoadModel):
 
         self.content_encoder = self.gtok.cnn_encoder
 
+        style_downsample_ratio = config.image_size // self.token_grid_height
+        if style_downsample_ratio not in (8, 16):
+            raise ValueError(
+                f"StyleEncoder downsample ratio must be 8 or 16, but "
+                f"image_size={config.image_size} / token_grid_height="
+                f"{self.token_grid_height} = {style_downsample_ratio}"
+            )
+        self.style_encoder = StyleEncoder(
+            C_in=3,
+            C=config.style_encoder_base_channels,
+            C_out=config.encoder_feature_dim,
+            norm="in",
+            activ="relu",
+            pad_type="reflect",
+            sigmoid=False,
+            scale_var=True,
+            downsample_ratio=style_downsample_ratio,
+        )
+        self.style_dropout = nn.Dropout2d(config.style_dropout)
+
         self._register_latincore_mapping()
         latincore_size = len(LATIN_CORE)
         self.codepoint_embedding = nn.Embedding(
             latincore_size, config.encoder_feature_dim
+        )
+
+        self.aggregator = FeatureFusionModule(
+            z_channel=config.encoder_feature_dim,
+            n_heads=config.aggregator_num_heads,
+            n_style_blocks=config.aggregator_num_layers,
+            n_style_tokens=config.style_pool_tokens,
         )
 
         conditioning_dim = config.encoder_feature_dim * 2
@@ -311,6 +344,41 @@ class ARModel(SaveLoadModel):
             )
         return content_features  # (B, C, H, W) -- 2D preserved
 
+    def encode_style(self, style_reference_images: torch.Tensor) -> torch.Tensor:
+        """Encode style references to a 2D feature map ``(B, n_ref, C, H, W)``.
+
+        Style images are normalised from ``[0, 1]`` to ``[-1, 1]`` before the
+        style encoder because the upstream GPT architecture (RoPE, RMSNorm,
+        SwiGLU) was designed and tuned for zero-centred image features.  The
+        G-Tok content path stays at ``[0, 1]`` -- its encoder was pretrained on
+        that range and is frozen during AR training.
+        """
+        batch_size, num_references, channels, height, width = (
+            style_reference_images.shape
+        )
+        if channels != 3:
+            raise ValueError(f"Expected RGB style references, got {channels} channels")
+        flattened = style_reference_images.reshape(
+            batch_size * num_references, channels, height, width
+        )
+        # Normalise from [0, 1] to [-1, 1].
+        flattened = (flattened - 0.5) / 0.5
+        encoded = self.style_encoder(flattened)
+        encoded = self.style_dropout(encoded)
+        _, feature_channels, feature_height, feature_width = encoded.shape
+        if (
+            feature_height != self.token_grid_height
+            or feature_width != self.token_grid_width
+        ):
+            raise ValueError(
+                "Style encoder output shape does not match G-Tok token grid "
+                f"(got {(feature_height, feature_width)}, "
+                f"expected {(self.token_grid_height, self.token_grid_width)})"
+            )
+        return encoded.reshape(
+            batch_size, num_references, feature_channels, feature_height, feature_width
+        )  # (B, n_ref, C, H, W) -- 2D preserved
+
     # ------------------------------------------------------------------
     # Conditioning map
     # ------------------------------------------------------------------
@@ -318,6 +386,7 @@ class ARModel(SaveLoadModel):
     def build_conditioning_map(
         self,
         content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
         latincore_idx: torch.Tensor,
         *,
         font_style_embedding: torch.Tensor,
@@ -326,27 +395,35 @@ class ARModel(SaveLoadModel):
         """Build the 2D conditioning feature map for PrefixLM.
 
         Returns ``(B, 2*encoder_feature_dim, H, W)`` — codepoint identity
-        concatenated with content+style features along the channel axis.
+        concatenated with fused content+style features along the channel axis.
 
-        The font style embedding is broadcast to all spatial positions and
-        added to the content feature map, giving every generation token an
-        identical, globally-consistent style signal.
+        Content features are fused with per-glyph style reference features via
+        the ``FeatureFusionModule`` cross-attention, preserving spatial style
+        detail (terminals, serifs, corners).  The font style embedding is then
+        broadcast to all spatial positions and added, giving every generation
+        token an identical, globally-consistent style signal on top of the
+        spatially-resolved style features.
 
         Args:
             content_images: ``(B, 3, H, W)`` content glyph renderings.
+            style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             latincore_idx: ``(B,)`` LATIN_CORE indices.
             font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
                 font-level style vector from ``FontStyleEmbedder``.
             metrics: Optional ``(B, 6)`` normalised metric tensor.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
+        style_features = self.encode_style(
+            style_reference_images
+        )  # (B, n_ref, C, H, W)
+        fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
 
-        # Broadcast font style to all spatial positions and add to content.
+        # Broadcast font style to all spatial positions and add to fused.
         if self.training and self.config.font_style_dropout > 0:
             font_style_embedding = F.dropout(
                 font_style_embedding, p=self.config.font_style_dropout
             )
-        fused = content_features + font_style_embedding[:, :, None, None]  # (B, C, H, W)
+        fused = fused + font_style_embedding[:, :, None, None]  # (B, C, H, W)
 
         # Codepoint embedding.
         codepoint_emb = self.codepoint_embedding(latincore_idx)  # (B, C)
@@ -433,6 +510,7 @@ class ARModel(SaveLoadModel):
     def forward(
         self,
         content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
         *,
         font_style_embedding: torch.Tensor,
         target_token_indices: Optional[torch.Tensor] = None,
@@ -445,6 +523,7 @@ class ARModel(SaveLoadModel):
 
         Args:
             content_images: ``(B, 3, H, W)`` content glyphs.
+            style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
                 font-level style vector (required).
             target_token_indices: Optional ``(B, N)`` ground-truth token indices.
@@ -461,6 +540,7 @@ class ARModel(SaveLoadModel):
 
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
+            style_reference_images=style_reference_images,
             latincore_idx=target_latincore_idx,
             font_style_embedding=font_style_embedding,
             metrics=metrics,
@@ -510,6 +590,7 @@ class ARModel(SaveLoadModel):
     def generate(
         self,
         content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
         target_codepoints: torch.Tensor,
         *,
         font_style_embedding: torch.Tensor,
@@ -519,6 +600,7 @@ class ARModel(SaveLoadModel):
 
         Args:
             content_images: ``(B, 3, H, W)`` content glyphs.
+            style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             target_codepoints: ``(B,)`` Unicode codepoint tensor.
             font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
                 font-level style vector (required).
@@ -527,6 +609,7 @@ class ARModel(SaveLoadModel):
         latincore_idx = self._unicode_to_latincore(target_codepoints)
         conditioning_map = self.build_conditioning_map(
             content_images=content_images,
+            style_reference_images=style_reference_images,
             latincore_idx=latincore_idx,
             font_style_embedding=font_style_embedding,
             metrics=metrics,
@@ -566,9 +649,8 @@ class ARModel(SaveLoadModel):
         """Load AR model weights from a checkpoint.
 
         ``gtok.*``, ``token_decoder.*``, and ``lookahead_decoders.*`` keys
-        are stripped before loading.  Obsolete glyph-level style encoder keys
-        (``style_encoder.*``, ``aggregator.*``, etc.) are silently skipped so
-        old checkpoints load cleanly.
+        are stripped before loading (G-Tok is loaded separately; the other two
+        come from the removed AR decoder and are harmlessly skipped).
         """
         state_dict = torch.load(path, map_location=device, weights_only=True)
 
@@ -623,9 +705,6 @@ class ARModel(SaveLoadModel):
         allowed_missing_prefixes = [
             "gtok.", "token_decoder.", "lookahead_decoders.",
             "metric_embedder.", "bbox_head.",
-            # Obsolete glyph-level style path keys from old checkpoints.
-            "style_encoder.", "style_dropout.", "aggregator.",
-            "global_style_projection.",
         ]
         if self.language_adapter is not None:
             allowed_missing_prefixes.append("language_adapter.")
@@ -653,6 +732,8 @@ class ARModel(SaveLoadModel):
             "content_encoder": sum(
                 p.numel() for p in self.content_encoder.parameters()
             ),
+            "style_encoder": sum(p.numel() for p in self.style_encoder.parameters()),
+            "aggregator": sum(p.numel() for p in self.aggregator.parameters()),
             "maskgit_decoder": sum(
                 p.numel() for p in self.maskgit_decoder.parameters()
             ),

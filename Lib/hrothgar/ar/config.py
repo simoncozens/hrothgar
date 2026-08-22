@@ -8,13 +8,29 @@ from typing import Optional
 class ARModelConfig:
     """Configuration for the MaskGIT glyph generator.
 
-    Style conditioning is provided as a pre-computed font-level embedding
-    vector produced by ``FontStyleEmbedder``.  The embedding replaces the
-    per-glyph StyleEncoder + FeatureFusionModule path entirely.
+    Style conditioning is provided by *two* complementary signals:
+
+    1. Per-glyph style reference images, encoded by the upstream GAR-Font
+       ``StyleEncoder`` and fused with content via ``FeatureFusionModule``
+       cross-attention.  This carries the spatial detail (terminals, serifs,
+       corners, stroke modulation) that a single global vector cannot.
+    2. A pre-computed font-level embedding vector from ``FontStyleEmbedder``,
+       broadcast to all spatial positions as a globally-consistent style
+       summary.
     """
 
     image_size: int = 128
     encoder_feature_dim: int = 256
+
+    style_encoder_base_channels: int = 32
+
+    aggregator_num_layers: int = 3
+    aggregator_num_heads: int = 8
+
+    # Number of global style tokens to pool the CNN style feature map into
+    # via learned-query cross-attention.  0 = per-position cross-attention,
+    # which preserves spatial style detail (the default we want for glyphs).
+    style_pool_tokens: int = 0
 
     decoder_hidden_dim: int = 832
     decoder_num_layers: int = 16
@@ -24,6 +40,8 @@ class ARModelConfig:
 
     # Dropout applied to the font style embedding (per-batch).
     font_style_dropout: float = 0.5
+    # Dropout applied to the per-glyph style feature map.
+    style_dropout: float = 0.2
 
     freeze_gtok: bool = True
 
@@ -44,6 +62,11 @@ class ARModelConfig:
     def __post_init__(self) -> None:
         if self.image_size <= 0:
             raise ValueError(f"image_size must be positive, got {self.image_size}")
+        if self.encoder_feature_dim % self.aggregator_num_heads != 0:
+            raise ValueError(
+                "encoder_feature_dim must be divisible by aggregator_num_heads "
+                f"(got {self.encoder_feature_dim} and {self.aggregator_num_heads})"
+            )
         if self.decoder_hidden_dim % self.decoder_num_heads != 0:
             raise ValueError(
                 "decoder_hidden_dim must be divisible by decoder_num_heads "

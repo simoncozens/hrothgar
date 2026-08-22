@@ -82,6 +82,8 @@ class MaskGITTrainingLoop(TrainingLoop):
             font_style_embedder=font_style_embedder,
             embedder_device=self.device,
             image_size=config.image_size,
+            style_glyph_count=train_args.style_glyph_count,
+            common_style_codepoints=train_args.style_characters,
             target_codepoints=train_args.target_characters,
             target_codepoint_oversample_factor=(
                 train_args.target_character_oversample_factor
@@ -188,6 +190,7 @@ class MaskGITTrainingLoop(TrainingLoop):
     def train_step(self, batch):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
+        style_reference_images = batch["style_renderings"].to(self.device)
         font_style_embedding = batch["font_style_embedding"].to(self.device)
         target_codepoints = batch["char"].to(self.device)
         metrics = batch.get("metrics")
@@ -199,6 +202,7 @@ class MaskGITTrainingLoop(TrainingLoop):
 
         model_output = self.model(
             content_images,
+            style_reference_images,
             font_style_embedding=font_style_embedding,
             target_images=target_images,
             target_codepoints=target_codepoints,
@@ -325,6 +329,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             ):
                 val_target = val_batch["target_rendering"].to(self.device)
                 val_content = val_batch["content_rendering"].to(self.device)
+                val_style = val_batch["style_renderings"].to(self.device)
                 val_font_emb = val_batch["font_style_embedding"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
                 batch_metrics = val_batch.get("metrics")
@@ -337,6 +342,7 @@ class MaskGITTrainingLoop(TrainingLoop):
                 with self._autocast_context():
                     val_output = self.model(
                         val_content,
+                        val_style,
                         font_style_embedding=val_font_emb,
                         target_images=val_target,
                         target_codepoints=val_cp,
@@ -381,6 +387,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             ):
                 val_target = val_batch["target_rendering"].to(self.device)
                 val_content = val_batch["content_rendering"].to(self.device)
+                val_style_gen = val_batch["style_renderings"].to(self.device)
                 val_font_emb = val_batch["font_style_embedding"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
                 val_metrics_gen = val_batch.get("metrics")
@@ -390,6 +397,7 @@ class MaskGITTrainingLoop(TrainingLoop):
                 with self._autocast_context():
                     gen_output = self.model.generate(
                         content_images=val_content,
+                        style_reference_images=val_style_gen,
                         target_codepoints=val_cp,
                         font_style_embedding=val_font_emb,
                         metrics=val_metrics_gen,
@@ -435,6 +443,7 @@ class MaskGITTrainingLoop(TrainingLoop):
         val_batch = next(iter(self.test_loader))
         val_target = val_batch["target_rendering"].to(self.device)
         val_content = val_batch["content_rendering"].to(self.device)
+        val_style = val_batch["style_renderings"].to(self.device)
         val_font_emb = val_batch["font_style_embedding"].to(self.device)
         val_cp = val_batch["char"].to(self.device)
 
@@ -442,6 +451,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             # Full-context reconstruction (teacher-forced / bidirectional).
             val_output = self.model(
                 val_content,
+                val_style,
                 font_style_embedding=val_font_emb,
                 target_images=val_target,
                 target_codepoints=val_cp,
@@ -449,14 +459,17 @@ class MaskGITTrainingLoop(TrainingLoop):
             # Generation (free-running / iterative decode).
             gen_output = self.model.generate(
                 content_images=val_content,
+                style_reference_images=val_style,
                 target_codepoints=val_cp,
                 font_style_embedding=val_font_emb,
             )
 
         preview_count = min(8, val_target.shape[0])
+        first_style = val_style[:preview_count, 0]
         recon_grid = torch.cat(
             [
                 val_content[:preview_count],
+                first_style,
                 val_target[:preview_count],
                 val_output.reconstructed_images[:preview_count],
                 gen_output.reconstructed_images[:preview_count],
@@ -464,7 +477,7 @@ class MaskGITTrainingLoop(TrainingLoop):
             dim=0,
         )
         self.writer.add_image(
-            "Reconstruction/content_target_recon_gen",
+            "Reconstruction/content_style_target_recon_gen",
             torchvision.utils.make_grid(recon_grid, nrow=preview_count),
             self.global_step,
         )
