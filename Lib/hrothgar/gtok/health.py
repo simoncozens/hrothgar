@@ -102,6 +102,14 @@ class HealthCheckConfig:
     code_entropy_batch_size: int = 64
     code_entropy_seed: int = 42
 
+    # ---- Patch classification (white / black / mix) ----
+    # Margin in [0, 1] used to classify each token-grid patch.  A patch is
+    # "white" if every pixel is within this margin of 1.0, "black" if every
+    # pixel is within this margin of 0.0, otherwise "mix".  Small margins are
+    # more precise -- the faint anti-aliased serif tips and hairline strokes
+    # that carry fine detail sit just inside "mix".
+    patch_margin: float = 5 / 255
+
 
 @dataclass
 class HealthCheckResults:
@@ -134,6 +142,62 @@ class HealthCheckResults:
     code_entropy_active_codes: Optional[int] = None
     code_entropy_high_frac: Optional[float] = None
     code_entropy_low_frac: Optional[float] = None
+
+    # Codebook usage by patch type (white / black / mix).
+    patch_usage: Optional["PatchCategoryUsage"] = None
+
+
+@dataclass
+class PatchCategoryUsage:
+    """Codebook usage broken down by patch type.
+
+    A token-grid patch is classified as ``white`` (blank background), ``black``
+    (solid ink interior), or ``mix`` (edge / transition) at encode time.
+
+    ``*_positions`` are token counts; ``*_codes`` are distinct codebook entries
+    used on that patch type; ``*_exclusive`` are entries used *only* on that
+    patch type -- the strongest signal that capacity is being spent on
+    blank/solid-ink patches that carry no stylistic information.
+    """
+
+    white_positions: int = 0
+    black_positions: int = 0
+    mix_positions: int = 0
+    white_codes: int = 0
+    black_codes: int = 0
+    mix_codes: int = 0
+    white_exclusive: int = 0
+    black_exclusive: int = 0
+    mix_exclusive: int = 0
+
+
+def _classify_patches(
+    images: torch.Tensor,
+    grid_h: int,
+    grid_w: int,
+    margin: float,
+) -> torch.Tensor:
+    """Classify each token-grid patch as 0=white, 1=black, 2=mix.
+
+    A patch is ``white`` if every pixel is within ``margin`` of 1.0, ``black``
+    if every pixel is within ``margin`` of 0.0, otherwise ``mix``.  Returns a
+    ``(B, grid_h * grid_w)`` long tensor in row-major order, matching the
+    token sequence produced by G-Tok's encoder.
+    """
+    batch, channels, height, width = images.shape
+    patch_h = height // grid_h
+    patch_w = width // grid_w
+    # (B, C, H, W) -> (B, grid_h, grid_w, C, patch_h, patch_w)
+    patches = images.reshape(
+        batch, channels, grid_h, patch_h, grid_w, patch_w
+    ).permute(0, 2, 4, 1, 3, 5)
+    patch_min = patches.amin(dim=(3, 4, 5))  # (B, grid_h, grid_w)
+    patch_max = patches.amax(dim=(3, 4, 5))
+
+    white = patch_min >= (1.0 - margin)
+    black = patch_max <= margin
+    category = torch.where(white, 0, torch.where(black, 1, 2))
+    return category.reshape(batch, grid_h * grid_w)
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +315,7 @@ class GtokHealthCheck:
                 results.code_entropy_active_codes,
                 results.code_entropy_high_frac,
                 results.code_entropy_low_frac,
+                results.patch_usage,
             ) = ent_results
 
         return results
@@ -939,8 +1004,8 @@ class GtokHealthCheck:
         gtok: GtokModel,
         writer: SummaryWriter,
         global_step: int,
-    ) -> Tuple[float, float, int, float, float]:
-        """Compute per-code font entropy and log to TensorBoard.
+    ) -> Tuple[float, float, int, float, float, PatchCategoryUsage]:
+        """Compute per-code font entropy and patch-type codebook usage.
 
         For each code in the codebook, we compute the entropy of the
         distribution of fonts that use it:
@@ -953,9 +1018,15 @@ class GtokHealthCheck:
         specific to one or a few fonts (bad — the tokenizer is overfitting to
         font identity).
 
+        We also classify each token-grid patch as white (blank background),
+        black (solid ink interior), or mix (edge / transition) using
+        ``config.patch_margin``, and count how the active codebook is split
+        across those patch types.
+
         Returns:
             Tuple of (mean_entropy_normalised, median_entropy_normalised,
-                      active_codes, high_entropy_fraction, low_entropy_fraction).
+                      active_codes, high_entropy_fraction, low_entropy_fraction,
+                      patch_usage).
         """
         import math
 
@@ -971,6 +1042,10 @@ class GtokHealthCheck:
         # Accumulator: count[code, font] — how many times each code was
         # assigned to a glyph from each font.
         count = torch.zeros(codebook_size, num_fonts, dtype=torch.long, device=device)
+        # Accumulator: cat_count[code, kind] — how many times each code was
+        # assigned to a patch of each kind (0=white, 1=black, 2=mix).
+        cat_count = torch.zeros(codebook_size, 3, dtype=torch.long, device=device)
+        margin = self.config.patch_margin
 
         was_training = gtok.training
         gtok.eval()
@@ -994,12 +1069,21 @@ class GtokHealthCheck:
                     _, _, indices_info = gtok.quantizer(pre_quant_4d)
                     code_indices = indices_info[2].view(B, seq_len)  # (B, N)
 
-                    # Accumulate counts.
+                    # Accumulate per-code font counts.
                     for b in range(B):
                         for n in range(seq_len):
-                            code = code_indices[b, n]
-                            fnt = font_indices[b]
-                            count[code, fnt] += 1
+                            count[code_indices[b, n], font_indices[b]] += 1
+
+                    # Classify patches and accumulate per-code patch-kind counts.
+                    category = _classify_patches(
+                        images, gtok.token_grid_height, gtok.token_grid_width, margin
+                    )  # (B, N) in {0, 1, 2}
+                    for kind in range(3):
+                        codes = code_indices[category == kind]
+                        if codes.numel() > 0:
+                            cat_count[:, kind] += torch.bincount(
+                                codes, minlength=codebook_size
+                            )
 
             # --- Compute per-code entropy ---
             code_totals = count.sum(dim=1)  # (codebook_size,)
@@ -1009,7 +1093,7 @@ class GtokHealthCheck:
             if num_active == 0:
                 writer.add_scalar("Health/CodeEntropy/Mean", 0.0, global_step)
                 writer.add_scalar("Health/CodeEntropy/ActiveCodes", 0, global_step)
-                return 0.0, 0.0, 0, 0.0, 0.0
+                return 0.0, 0.0, 0, 0.0, 0.0, PatchCategoryUsage()
 
             active_count = count[active_mask].float()  # (A, F)
             active_totals = code_totals[active_mask].float()  # (A,)
@@ -1038,6 +1122,30 @@ class GtokHealthCheck:
             high_frac = float((norm_entropy > 0.5).float().mean().item())
             low_frac = float((norm_entropy < 0.1).float().mean().item())
 
+            # --- Patch-type codebook usage ---
+            kind_positions = cat_count.sum(dim=0)  # (3,)
+            kind_codes = (cat_count > 0).sum(dim=0)  # (3,)
+            # Codes used in exactly one patch kind.
+            n_kinds = (cat_count > 0).sum(dim=1)  # (V,)
+            kind_exclusive = torch.tensor(
+                [
+                    int(((n_kinds == 1) & (cat_count[:, k] > 0)).sum().item())
+                    for k in range(3)
+                ],
+                device=device,
+            )
+            patch_usage = PatchCategoryUsage(
+                white_positions=int(kind_positions[0].item()),
+                black_positions=int(kind_positions[1].item()),
+                mix_positions=int(kind_positions[2].item()),
+                white_codes=int(kind_codes[0].item()),
+                black_codes=int(kind_codes[1].item()),
+                mix_codes=int(kind_codes[2].item()),
+                white_exclusive=int(kind_exclusive[0].item()),
+                black_exclusive=int(kind_exclusive[1].item()),
+                mix_exclusive=int(kind_exclusive[2].item()),
+            )
+
             # --- Log to TensorBoard ---
             writer.add_scalar("Health/CodeEntropy/Mean", mean_ent, global_step)
             writer.add_scalar("Health/CodeEntropy/Median", median_ent, global_step)
@@ -1057,8 +1165,38 @@ class GtokHealthCheck:
                 norm_entropy.cpu(),
                 global_step,
             )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchWhiteCodes",
+                patch_usage.white_codes,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchBlackCodes",
+                patch_usage.black_codes,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchMixCodes",
+                patch_usage.mix_codes,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchWhiteExclusive",
+                patch_usage.white_exclusive,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchBlackExclusive",
+                patch_usage.black_exclusive,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PatchMixExclusive",
+                patch_usage.mix_exclusive,
+                global_step,
+            )
 
-            return mean_ent, median_ent, num_active, high_frac, low_frac
+            return mean_ent, median_ent, num_active, high_frac, low_frac, patch_usage
 
         finally:
             if was_training:
@@ -1101,3 +1239,211 @@ class GtokHealthCheck:
             (encoder_norm_sq + vit_norm_sq) ** 0.5,
             global_step,
         )
+
+
+# ---------------------------------------------------------------------------
+# Standalone CLI
+# ---------------------------------------------------------------------------
+
+
+class _NullWriter:
+    """Drop-in ``SummaryWriter`` stand-in that discards every call.
+
+    ``GtokHealthCheck.maybe_run`` logs every check to a ``SummaryWriter``.
+    For a standalone console run we don't want TensorBoard event files, so
+    we hand it this no-op writer and print ``HealthCheckResults`` ourselves.
+    """
+
+    def add_scalar(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    def add_histogram(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    def add_image(self, *args, **kwargs) -> None:
+        del args, kwargs
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _print_results(results: HealthCheckResults) -> None:
+    """Print every non-``None`` health-check result to the console."""
+    sections: list[str] = []
+
+    if results.autocorr_accuracy is not None:
+        sections.append(
+            "Autocorrelation (next-token prediction, 1-layer probe)\n"
+            f"  accuracy           : {results.autocorr_accuracy:.4f}\n"
+            f"  x chance           : {results.autocorr_x_chance:.2f}x\n"
+            f"  within-row acc     : {results.autocorr_within_row_acc:.4f}\n"
+            f"  cross-row acc      : {results.autocorr_cross_row_acc:.4f}\n"
+            f"  within/cross ratio : {results.autocorr_within_cross_ratio:.2f}"
+        )
+
+    if results.oracle_ar_accuracy is not None:
+        sections.append(
+            "Oracle AR (single-font, conditionless GPT)\n"
+            f"  accuracy : {results.oracle_ar_accuracy:.4f}\n"
+            f"  x chance : {results.oracle_ar_x_chance:.2f}x"
+        )
+
+    if results.linear_probe_char_acc is not None:
+        sections.append(
+            "Linear probe (frozen features)\n"
+            f"  character acc : {results.linear_probe_char_acc:.4f}\n"
+            f"  font acc      : {results.linear_probe_font_acc:.4f}"
+        )
+
+    if results.codebook_mean_similarity is not None:
+        sections.append(
+            "Codebook similarity (mean pairwise cosine)\n"
+            f"  mean similarity : {results.codebook_mean_similarity:.4f}  "
+            "(>0.7 redundant, <0.3 diverse)"
+        )
+
+    if results.code_entropy_mean is not None:
+        sections.append(
+            "Code entropy (per-code font entropy, normalised)\n"
+            f"  mean          : {results.code_entropy_mean:.4f}\n"
+            f"  median        : {results.code_entropy_median:.4f}\n"
+            f"  active codes  : {results.code_entropy_active_codes}\n"
+            f"  high-entropy  : {results.code_entropy_high_frac:.4f}  (shared across fonts)\n"
+            f"  low-entropy   : {results.code_entropy_low_frac:.4f}  (font-specific)"
+        )
+
+    if results.patch_usage is not None:
+        pu = results.patch_usage
+        total = pu.white_positions + pu.black_positions + pu.mix_positions
+        denom = max(total, 1)
+
+        def _pct(x: int) -> float:
+            return 100.0 * x / denom
+
+        sections.append(
+            "Codebook usage by patch type\n"
+            f"  white (blank) : {_pct(pu.white_positions):5.1f}% of positions  "
+            f"{pu.white_codes} codes ({pu.white_exclusive} exclusive)\n"
+            f"  black (ink)   : {_pct(pu.black_positions):5.1f}% of positions  "
+            f"{pu.black_codes} codes ({pu.black_exclusive} exclusive)\n"
+            f"  mix (edge)    : {_pct(pu.mix_positions):5.1f}% of positions  "
+            f"{pu.mix_codes} codes ({pu.mix_exclusive} exclusive)"
+        )
+
+    if not sections:
+        print("No health checks ran (all disabled).")
+        return
+
+    print()
+    print("\n".join(sections))
+
+
+def main(argv: Optional[list[str]] = None) -> None:
+    """Run G-Tok health checks on a trained tokenizer and print the results.
+
+    Loads the model from ``--gtok-model-path`` (plus its sidecar config),
+    runs every scheduled health check once, and prints a readable summary
+    to the console instead of writing TensorBoard event files.
+    """
+    import argparse
+    import os
+    from pathlib import Path
+
+    from hrothgar.gtok.model import load_model
+    from hrothgar.utils import pick_device
+
+    parser = argparse.ArgumentParser(
+        description="Run G-Tok health checks on a trained tokenizer."
+    )
+    parser.add_argument(
+        "--gtok-model-path",
+        type=Path,
+        default=Path("models/gtok.pth"),
+        help="Path to trained G-Tok weights (.pth); sidecar .conf.json must exist beside it",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        default=Path(os.environ.get("GOOGLE_FONTS_REPO", "")),
+        help="Path to the Google Fonts repository (or set GOOGLE_FONTS_REPO)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Torch device to use (e.g. cuda, mps, cpu). Defaults to auto-detect.",
+    )
+    parser.add_argument(
+        "--skip",
+        action="append",
+        choices=["autocorr", "oracle-ar", "linear-probe", "codebook", "entropy"],
+        default=[],
+        help="Skip a specific check (repeatable).",
+    )
+    parser.add_argument(
+        "--patch-margin",
+        type=float,
+        default=5.0,
+        help=(
+            "Pixel-value margin (8-bit units, 0-255) used to classify each "
+            "token patch as white/black/mix. A patch is 'white' if every pixel "
+            "is within this many levels of 255, 'black' if within it of 0. "
+            "Smaller margins are more precise; run with several values to see "
+            "where the fine detail sits. (default: 5)"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if not args.gtok_model_path.exists():
+        parser.error(f"G-Tok model not found: {args.gtok_model_path}")
+    if not args.dataset_path or not args.dataset_path.exists():
+        parser.error(
+            "--dataset-path is required (or set the GOOGLE_FONTS_REPO env var)"
+        )
+
+    device = torch.device(args.device) if args.device else pick_device()
+    print(f"Loading G-Tok model from {args.gtok_model_path} (device={device})")
+
+    gtok, gtok_config = load_model(args.gtok_model_path, device)
+    image_size = gtok_config.image_size
+    gtok.eval()
+    for param in gtok.parameters():
+        param.requires_grad = False
+
+    print(
+        f"Loaded G-Tok model (image_size={image_size}, "
+        f"codebook_size={gtok_config.quantizer_codebook_size})"
+    )
+
+    skip = set(args.skip)
+    config = HealthCheckConfig(
+        dataset_path=str(args.dataset_path),
+        patch_margin=args.patch_margin / 255.0,
+    )
+    if "autocorr" in skip:
+        config.autocorr_every = 0
+    if "oracle-ar" in skip:
+        config.oracle_ar_every = 0
+    if "linear-probe" in skip:
+        config.linear_probe_every = 0
+    if "codebook" in skip:
+        config.codebook_sim_every = 0
+    if "entropy" in skip:
+        config.code_entropy_every = 0
+
+    health = GtokHealthCheck(config)
+    print("Running health checks...")
+    results = health.maybe_run(
+        gtok=gtok,
+        image_size=image_size,
+        global_step=0,
+        writer=_NullWriter(),  # type: ignore[arg-type]
+    )
+    _print_results(results)
+
+
+if __name__ == "__main__":
+    main()
