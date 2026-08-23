@@ -27,6 +27,7 @@ import torch.nn as nn
 import tqdm
 from torch.utils.data import DataLoader
 
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.googlefonts import Font, GoogleFonts
 from hrothgar.gtok.model import GtokModel, load_model
 from hrothgar.utils import torch_setup
@@ -156,6 +157,7 @@ class TokenSequenceDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int) -> torch.Tensor:
         font, cp = self.samples[idx]
         image = torch.tensor(font.render(cp, size=self.image_size), dtype=torch.float32)
+        image = crop_to_ink(image, self.image_size)
         image = image.unsqueeze(0).to(self.device)
 
         cnn_out = self.gtok.cnn_encoder(image)

@@ -146,6 +146,9 @@ class HealthCheckResults:
     # Codebook usage by patch type (white / black / mix).
     patch_usage: Optional["PatchCategoryUsage"] = None
 
+    # Per-code patch-type purity (how content-aligned the discrete codes are).
+    purity: Optional["CodePurity"] = None
+
 
 @dataclass
 class PatchCategoryUsage:
@@ -169,6 +172,23 @@ class PatchCategoryUsage:
     white_exclusive: int = 0
     black_exclusive: int = 0
     mix_exclusive: int = 0
+
+
+@dataclass
+class CodePurity:
+    """Per-code patch-type purity of the codebook.
+
+    For each active code we compute the fraction of its assignments that fall
+    in its single most common patch type (white / black / mix).  Purity ≈ 1.0
+    means the code is used almost entirely on one patch type (content-aligned);
+    purity ≈ 1/3 means it is spread roughly uniformly across all three
+    (scrambled — the code does not correspond to a single kind of content).
+    """
+
+    mean_purity: float = 0.0
+    median_purity: float = 0.0
+    high_purity_frac: float = 0.0  # active codes with purity >= 0.9
+    scrambled_frac: float = 0.0    # active codes with purity <= 0.4
 
 
 def _classify_patches(
@@ -316,6 +336,7 @@ class GtokHealthCheck:
                 results.code_entropy_high_frac,
                 results.code_entropy_low_frac,
                 results.patch_usage,
+                results.purity,
             ) = ent_results
 
         return results
@@ -910,6 +931,7 @@ class GtokHealthCheck:
         import numpy as np
         from torch.utils.data import DataLoader, Dataset
 
+        from hrothgar.glyph_rendering import crop_to_ink
         from hrothgar.googlefonts import GoogleFonts
 
         cfg = self.config
@@ -961,7 +983,8 @@ class GtokHealthCheck:
         device = self._resolve_device(gtok)
 
         class _EntropyDataset(Dataset):
-            """Dataset that renders glyphs and returns (image, font_index)."""
+            """Dataset that renders glyphs (crop-to-ink) and returns
+            ``(image, font_index)``, matching the G-Tok input policy."""
 
             def __init__(self, samples, image_size):
                 self.samples = samples
@@ -975,7 +998,7 @@ class GtokHealthCheck:
                 image = torch.tensor(
                     font.render(cp, size=self.image_size), dtype=torch.float32
                 )
-                return image, f_idx
+                return crop_to_ink(image, self.image_size), f_idx
 
         def _collate(batch):
             images = torch.stack([item[0] for item in batch])
@@ -1004,8 +1027,8 @@ class GtokHealthCheck:
         gtok: GtokModel,
         writer: SummaryWriter,
         global_step: int,
-    ) -> Tuple[float, float, int, float, float, PatchCategoryUsage]:
-        """Compute per-code font entropy and patch-type codebook usage.
+    ) -> Tuple[float, float, int, float, float, PatchCategoryUsage, CodePurity]:
+        """Compute per-code font entropy, patch-type usage, and code purity.
 
         For each code in the codebook, we compute the entropy of the
         distribution of fonts that use it:
@@ -1020,13 +1043,14 @@ class GtokHealthCheck:
 
         We also classify each token-grid patch as white (blank background),
         black (solid ink interior), or mix (edge / transition) using
-        ``config.patch_margin``, and count how the active codebook is split
-        across those patch types.
+        ``config.patch_margin``, count how the active codebook is split across
+        those patch types, and report per-code patch-type purity (how much each
+        code is confined to a single patch type).
 
         Returns:
             Tuple of (mean_entropy_normalised, median_entropy_normalised,
                       active_codes, high_entropy_fraction, low_entropy_fraction,
-                      patch_usage).
+                      patch_usage, purity).
         """
         import math
 
@@ -1093,7 +1117,7 @@ class GtokHealthCheck:
             if num_active == 0:
                 writer.add_scalar("Health/CodeEntropy/Mean", 0.0, global_step)
                 writer.add_scalar("Health/CodeEntropy/ActiveCodes", 0, global_step)
-                return 0.0, 0.0, 0, 0.0, 0.0, PatchCategoryUsage()
+                return 0.0, 0.0, 0, 0.0, 0.0, PatchCategoryUsage(), CodePurity()
 
             active_count = count[active_mask].float()  # (A, F)
             active_totals = code_totals[active_mask].float()  # (A,)
@@ -1146,6 +1170,20 @@ class GtokHealthCheck:
                 mix_exclusive=int(kind_exclusive[2].item()),
             )
 
+            # --- Per-code patch-type purity ---
+            # For each active code, the fraction of its assignments in its
+            # single most common patch type.
+            usage = cat_count[active_mask].float()  # (A, 3)
+            usage_totals = usage.sum(dim=1)  # (A,)
+            dominant = usage.max(dim=1).values  # (A,)
+            purity = dominant / usage_totals.clamp(min=1.0)  # (A,)
+            purity_stats = CodePurity(
+                mean_purity=float(purity.mean().item()),
+                median_purity=float(purity.median().item()),
+                high_purity_frac=float((purity >= 0.9).float().mean().item()),
+                scrambled_frac=float((purity <= 0.4).float().mean().item()),
+            )
+
             # --- Log to TensorBoard ---
             writer.add_scalar("Health/CodeEntropy/Mean", mean_ent, global_step)
             writer.add_scalar("Health/CodeEntropy/Median", median_ent, global_step)
@@ -1195,8 +1233,36 @@ class GtokHealthCheck:
                 patch_usage.mix_exclusive,
                 global_step,
             )
+            writer.add_scalar(
+                "Health/CodeEntropy/PurityMean",
+                purity_stats.mean_purity,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PurityMedian",
+                purity_stats.median_purity,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PurityHighFraction",
+                purity_stats.high_purity_frac,
+                global_step,
+            )
+            writer.add_scalar(
+                "Health/CodeEntropy/PurityScrambledFraction",
+                purity_stats.scrambled_frac,
+                global_step,
+            )
 
-            return mean_ent, median_ent, num_active, high_frac, low_frac, patch_usage
+            return (
+                mean_ent,
+                median_ent,
+                num_active,
+                high_frac,
+                low_frac,
+                patch_usage,
+                purity_stats,
+            )
 
         finally:
             if was_training:
@@ -1331,6 +1397,16 @@ def _print_results(results: HealthCheckResults) -> None:
             f"{pu.black_codes} codes ({pu.black_exclusive} exclusive)\n"
             f"  mix (edge)    : {_pct(pu.mix_positions):5.1f}% of positions  "
             f"{pu.mix_codes} codes ({pu.mix_exclusive} exclusive)"
+        )
+
+    if results.purity is not None:
+        pur = results.purity
+        sections.append(
+            "Code purity (per-code patch-type concentration)\n"
+            f"  mean          : {pur.mean_purity:.4f}\n"
+            f"  median        : {pur.median_purity:.4f}\n"
+            f"  high (>=0.9)  : {pur.high_purity_frac:.4f}  (content-aligned codes)\n"
+            f"  scrambled     : {pur.scrambled_frac:.4f}  (<=0.4, uniform across types)"
         )
 
     if not sections:

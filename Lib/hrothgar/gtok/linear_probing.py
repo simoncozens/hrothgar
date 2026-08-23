@@ -34,6 +34,7 @@ import torch.nn as nn
 import tqdm
 from torch.utils.data import DataLoader
 
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.model import GtokConfig, GtokModel, load_model
 from hrothgar.utils import torch_setup
@@ -222,7 +223,13 @@ def _collate_probe_batch(batch, image_size: int) -> Dict[str, torch.Tensor]:
     """Render a batch of probe samples into tensors."""
     images = torch.stack(
         [
-            torch.tensor(item["font"].render(item["char"], size=image_size))
+            crop_to_ink(
+                torch.tensor(
+                    item["font"].render(item["char"], size=image_size),
+                    dtype=torch.float32,
+                ),
+                image_size,
+            )
             for item in batch
         ]
     )

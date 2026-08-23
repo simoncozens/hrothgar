@@ -35,6 +35,7 @@ import torch
 import tqdm
 from piqa import SSIM as PIQA_SSIM
 
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.googlefonts import GoogleFonts
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import GtokModel, load_model
@@ -137,6 +138,7 @@ def _run_intra_image_diversity(
         image = torch.tensor(
             font.render(cp, size=config.image_size), dtype=torch.float32
         )
+        image = crop_to_ink(image, config.image_size)
         if float(image.max()) == float(image.min()):
             continue
         image = image.unsqueeze(0).to(device)  # (1, 3, H, W)
@@ -239,6 +241,7 @@ def _run_code_vs_visual_distance(
         image = torch.tensor(
             font.render(cp, size=config.image_size), dtype=torch.float32
         )
+        image = crop_to_ink(image, config.image_size)
         if float(image.max()) == float(image.min()):
             continue
         image_gpu = image.unsqueeze(0).to(device)

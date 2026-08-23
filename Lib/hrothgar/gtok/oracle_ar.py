@@ -32,6 +32,7 @@ import torch.nn as nn
 import tqdm
 from torch.utils.data import DataLoader
 
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.googlefonts import Font, GoogleFonts
 from hrothgar.gtok.model import GtokModel, load_model
 from hrothgar.utils import torch_setup
@@ -200,6 +201,7 @@ class SingleFontTokenDataset(torch.utils.data.Dataset):
     def _tokenize(self, font: Font, cp: int) -> torch.Tensor | None:
         """Render + tokenize one glyph."""
         image = torch.tensor(font.render(cp, size=self.image_size), dtype=torch.float32)
+        image = crop_to_ink(image, self.image_size)
         # Skip blank renderings.
         if float(image.max()) == float(image.min()):
             return None

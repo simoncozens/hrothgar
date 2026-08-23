@@ -6,17 +6,32 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from hrothgar.ar.model import ARModelOutput
 from glyphloss import glyph_reconstruction_loss
+
+from hrothgar.ar.model import ARModelOutput
+from hrothgar.glyphloss_curvature import CurvatureWeightedGlyphLoss
+
+
+# Curvature- and spectral-weighted glyphloss, matching GTok. The default
+# glyphloss is a *mean* over the image, so the few terminal/corner pixels
+# contribute negligible absolute loss and the optimizer ignores them. The
+# curvature mask (k=20) amplifies those pixels, and lambda_spectral=2.5
+# upweights high-frequency edge/terminal detail. lambda_pixel=0 because the
+# raw-pixel term is handled separately by ``pixel_l1``.
+_GLYPHLOSS_FN = CurvatureWeightedGlyphLoss(
+    k=20.0,
+    lambda_pixel=0.0,
+    lambda_spectral=2.5,
+)
 
 
 @dataclass(frozen=True)
 class ARLossWeights:
     """Weights for the AR visual-pretraining objectives."""
 
-    token_cross_entropy: float = 1.0
+    token_cross_entropy: float = 0.4
     pixel_l1: float = 1.0
-    glyphloss: float = 1.0
+    glyphloss: float = 2.0
     lookahead_cross_entropy: float = 0.1
     perceptual_lpips: float = 2.0
     bbox_l1: float = 0.1
@@ -130,7 +145,7 @@ def compute_ar_loss(
     glyphloss = torch.tensor(0.0, device=target_images.device)
     recon = getattr(model_output, "reconstructed_images", None)
     if recon is not None:
-        glyphloss = glyph_reconstruction_loss(recon, target_images)
+        glyphloss = _GLYPHLOSS_FN(recon, target_images)
 
     weighted_token_cross_entropy = weights.token_cross_entropy * token_cross_entropy
     weighted_lookahead_cross_entropy = (
