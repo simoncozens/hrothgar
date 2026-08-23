@@ -645,7 +645,7 @@ class ARModel(SaveLoadModel):
     # Serialisation
     # ------------------------------------------------------------------
 
-    def load(self, path: str, device: torch.device) -> None:
+    def load(self, path: str, device: torch.device, strict: bool = False) -> None:
         """Load AR model weights from a checkpoint.
 
         ``gtok.*``, ``token_decoder.*``, and ``lookahead_decoders.*`` keys
