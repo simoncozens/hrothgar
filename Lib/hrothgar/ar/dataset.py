@@ -3,9 +3,8 @@
 This module reuses the shared font split logic from ``hrothgar.dataset`` and
 provides a collation function tailored to the AR generator inputs.
 
-Style is provided as pre-computed font-level embedding vectors from
-``FontStyleEmbedder``.  Embeddings are computed once per font during
-dataset initialisation and cached in memory.
+Style is provided as per-glyph style reference images, rendered and cropped
+to the ink bounding box during collation.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ import math
 from typing import Optional, Sequence, Set
 
 import torch
-import tqdm
 from torch.utils.data import BatchSampler, DataLoader
 
 import uharfbuzz as hb
@@ -30,7 +28,6 @@ from hrothgar.dataset import Dataset, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.glyph_rendering import bbox_size, crop_to_ink
 from hrothgar.googlefonts import GoogleFont
-from hrothgar.style_embedding.model import FontStyleEmbedder
 
 
 class _OversampledTargetDataset(Dataset):
@@ -70,8 +67,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         repo_url: str,
         batch_size: int,
         *,
-        font_style_embedder: FontStyleEmbedder,
-        embedder_device: torch.device,
         having: Optional[Set[int]] = None,
         target_codepoints: Optional[Sequence[int]] = None,
         canary_size: Optional[int] = None,
@@ -110,40 +105,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         self.target_only = target_only
         self.style_glyph_count = style_glyph_count
         self.common_style_codepoints = common_style_codepoints
-
-        # Pre-compute font-level style embeddings for all fonts.
-        self._font_embedding: dict[str, torch.Tensor] = {}
-        self._precompute_font_embeddings(font_style_embedder, embedder_device)
-
-    def _precompute_font_embeddings(
-        self, embedder: FontStyleEmbedder, device: torch.device
-    ) -> None:
-        """Encode each font's full input glyph set into a style vector."""
-        all_fonts = self.train_fonts + self.test_fonts
-        if not all_fonts:
-            return
-
-        embedder.eval()
-        embedder.to(device)
-        print("Precomputing font-level style embeddings for all fonts...")
-        for font in tqdm.tqdm(all_fonts):
-            try:
-                embedding = embedder.compute_embedding(font, device=device)
-            except Exception as exc:
-                print(
-                    f"WARNING: Failed to render embedding for "
-                    f"{font.family!r} ({font.path}): {exc}"
-                )
-                continue
-            self._font_embedding[font.path] = embedding
-
-        # If any font couldn't be rendered, use the mean of available
-        # embeddings as a fallback so training doesn't crash.
-        if self._font_embedding:
-            fallback = torch.stack(list(self._font_embedding.values())).mean(dim=0)
-            for font in all_fonts:
-                if font.path not in self._font_embedding:
-                    self._font_embedding[font.path] = fallback
 
     def filter_fonts(self):
         self.googlefonts.fonts = [
@@ -210,7 +171,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         - ``target_rendering``: target font glyph image (ground truth)
         - ``content_rendering``: same codepoint rendered by the reference font
         - ``style_renderings``: style support set from the target font
-        - ``font_style_embedding``: pre-computed font-level style vector
         Plus metadata useful for debugging and future adaptation wiring.
         """
         chars = torch.tensor([item["char"] for item in batch], dtype=torch.long)
@@ -221,8 +181,6 @@ class ARPhase1DatasetMaker(DatasetMaker):
         descriptions = []
         all_metrics: list[torch.Tensor] = []
         bbox_sizes: list[torch.Tensor] = []
-        font_embeddings: list[torch.Tensor] = []
-        font_embedding_fallback = torch.zeros(1)  # will be overwritten
 
         for item in batch:
             font: GoogleFont = item["font"]
@@ -294,16 +252,12 @@ class ARPhase1DatasetMaker(DatasetMaker):
                 aw,
             ]))
 
-            # Pre-computed font style embedding.
-            font_embeddings.append(self._font_embedding[font.path])
-
         return {
             "char": chars,
             "target_rendering": torch.stack(target_renderings),
             "content_rendering": torch.stack(content_renderings),
             "style_renderings": torch.stack(style_renderings),
             "style_chars": torch.tensor(style_chars, dtype=torch.long),
-            "font_style_embedding": torch.stack(font_embeddings),
             "description": descriptions,
             "metrics": torch.stack(all_metrics),
             "bbox_size": torch.stack(bbox_sizes),

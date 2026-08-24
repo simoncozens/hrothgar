@@ -25,7 +25,6 @@ from hrothgar.ar.losses import ARLossWeights, compute_ar_loss
 from hrothgar.ar.model import ARModel, ARModelConfig
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.gtok.model import load_model as load_gtok_model
-from hrothgar.style_embedding import FontStyleEmbedder, FontStyleEmbedderConfig
 from hrothgar.utils import TrainingLoop
 
 # ── Policy constants (not CLI switches — tracked by git hash) ────────────
@@ -56,9 +55,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         )
         image_size = gtok_config.image_size
 
-        # ── Load font-level style embedder ───────────────────────────
-        font_style_embedder = self._load_font_style_embedder(train_args)
-
         config = ARModelConfig(
             image_size=image_size,
             maskgit_num_inference_steps=MASKGIT_NUM_INFERENCE_STEPS,
@@ -79,8 +75,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         maker = ARPhase1DatasetMaker(
             train_args.dataset_path,
             batch_size=train_args.batch_size,
-            font_style_embedder=font_style_embedder,
-            embedder_device=self.device,
             image_size=config.image_size,
             style_glyph_count=train_args.style_glyph_count,
             common_style_codepoints=train_args.style_characters,
@@ -155,26 +149,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         self.validation_direction = "lower"  # Minimize glyphloss
 
     # ------------------------------------------------------------------
-    # Font style embedder loading
-    # ------------------------------------------------------------------
-
-    def _load_font_style_embedder(self, train_args) -> FontStyleEmbedder:
-        """Load the pre-trained FontStyleEmbedder from a checkpoint."""
-        path = train_args.font_style_embedder_path
-        if not path:
-            raise ValueError(
-                "font_style_embedder_path is required for training"
-            )
-        config = FontStyleEmbedderConfig.from_sidecar(path)
-        embedder = FontStyleEmbedder(config).to(self.device)
-        embedder.load(path, device=self.device)
-        embedder.eval()
-        for p in embedder.parameters():
-            p.requires_grad = False
-        print(f"Loaded FontStyleEmbedder from {path}")
-        return embedder
-
-    # ------------------------------------------------------------------
     # AMP helper
     # ------------------------------------------------------------------
 
@@ -191,7 +165,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         target_images = batch["target_rendering"].to(self.device)
         content_images = batch["content_rendering"].to(self.device)
         style_reference_images = batch["style_renderings"].to(self.device)
-        font_style_embedding = batch["font_style_embedding"].to(self.device)
         target_codepoints = batch["char"].to(self.device)
         metrics = batch.get("metrics")
         if metrics is not None:
@@ -203,7 +176,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         model_output = self.model(
             content_images,
             style_reference_images,
-            font_style_embedding=font_style_embedding,
             target_images=target_images,
             target_codepoints=target_codepoints,
             metrics=metrics,
@@ -338,7 +310,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_target = val_batch["target_rendering"].to(self.device)
                 val_content = val_batch["content_rendering"].to(self.device)
                 val_style = val_batch["style_renderings"].to(self.device)
-                val_font_emb = val_batch["font_style_embedding"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
                 batch_metrics = val_batch.get("metrics")
                 if batch_metrics is not None:
@@ -351,7 +322,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                     val_output = self.model(
                         val_content,
                         val_style,
-                        font_style_embedding=val_font_emb,
                         target_images=val_target,
                         target_codepoints=val_cp,
                         metrics=batch_metrics,
@@ -381,7 +351,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                         val_content,
                         val_style,
                         val_cp,
-                        font_style_embedding=val_font_emb,
                         target_token_indices=gt_tokens,
                         metrics=batch_metrics,
                     )
@@ -440,7 +409,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_target = val_batch["target_rendering"].to(self.device)
                 val_content = val_batch["content_rendering"].to(self.device)
                 val_style_gen = val_batch["style_renderings"].to(self.device)
-                val_font_emb = val_batch["font_style_embedding"].to(self.device)
                 val_cp = val_batch["char"].to(self.device)
                 val_metrics_gen = val_batch.get("metrics")
                 if val_metrics_gen is not None:
@@ -451,7 +419,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                         content_images=val_content,
                         style_reference_images=val_style_gen,
                         target_codepoints=val_cp,
-                        font_style_embedding=val_font_emb,
                         metrics=val_metrics_gen,
                     )
                 gt_tokens = self.model.target_token_indices_from_images(
@@ -498,7 +465,6 @@ class MaskGITTrainingLoop(TrainingLoop):
         val_target = val_batch["target_rendering"].to(self.device)
         val_content = val_batch["content_rendering"].to(self.device)
         val_style = val_batch["style_renderings"].to(self.device)
-        val_font_emb = val_batch["font_style_embedding"].to(self.device)
         val_cp = val_batch["char"].to(self.device)
 
         with self._autocast_context():
@@ -506,7 +472,6 @@ class MaskGITTrainingLoop(TrainingLoop):
             val_output = self.model(
                 val_content,
                 val_style,
-                font_style_embedding=val_font_emb,
                 target_images=val_target,
                 target_codepoints=val_cp,
             )
@@ -515,7 +480,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_content,
                 val_style,
                 val_cp,
-                font_style_embedding=val_font_emb,
                 target_token_indices=val_output.target_token_indices,
             )
             # Generation (free-running / iterative decode).
@@ -523,7 +487,6 @@ class MaskGITTrainingLoop(TrainingLoop):
                 content_images=val_content,
                 style_reference_images=val_style,
                 target_codepoints=val_cp,
-                font_style_embedding=val_font_emb,
             )
 
         preview_count = min(8, val_target.shape[0])
@@ -572,12 +535,7 @@ if __name__ == "__main__":
         help="Path to the Google Fonts repository",
     )
     parser.add_argument(
-        "--font-style-embedder-path",
-        type=str,
-        default="models/style_embedding.pth",
-        help="Path to font style embedding model",
-    )
-    parser.add_argument(
+        "--target-steps",
         "--tag",
         type=str,
         help="Tag for the training run",

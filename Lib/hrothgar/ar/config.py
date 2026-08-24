@@ -8,15 +8,10 @@ from typing import Optional
 class ARModelConfig:
     """Configuration for the MaskGIT glyph generator.
 
-    Style conditioning is provided by *two* complementary signals:
-
-    1. Per-glyph style reference images, encoded by the upstream GAR-Font
-       ``StyleEncoder`` and fused with content via ``FeatureFusionModule``
-       cross-attention.  This carries the spatial detail (terminals, serifs,
-       corners, stroke modulation) that a single global vector cannot.
-    2. A pre-computed font-level embedding vector from ``FontStyleEmbedder``,
-       broadcast to all spatial positions as a globally-consistent style
-       summary.
+    Style conditioning is provided by per-glyph style reference images, encoded
+    by the upstream GAR-Font ``StyleEncoder`` and fused with content via
+    ``FeatureFusionModule`` cross-attention.  This carries the spatial style
+    detail (terminals, serifs, corners, stroke modulation).
     """
 
     image_size: int = 128
@@ -38,8 +33,6 @@ class ARModelConfig:
     decoder_dropout: float = 0.1
     decoder_attention_dropout: float = 0.1
 
-    # Dropout applied to the font style embedding (per-batch).
-    font_style_dropout: float = 0.5
     # Dropout applied to the per-glyph style feature map.
     style_dropout: float = 0.2
 

@@ -1,4 +1,4 @@
-"""MaskGIT-based glyph generator with font-level style conditioning.
+"""MaskGIT-based glyph generator with style-reference conditioning.
 
 This module implements the vision-only stage of the glyph generator:
 
@@ -7,12 +7,9 @@ This module implements the vision-only stage of the glyph generator:
    ``StyleEncoder`` and fused with content via ``FeatureFusionModule``
    cross-attention, preserving spatial style detail (terminals, serifs,
    corners, stroke modulation).
-3. A pre-computed font-level style embedding (from FontStyleEmbedder)
-   provides a globally-consistent style signal, broadcast to all spatial
-   positions and added to the fused features.
-4. A bidirectional MaskGIT transformer predicts G-Tok codebook indices
+3. A bidirectional MaskGIT transformer predicts G-Tok codebook indices
    via masked token prediction (like BERT).
-5. A hard codebook projection feeds the frozen G-Tok decoder to
+4. A hard codebook projection feeds the frozen G-Tok decoder to
    reconstruct images.
 
 Metric conditioning:
@@ -392,7 +389,6 @@ class ARModel(SaveLoadModel):
         style_reference_images: torch.Tensor,
         latincore_idx: torch.Tensor,
         *,
-        font_style_embedding: torch.Tensor,
         metrics: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Build the 2D conditioning feature map for PrefixLM.
@@ -402,17 +398,12 @@ class ARModel(SaveLoadModel):
 
         Content features are fused with per-glyph style reference features via
         the ``FeatureFusionModule`` cross-attention, preserving spatial style
-        detail (terminals, serifs, corners).  The font style embedding is then
-        broadcast to all spatial positions and added, giving every generation
-        token an identical, globally-consistent style signal on top of the
-        spatially-resolved style features.
+        detail (terminals, serifs, corners).
 
         Args:
             content_images: ``(B, 3, H, W)`` content glyph renderings.
             style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             latincore_idx: ``(B,)`` LATIN_CORE indices.
-            font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
-                font-level style vector from ``FontStyleEmbedder``.
             metrics: Optional ``(B, 6)`` normalised metric tensor.
         """
         content_features = self.encode_content(content_images)  # (B, C, H, W)
@@ -420,19 +411,6 @@ class ARModel(SaveLoadModel):
             style_reference_images
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
-
-        # DIAGNOSTIC ABLATION: zero the whole-font style embedding so it
-        # contributes nothing, isolating the per-glyph style-reference signal.
-        # Revert this line (delete it, restoring the addition below as the
-        # active path) to re-enable the global style vector.
-        font_style_embedding = torch.zeros_like(font_style_embedding)
-
-        # Broadcast font style to all spatial positions and add to fused.
-        if self.training and self.config.font_style_dropout > 0:
-            font_style_embedding = F.dropout(
-                font_style_embedding, p=self.config.font_style_dropout
-            )
-        fused = fused + font_style_embedding[:, :, None, None]  # (B, C, H, W)
 
         # Codepoint embedding.
         codepoint_emb = self.codepoint_embedding(latincore_idx)  # (B, C)
@@ -521,7 +499,6 @@ class ARModel(SaveLoadModel):
         content_images: torch.Tensor,
         style_reference_images: torch.Tensor,
         *,
-        font_style_embedding: torch.Tensor,
         target_token_indices: Optional[torch.Tensor] = None,
         target_images: Optional[torch.Tensor] = None,
         target_codepoints: Optional[torch.Tensor] = None,
@@ -533,8 +510,6 @@ class ARModel(SaveLoadModel):
         Args:
             content_images: ``(B, 3, H, W)`` content glyphs.
             style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
-            font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
-                font-level style vector (required).
             target_token_indices: Optional ``(B, N)`` ground-truth token indices.
             target_images: Optional ``(B, 3, H, W)`` ground-truth images (used
                 to derive token indices if not provided).
@@ -551,7 +526,6 @@ class ARModel(SaveLoadModel):
             content_images=content_images,
             style_reference_images=style_reference_images,
             latincore_idx=target_latincore_idx,
-            font_style_embedding=font_style_embedding,
             metrics=metrics,
         )
 
@@ -602,7 +576,6 @@ class ARModel(SaveLoadModel):
         style_reference_images: torch.Tensor,
         target_codepoints: torch.Tensor,
         *,
-        font_style_embedding: torch.Tensor,
         metrics: Optional[torch.Tensor] = None,
     ) -> ARModelOutput:
         """Generate target glyphs via MaskGIT iterative decoding.
@@ -611,8 +584,6 @@ class ARModel(SaveLoadModel):
             content_images: ``(B, 3, H, W)`` content glyphs.
             style_reference_images: ``(B, n_ref, 3, H, W)`` style references.
             target_codepoints: ``(B,)`` Unicode codepoint tensor.
-            font_style_embedding: ``(B, encoder_feature_dim)`` pre-computed
-                font-level style vector (required).
             metrics: Optional ``(B, 6)`` normalised metric tensor.
         """
         latincore_idx = self._unicode_to_latincore(target_codepoints)
@@ -620,7 +591,6 @@ class ARModel(SaveLoadModel):
             content_images=content_images,
             style_reference_images=style_reference_images,
             latincore_idx=latincore_idx,
-            font_style_embedding=font_style_embedding,
             metrics=metrics,
         )
 
@@ -657,7 +627,6 @@ class ARModel(SaveLoadModel):
         style_reference_images: torch.Tensor,
         target_codepoints: torch.Tensor,
         *,
-        font_style_embedding: torch.Tensor,
         target_token_indices: torch.Tensor,
         metrics: Optional[torch.Tensor] = None,
     ) -> ARModelOutput:
@@ -681,7 +650,6 @@ class ARModel(SaveLoadModel):
             content_images=content_images,
             style_reference_images=style_reference_images,
             latincore_idx=target_latincore_idx,
-            font_style_embedding=font_style_embedding,
             metrics=metrics,
         )
 
