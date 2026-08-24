@@ -418,6 +418,12 @@ class ARModel(SaveLoadModel):
         )  # (B, n_ref, C, H, W)
         fused = self.aggregator(content_features, style_features)  # (B, C, H, W)
 
+        # DIAGNOSTIC ABLATION: zero the whole-font style embedding so it
+        # contributes nothing, isolating the per-glyph style-reference signal.
+        # Revert this line (delete it, restoring the addition below as the
+        # active path) to re-enable the global style vector.
+        font_style_embedding = torch.zeros_like(font_style_embedding)
+
         # Broadcast font style to all spatial positions and add to fused.
         if self.training and self.config.font_style_dropout > 0:
             font_style_embedding = F.dropout(
