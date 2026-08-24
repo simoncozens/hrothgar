@@ -310,12 +310,20 @@ class MaskGITTrainingLoop(TrainingLoop):
             return
 
         ctx_label = "BidirectionalContext"
+        tf_label = "TeacherForced"
         gen_label = "IterativeDecode"
 
         self.model.eval()
         with torch.no_grad():
             # ── Full-context quality ──────────────────────────────────
             val_metrics = {
+                "ssim": [],
+                "lpips": [],
+                "glyphloss": [],
+                "token_accuracy": [],
+                "token_cross_entropy": [],
+            }
+            tf_metrics = {
                 "ssim": [],
                 "lpips": [],
                 "glyphloss": [],
@@ -366,6 +374,39 @@ class MaskGITTrainingLoop(TrainingLoop):
                     val_loss_info["token_cross_entropy"]
                 )
 
+                # ── Teacher-forced (masked oracle) ─────────────────────
+                gt_tokens = val_output.target_token_indices
+                with self._autocast_context():
+                    tf_output = self.model.teacher_forced_reconstruct(
+                        val_content,
+                        val_style,
+                        val_cp,
+                        font_style_embedding=val_font_emb,
+                        target_token_indices=gt_tokens,
+                        metrics=batch_metrics,
+                    )
+                _, tf_loss_info = compute_ar_loss(
+                    tf_output,
+                    val_target,
+                    weights=self.loss_weights,
+                    lpips_metric=self.lpips,
+                )
+                tf_recon = torch.clamp(
+                    tf_output.reconstructed_images, 0.0, 1.0
+                ).float()
+                with torch.autocast(device_type=self.device.type, enabled=False):
+                    tf_metrics["ssim"].append(self.ssim(tf_recon, target))
+                    tf_metrics["lpips"].append(self.lpips(tf_recon, target))
+                    tf_metrics["glyphloss"].append(
+                        glyph_reconstruction_loss(tf_recon, target)
+                    )
+                tf_metrics["token_accuracy"].append(
+                    tf_loss_info["token_accuracy"]
+                )
+                tf_metrics["token_cross_entropy"].append(
+                    tf_loss_info["token_cross_entropy"]
+                )
+
             avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
             avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
             avg_glyphloss = torch.mean(torch.stack(val_metrics["glyphloss"]))
@@ -376,6 +417,17 @@ class MaskGITTrainingLoop(TrainingLoop):
             self.write_scalar(f"Validation/{ctx_label}_glyphloss", avg_glyphloss)
             self.write_scalar(f"Validation/{ctx_label}_TokenAccuracy", avg_token_acc)
             self.write_scalar(f"Validation/{ctx_label}_TokenCrossEntropy", avg_token_ce)
+
+            tf_ssim = torch.mean(torch.stack(tf_metrics["ssim"]))
+            tf_lpips = torch.mean(torch.stack(tf_metrics["lpips"]))
+            tf_glyphloss = torch.mean(torch.stack(tf_metrics["glyphloss"]))
+            tf_token_acc = torch.mean(torch.stack(tf_metrics["token_accuracy"]))
+            tf_token_ce = torch.mean(torch.stack(tf_metrics["token_cross_entropy"]))
+            self.write_scalar(f"Validation/{tf_label}_SSIM", tf_ssim)
+            self.write_scalar(f"Validation/{tf_label}_LPIPS", tf_lpips)
+            self.write_scalar(f"Validation/{tf_label}_glyphloss", tf_glyphloss)
+            self.write_scalar(f"Validation/{tf_label}_TokenAccuracy", tf_token_acc)
+            self.write_scalar(f"Validation/{tf_label}_TokenCrossEntropy", tf_token_ce)
 
             # ── Generation quality ────────────────────────────────────
             fr_batches = max(1, self.validation_batches // 10)
@@ -429,6 +481,8 @@ class MaskGITTrainingLoop(TrainingLoop):
             gap_ratio = gap / torch.clamp(avg_token_acc, min=1e-8)
             self.write_scalar("Validation/TokenAccuracy_Gap_Absolute", gap)
             self.write_scalar("Validation/TokenAccuracy_Gap_Relative", gap_ratio)
+            tf_gap = tf_token_acc - fr_token_acc
+            self.write_scalar("Validation/TeacherForced_TokenAccuracy_Gap", tf_gap)
 
             self.checkpoint_if_best(fr_glyphloss)
             self.visualize()
@@ -448,13 +502,21 @@ class MaskGITTrainingLoop(TrainingLoop):
         val_cp = val_batch["char"].to(self.device)
 
         with self._autocast_context():
-            # Full-context reconstruction (teacher-forced / bidirectional).
+            # Full-context reconstruction (bidirectional, full ground-truth).
             val_output = self.model(
                 val_content,
                 val_style,
                 font_style_embedding=val_font_emb,
                 target_images=val_target,
                 target_codepoints=val_cp,
+            )
+            # Teacher-forced (masked oracle) reconstruction.
+            tf_output = self.model.teacher_forced_reconstruct(
+                val_content,
+                val_style,
+                val_cp,
+                font_style_embedding=val_font_emb,
+                target_token_indices=val_output.target_token_indices,
             )
             # Generation (free-running / iterative decode).
             gen_output = self.model.generate(
@@ -472,12 +534,13 @@ class MaskGITTrainingLoop(TrainingLoop):
                 first_style,
                 val_target[:preview_count],
                 val_output.reconstructed_images[:preview_count],
+                tf_output.reconstructed_images[:preview_count],
                 gen_output.reconstructed_images[:preview_count],
             ],
             dim=0,
         )
         self.writer.add_image(
-            "Reconstruction/content_style_target_recon_gen",
+            "Reconstruction/content_style_target_recon_tf_gen",
             torchvision.utils.make_grid(recon_grid, nrow=preview_count),
             self.global_step,
         )

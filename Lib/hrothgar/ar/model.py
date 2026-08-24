@@ -647,6 +647,58 @@ class ARModel(SaveLoadModel):
             predicted_bbox=predicted_bbox,
         )
 
+    @torch.no_grad()
+    def teacher_forced_reconstruct(
+        self,
+        content_images: torch.Tensor,
+        style_reference_images: torch.Tensor,
+        target_codepoints: torch.Tensor,
+        *,
+        font_style_embedding: torch.Tensor,
+        target_token_indices: torch.Tensor,
+        metrics: Optional[torch.Tensor] = None,
+    ) -> ARModelOutput:
+        """Teacher-forced (masked-oracle) reconstruction.
+
+        Masks a random fraction of target tokens (the same cosine distribution
+        used in training) and predicts them with the *ground-truth* tokens
+        providing context for the remaining positions. This removes exposure
+        bias (the model never conditions on its own predictions) without
+        leaking the answer for the masked positions — unlike the full-context
+        reconstruction, which feeds the complete unmasked sequence.
+
+        This is the reference for separating exposure bias from insufficient
+        style conditioning: if this reconstruction sits close to the
+        full-context ceiling while free-running iterative decode lags, the
+        iterative gap is exposure bias; if it also lags, the conditioning is
+        the bottleneck.
+        """
+        target_latincore_idx = self._unicode_to_latincore(target_codepoints)
+        conditioning_map = self.build_conditioning_map(
+            content_images=content_images,
+            style_reference_images=style_reference_images,
+            latincore_idx=target_latincore_idx,
+            font_style_embedding=font_style_embedding,
+            metrics=metrics,
+        )
+
+        logits, token_mask = self.maskgit_decoder.forward_train(
+            target_token_indices=target_token_indices,
+            conditioning_map=conditioning_map,
+        )
+        token_embeddings, reconstructed_images = self.hard_decode(
+            logits, temperature=1.0
+        )
+
+        return ARModelOutput(
+            logits=logits,
+            reconstructed_images=reconstructed_images,
+            token_embeddings=token_embeddings,
+            target_token_indices=target_token_indices,
+            token_mask=token_mask,
+            predicted_bbox=None,
+        )
+
     # ------------------------------------------------------------------
     # Serialisation
     # ------------------------------------------------------------------
