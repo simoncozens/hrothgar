@@ -47,6 +47,8 @@ class ARModelConfig:
 
     maskgit_num_inference_steps: int = 8
     maskgit_temperature: float = 1.0
+    # Inference scheduler for the MaskGIT decoder: "confidence" or "halton".
+    maskgit_scheduler: str = "confidence"
 
     # Metric conditioning (baseline / x-height / width alignment).
     use_metrics: bool = True

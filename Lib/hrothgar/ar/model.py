@@ -200,6 +200,9 @@ class ARModel(SaveLoadModel):
         maskgit_config = MaskGITConfig(
             num_inference_steps=config.maskgit_num_inference_steps,
             temperature=config.maskgit_temperature,
+            scheduler=config.maskgit_scheduler,
+            token_grid_height=self.token_grid_height,
+            token_grid_width=self.token_grid_width,
         )
         self.maskgit_decoder = MaskGITDecoder(maskgit_transformer, maskgit_config)
 

@@ -3,8 +3,9 @@
 MaskGIT replaces the causal autoregressive decoder with a bidirectional
 transformer trained via masked token prediction (like BERT).  During
 inference, tokens are generated iteratively: the model predicts all
-positions in parallel, the most confident predictions are kept, and
-the remainder are re-masked for the next iteration.
+positions in parallel, commits the most confident predictions (or, with
+the Halton scheduler, reveals positions in a fixed low-discrepancy spatial
+order), and re-masks the rest for the next iteration.
 
 This eliminates exposure bias entirely — the model is always trained
 and evaluated on masked inputs, never on a distribution-shifted
@@ -109,6 +110,16 @@ class MaskGITConfig:
     # Minimum number of tokens to unmask per inference step.
     # Prevents the schedule from being too conservative early on.
     min_tokens_per_step: int = 1
+
+    # Which inference scheduler to use: ``"confidence"`` (top-k by model
+    # confidence) or ``"halton"`` (fixed low-discrepancy spatial order).
+    scheduler: str = "confidence"
+
+    # Token grid shape (H, W) used to discretize the 2D Halton sequence.
+    # ``token_grid_height * token_grid_width`` must equal the transformer's
+    # ``target_token_len``.
+    token_grid_height: int = 16
+    token_grid_width: int = 16
 
 
 class MaskGITTransformer(nn.Module):
@@ -429,6 +440,191 @@ class MaskGITTransformer(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Inference samplers
+# ---------------------------------------------------------------------------
+
+
+def _build_halton_order(height: int, width: int) -> torch.Tensor:
+    """Return a permutation of token positions (0..H*W-1) in Halton order.
+
+    The order follows a 2D Halton (quasi-random, low-discrepancy) sequence
+    with bases 2 and 3, discretized onto the ``height x width`` token grid.
+    Revealing tokens in this order spreads each step's predictions uniformly
+    across the image rather than clustering around high-confidence regions
+    (see ``ConfidenceSampler``).  Any grid cells the sequence fails to cover
+    are appended in raster-scan order so the result is a complete permutation.
+    """
+    n = height * width
+    nb_point = max(10_000, n * 40)
+
+    def _halton(base: int, count: int) -> list:
+        # Naive radical-inverse (van der Corput) generator, matching the
+        # Halton-MaskGIT reference implementation.
+        numerator, denominator = 0, 1
+        out: list = []
+        for _ in range(count):
+            x = denominator - numerator
+            if x == 1:
+                numerator = 1
+                denominator *= base
+            else:
+                y = denominator // base
+                while x <= y:
+                    y //= base
+                numerator = (base + 1) * y - x
+            out.append(numerator / denominator)
+        return out
+
+    xs = torch.as_tensor(_halton(2, nb_point))
+    ys = torch.as_tensor(_halton(3, nb_point))
+
+    # Discretize: x -> column, y -> row, flatten in raster-scan (row-major).
+    cols = torch.floor(xs * width).long()
+    rows = torch.floor(ys * height).long()
+    flat = rows * width + cols
+
+    order: list = []
+    seen: set = set()
+    for idx in flat.tolist():
+        if 0 <= idx < n and idx not in seen:
+            seen.add(idx)
+            order.append(idx)
+
+    # Ensure every position is covered exactly once.
+    for idx in range(n):
+        if idx not in seen:
+            order.append(idx)
+
+    return torch.tensor(order, dtype=torch.long)
+
+
+class MaskGITSampler:
+    """Base class for MaskGIT iterative inference samplers.
+
+    Subclasses implement ``_reveal``, which decides which still-masked token
+    positions to commit at each inference step.  The shared ``generate`` loop
+    runs the transformer, computes softmax confidence, commits tokens with
+    ``argmax`` (hard decode), and applies the per-step reveal decisions.
+    """
+
+    def __init__(self, config: MaskGITConfig) -> None:
+        self.config = config
+
+    @torch.no_grad()
+    def generate(
+        self,
+        transformer: MaskGITTransformer,
+        conditioning_map: torch.Tensor,
+    ) -> torch.Tensor:
+        """Iteratively decode tokens, returning predicted indices ``(B, N)``."""
+        batch_size = conditioning_map.shape[0]
+        device = conditioning_map.device
+        N = transformer.target_token_len
+        T = self.config.num_inference_steps
+        temperature = self.config.temperature
+        mask_token_id = transformer.mask_token_id
+
+        predicted = torch.full(
+            (batch_size, N), mask_token_id, dtype=torch.long, device=device
+        )
+        unmasked = torch.zeros(batch_size, N, dtype=torch.bool, device=device)
+
+        for step in range(T):
+            logits = transformer(idx=predicted, imgs_feature_map=conditioning_map)
+            probs = F.softmax(logits / temperature, dim=-1)
+            pred_tokens = probs.max(dim=-1).indices  # (B, N) hard commit
+
+            target_keep = _cosine_unmask_schedule(step + 1, T, N)
+            reveal = self._reveal(probs, unmasked, target_keep)
+
+            predicted[reveal] = pred_tokens[reveal]
+            unmasked[reveal] = True
+
+        # Safety net: fill any still-masked positions (the cosine schedule
+        # reaches N at the last step, but this guards against rounding).
+        remaining = ~unmasked
+        if remaining.any():
+            logits = transformer(idx=predicted, imgs_feature_map=conditioning_map)
+            predicted[remaining] = torch.argmax(logits, dim=-1)[remaining]
+
+        return predicted
+
+    def _reveal(
+        self,
+        probs: torch.Tensor,
+        unmasked: torch.Tensor,
+        target_keep: int,
+    ) -> torch.Tensor:
+        """Return a boolean ``(B, N)`` mask of positions to commit this step."""
+        raise NotImplementedError
+
+
+class ConfidenceSampler(MaskGITSampler):
+    """Original MaskGIT confidence scheduler.
+
+    At each step, commit the ``target_keep - already_unmasked`` most-confident
+    still-masked positions (confidence = softmax max-probability).
+    """
+
+    def _reveal(self, probs, unmasked, target_keep):
+        batch_size = unmasked.shape[0]
+        max_probs = probs.max(dim=-1).values  # (B, N)
+
+        # Already-unmasked positions must not be re-selected.
+        max_probs = torch.where(
+            unmasked, torch.full_like(max_probs, float("-inf")), max_probs
+        )
+
+        n_already = unmasked.sum(dim=1)  # (B,)
+        n_to_unmask = (target_keep - n_already).clamp(
+            min=self.config.min_tokens_per_step
+        )
+
+        reveal = torch.zeros_like(unmasked)
+        for b in range(batch_size):
+            n = min(n_to_unmask[b].item(), (~unmasked[b]).sum().item())
+            if n <= 0:
+                continue
+            _, top = torch.topk(max_probs[b], k=n)
+            reveal[b, top] = True
+        return reveal
+
+
+class HaltonSampler(MaskGITSampler):
+    """Halton low-discrepancy scheduler.
+
+    Commits tokens in a fixed, spatially-uniform order derived from a 2D Halton
+    sequence (bases 2 and 3).  Unlike the confidence scheduler, the order does
+    not depend on the model's confidence, so each step reveals a uniform sample
+    of the image and never clusters around high-confidence regions.  The number
+    of tokens committed per step still follows the cosine schedule.
+    """
+
+    def __init__(self, config: MaskGITConfig) -> None:
+        super().__init__(config)
+        self._order = _build_halton_order(
+            config.token_grid_height, config.token_grid_width
+        )
+
+    def _reveal(self, probs, unmasked, target_keep):
+        device = unmasked.device
+        N = unmasked.shape[1]
+        # Reveal is a fixed prefix of the Halton order, identical across the
+        # batch (``target_keep`` is a scalar).
+        already = int(unmasked.sum(dim=1)[0].item())
+        n = max(self.config.min_tokens_per_step, target_keep - already)
+        n = min(n, N - already)
+
+        if n <= 0:
+            return torch.zeros_like(unmasked)
+
+        positions = self._order[already : already + n].to(device)
+        reveal = torch.zeros_like(unmasked)
+        reveal[:, positions] = True
+        return reveal
+
+
+# ---------------------------------------------------------------------------
 # MaskGIT Decoder (training + inference)
 # ---------------------------------------------------------------------------
 
@@ -441,8 +637,8 @@ class MaskGITDecoder(nn.Module):
         logits for computing cross-entropy on masked positions only.
 
     Inference:
-        ``generate`` iteratively decodes tokens using a confidence-based
-        cosine schedule — no autoregressive sequential dependency.
+        ``generate`` delegates to a configured inference sampler (confidence
+        or Halton) — no autoregressive sequential dependency.
     """
 
     def __init__(
@@ -456,6 +652,24 @@ class MaskGITDecoder(nn.Module):
         self.sequence_length = transformer.target_token_len
         self.codebook_size = transformer.vocab_size
         self.mask_token_id = transformer.mask_token_id
+
+        grid_size = config.token_grid_height * config.token_grid_width
+        if grid_size != self.sequence_length:
+            raise ValueError(
+                "MaskGIT config token grid "
+                f"{config.token_grid_height}x{config.token_grid_width} does not "
+                f"match sequence length {self.sequence_length}"
+            )
+
+        self.sampler = self._build_sampler(config)
+
+    def _build_sampler(self, config: MaskGITConfig) -> MaskGITSampler:
+        """Construct the inference sampler selected by ``config.scheduler``."""
+        if config.scheduler == "confidence":
+            return ConfidenceSampler(config)
+        if config.scheduler == "halton":
+            return HaltonSampler(config)
+        raise ValueError(f"Unknown MaskGIT scheduler: {config.scheduler!r}")
 
     def _sample_mask_ratio(self) -> float:
         """Sample a per-batch mask ratio from the cosine distribution."""
@@ -498,12 +712,8 @@ class MaskGITDecoder(nn.Module):
         logits = self.transformer(idx=input_ids, imgs_feature_map=conditioning_map)
         return logits, mask
 
-    @torch.no_grad()
-    def generate(
-        self,
-        conditioning_map: torch.Tensor,
-    ) -> torch.Tensor:
-        """Iterative MaskGIT inference.
+    def generate(self, conditioning_map: torch.Tensor) -> torch.Tensor:
+        """Iteratively decode tokens via the configured inference sampler.
 
         Args:
             conditioning_map: Conditioning feature map, ``(B, C, H, W)``.
@@ -511,71 +721,7 @@ class MaskGITDecoder(nn.Module):
         Returns:
             Predicted token indices of shape ``(B, N)``.
         """
-        batch_size = conditioning_map.shape[0]
-        device = conditioning_map.device
-        N = self.sequence_length
-        T = self.config.num_inference_steps
-        temperature = self.config.temperature
-
-        # Start with all tokens masked.
-        predicted = torch.full(
-            (batch_size, N),
-            fill_value=self.mask_token_id,
-            dtype=torch.long,
-            device=device,
-        )
-
-        # Track which positions are unmasked (predicted and kept).
-        unmasked = torch.zeros(batch_size, N, dtype=torch.bool, device=device)
-
-        for step in range(T):
-            # Run the model with current (partially masked) tokens.
-            logits = self.transformer(
-                idx=predicted,
-                imgs_feature_map=conditioning_map,
-            )  # (B, N, K)
-
-            # Compute per-position confidence.
-            probs = F.softmax(logits / temperature, dim=-1)  # (B, N, K)
-            max_probs, pred_tokens = probs.max(dim=-1)  # (B, N), (B, N)
-
-            # Only update positions that are still masked.
-            # (Already-unmasked positions keep their previous prediction.)
-            # Zero confidence on unmasked positions so they aren't re-selected.
-            max_probs = torch.where(unmasked, torch.zeros_like(max_probs), max_probs)
-
-            # Number to unmask at this step.
-            target_keep = _cosine_unmask_schedule(step + 1, T, N)
-            n_already_unmasked = unmasked.sum(dim=1)  # (B,)
-            n_to_unmask = target_keep - n_already_unmasked  # (B,)
-            n_to_unmask = n_to_unmask.clamp(min=self.config.min_tokens_per_step)
-
-            # For each batch item, select top-n_to_unmask most confident masked positions.
-            for b in range(batch_size):
-                n = n_to_unmask[b].item()
-                if n <= 0:
-                    continue
-                # Get confidences of still-masked positions.
-                confidences = max_probs[b].clone()
-                _, top_indices = torch.topk(
-                    confidences, k=min(n, (~unmasked[b]).sum().item())
-                )
-                unmasked[b, top_indices] = True
-                predicted[b, top_indices] = pred_tokens[b, top_indices]
-
-        # At the final step, ensure all positions are filled.
-        # (The cosine schedule guarantees this for step==T-1, but
-        # as a safety net, fill any remaining masked positions.)
-        remaining_masked = ~unmasked
-        if remaining_masked.any():
-            logits = self.transformer(
-                idx=predicted,
-                imgs_feature_map=conditioning_map,
-            )
-            final_tokens = torch.argmax(logits, dim=-1)
-            predicted[remaining_masked] = final_tokens[remaining_masked]
-
-        return predicted
+        return self.sampler.generate(self.transformer, conditioning_map)
 
 
 # ---------------------------------------------------------------------------
