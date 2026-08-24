@@ -535,7 +535,6 @@ if __name__ == "__main__":
         help="Path to the Google Fonts repository",
     )
     parser.add_argument(
-        "--target-steps",
         "--tag",
         type=str,
         help="Tag for the training run",
