@@ -29,10 +29,10 @@ _GLYPHLOSS_FN = CurvatureWeightedGlyphLoss(
 class ARLossWeights:
     """Weights for the AR visual-pretraining objectives."""
 
-    token_cross_entropy: float = 0.4
-    pixel_l1: float = 1.0
-    glyphloss: float = 2.0
-    perceptual_lpips: float = 2.0
+    token_cross_entropy: float = 2.0
+    pixel_l1: float = 0.5
+    glyphloss: float = 1.0
+    perceptual_lpips: float = 1.0
     bbox_l1: float = 0.1
 
 
