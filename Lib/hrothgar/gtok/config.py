@@ -35,7 +35,7 @@ class GtokConfig:
     bidirectional_decoder: bool = False
 
     # Quantization parameters
-    quantizer_codebook_size: int = 4096  # Size of the codebook
+    quantizer_codebook_size: int = 16384  # Size of the codebook
     quantizer_beta: float = 0.25  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
     quantizer_ema_decay: float = 0.95
@@ -54,14 +54,15 @@ class GtokConfig:
     @property
     def quantizer_code_dim(self) -> int:
         """Dimensionality of each code in the quantizer."""
-        if self.image_size >= 128:
-            return 64
-        elif self.image_size >= 64:
-            return 32
-        else:
-            raise ValueError(
-                f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
-            )
+        return 8
+        # if self.image_size >= 128:
+        #     return 64
+        # elif self.image_size >= 64:
+        #     return 32
+        # else:
+        #     raise ValueError(
+        #         f"Unsupported image_size {self.image_size} for default quantizer_code_dim"
+        #     )
 
     def save_sidecar(self, model_path: Path) -> None:
         from dataclasses import asdict

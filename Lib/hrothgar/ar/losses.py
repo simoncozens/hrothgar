@@ -32,7 +32,6 @@ class ARLossWeights:
     token_cross_entropy: float = 0.4
     pixel_l1: float = 1.0
     glyphloss: float = 2.0
-    lookahead_cross_entropy: float = 0.1
     perceptual_lpips: float = 2.0
     bbox_l1: float = 0.1
 
@@ -45,7 +44,6 @@ class ARAdaptationLossWeights:
     token_cross_entropy: float = 0.0
     pixel_l1: float = 0.0
     glyphloss: float = 1.0
-    lookahead_cross_entropy: float = 0.0
 
 
 def compute_ar_loss(
@@ -83,7 +81,7 @@ def compute_ar_loss(
     if token_targets is None:
         token_targets = model_output.target_token_indices
 
-    # Free-running steps have no token targets — skip token CE and lookahead.
+    # Free-running steps have no token targets — skip token CE.
     has_token_targets = token_targets is not None
 
     # MaskGIT: token_mask indicates which positions were masked during
@@ -112,21 +110,8 @@ def compute_ar_loss(
                 model_output.logits.reshape(-1, model_output.logits.shape[-1]),
                 token_targets.reshape(-1),
             )
-
-        lookahead_cross_entropy = torch.tensor(0.0, device=token_targets.device)
-        lookahead_logits = getattr(model_output, "lookahead_logits", None)
-        if lookahead_logits:
-            for k, l_logits in enumerate(lookahead_logits, start=1):
-                valid_len = token_targets.shape[1] - k
-                if valid_len > 0:
-                    lookahead_cross_entropy = lookahead_cross_entropy + F.cross_entropy(
-                        l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
-                        token_targets[:, k:].reshape(-1),
-                    )
-            lookahead_cross_entropy = lookahead_cross_entropy / len(lookahead_logits)
     else:
         token_cross_entropy = torch.tensor(0.0, device=target_images.device)
-        lookahead_cross_entropy = torch.tensor(0.0, device=target_images.device)
 
     pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)
 
@@ -148,9 +133,6 @@ def compute_ar_loss(
         glyphloss = _GLYPHLOSS_FN(recon, target_images)
 
     weighted_token_cross_entropy = weights.token_cross_entropy * token_cross_entropy
-    weighted_lookahead_cross_entropy = (
-        weights.lookahead_cross_entropy * lookahead_cross_entropy
-    )
     weighted_pixel_l1 = weights.pixel_l1 * pixel_l1
     weighted_perceptual_lpips = weights.perceptual_lpips * perceptual_lpips
     weighted_glyphloss = weights.glyphloss * glyphloss
@@ -168,7 +150,6 @@ def compute_ar_loss(
 
     total_loss = (
         weighted_token_cross_entropy
-        + weighted_lookahead_cross_entropy
         + weighted_pixel_l1
         + weighted_perceptual_lpips
         + weighted_glyphloss
@@ -192,21 +173,17 @@ def compute_ar_loss(
     terms: Dict[str, torch.Tensor] = {
         "total": total_loss,
         "token_cross_entropy": token_cross_entropy,
-        "lookahead_cross_entropy": lookahead_cross_entropy,
         "pixel_l1": pixel_l1,
         "perceptual_lpips": perceptual_lpips,
         "glyphloss": glyphloss,
         "token_accuracy": token_accuracy,
         "weighted_token_cross_entropy": weighted_token_cross_entropy,
-        "weighted_lookahead_cross_entropy": weighted_lookahead_cross_entropy,
         "weighted_pixel_l1": weighted_pixel_l1,
         "weighted_perceptual_lpips": weighted_perceptual_lpips,
         "weighted_glyphloss": weighted_glyphloss,
         "bbox_l1": bbox_l1.detach(),
         "weighted_bbox_l1": weighted_bbox_l1.detach(),
     }
-    if maskgit_mask is not None:
-        terms["n_masked"] = maskgit_mask.sum().float()
 
     return total_loss, terms
 
@@ -243,7 +220,6 @@ def compute_ar_adaptation_loss(
         weights.token_cross_entropy > 0.0
         or weights.pixel_l1 > 0.0
         or weights.glyphloss > 0.0
-        or weights.lookahead_cross_entropy > 0.0
     )
 
     if decoder_requested and not has_decoder_outputs:
@@ -272,22 +248,6 @@ def compute_ar_adaptation_loss(
             token_predictions = torch.argmax(model_output.logits, dim=-1)
             token_accuracy = (token_predictions == token_targets).float().mean()
             terms["token_accuracy"] = token_accuracy
-
-            if model_output.lookahead_logits:
-                lookahead_ce = torch.tensor(0.0, device=token_targets.device)
-                for k, l_logits in enumerate(model_output.lookahead_logits, start=1):
-                    valid_len = token_targets.shape[1] - k
-                    if valid_len > 0:
-                        lookahead_ce = lookahead_ce + F.cross_entropy(
-                            l_logits[:, :valid_len, :].reshape(-1, l_logits.shape[-1]),
-                            token_targets[:, k:].reshape(-1),
-                        )
-                lookahead_ce = lookahead_ce / len(model_output.lookahead_logits)
-                weighted_lookahead_ce = weights.lookahead_cross_entropy * lookahead_ce
-
-                total_loss = total_loss + weighted_lookahead_ce
-                terms["lookahead_cross_entropy"] = lookahead_ce
-                terms["weighted_lookahead_cross_entropy"] = weighted_lookahead_ce
 
         if target_images is not None:
             pixel_l1 = F.l1_loss(model_output.reconstructed_images, target_images)

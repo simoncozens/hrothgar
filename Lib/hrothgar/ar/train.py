@@ -281,19 +281,18 @@ class MaskGITTrainingLoop(TrainingLoop):
         if self.global_step % self.validation_every != 0:
             return
 
-        ctx_label = "BidirectionalContext"
+        one_shot_label = "OneShot"
         tf_label = "TeacherForced"
         gen_label = "IterativeDecode"
 
         self.model.eval()
         with torch.no_grad():
-            # ── Full-context quality ──────────────────────────────────
-            val_metrics = {
+            # ── One-shot (cold-start) quality ────────────────────────
+            one_shot_metrics = {
                 "ssim": [],
                 "lpips": [],
                 "glyphloss": [],
                 "token_accuracy": [],
-                "token_cross_entropy": [],
             }
             tf_metrics = {
                 "ssim": [],
@@ -314,38 +313,35 @@ class MaskGITTrainingLoop(TrainingLoop):
                 batch_metrics = val_batch.get("metrics")
                 if batch_metrics is not None:
                     batch_metrics = batch_metrics.to(self.device)
-                val_target_bbox = val_batch.get("bbox_size")
-                if val_target_bbox is not None:
-                    val_target_bbox = val_target_bbox.to(self.device)
 
+                gt_tokens = self.model.target_token_indices_from_images(val_target)
+                target = torch.clamp(val_target, 0.0, 1.0).float()
+
+                # ── One-shot decode (cold-start: conditioning only) ────
+                prev_steps = self.model.maskgit_decoder.config.num_inference_steps
+                self.model.maskgit_decoder.config.num_inference_steps = 1
                 with self._autocast_context():
-                    val_output = self.model(
-                        val_content,
-                        val_style,
-                        target_images=val_target,
+                    one_shot_output = self.model.generate(
+                        content_images=val_content,
+                        style_reference_images=val_style,
                         target_codepoints=val_cp,
                         metrics=batch_metrics,
                     )
-                _val_loss, val_loss_info = compute_ar_loss(
-                    val_output,
-                    val_target,
-                    weights=self.loss_weights,
-                    target_bbox=val_target_bbox,
-                    lpips_metric = self.lpips
-                )
-                recon = torch.clamp(val_output.reconstructed_images, 0.0, 1.0).float()
-                target = torch.clamp(val_target, 0.0, 1.0).float()
+                self.model.maskgit_decoder.config.num_inference_steps = prev_steps
+                one_shot_recon = torch.clamp(
+                    one_shot_output.reconstructed_images, 0.0, 1.0
+                ).float()
                 with torch.autocast(device_type=self.device.type, enabled=False):
-                    val_metrics["ssim"].append(self.ssim(recon, target))
-                    val_metrics["lpips"].append(self.lpips(recon, target))
-                    val_metrics["glyphloss"].append(glyph_reconstruction_loss(recon, target))
-                val_metrics["token_accuracy"].append(val_loss_info["token_accuracy"])
-                val_metrics["token_cross_entropy"].append(
-                    val_loss_info["token_cross_entropy"]
+                    one_shot_metrics["ssim"].append(self.ssim(one_shot_recon, target))
+                    one_shot_metrics["lpips"].append(self.lpips(one_shot_recon, target))
+                    one_shot_metrics["glyphloss"].append(
+                        glyph_reconstruction_loss(one_shot_recon, target)
+                    )
+                one_shot_metrics["token_accuracy"].append(
+                    (one_shot_output.target_token_indices == gt_tokens).float().mean()
                 )
 
                 # ── Teacher-forced (masked oracle) ─────────────────────
-                gt_tokens = val_output.target_token_indices
                 with self._autocast_context():
                     tf_output = self.model.teacher_forced_reconstruct(
                         val_content,
@@ -376,16 +372,14 @@ class MaskGITTrainingLoop(TrainingLoop):
                     tf_loss_info["token_cross_entropy"]
                 )
 
-            avg_ssim = torch.mean(torch.stack(val_metrics["ssim"]))
-            avg_lpips = torch.mean(torch.stack(val_metrics["lpips"]))
-            avg_glyphloss = torch.mean(torch.stack(val_metrics["glyphloss"]))
-            avg_token_acc = torch.mean(torch.stack(val_metrics["token_accuracy"]))
-            avg_token_ce = torch.mean(torch.stack(val_metrics["token_cross_entropy"]))
-            self.write_scalar(f"Validation/{ctx_label}_SSIM", avg_ssim)
-            self.write_scalar(f"Validation/{ctx_label}_LPIPS", avg_lpips)
-            self.write_scalar(f"Validation/{ctx_label}_glyphloss", avg_glyphloss)
-            self.write_scalar(f"Validation/{ctx_label}_TokenAccuracy", avg_token_acc)
-            self.write_scalar(f"Validation/{ctx_label}_TokenCrossEntropy", avg_token_ce)
+            one_shot_ssim = torch.mean(torch.stack(one_shot_metrics["ssim"]))
+            one_shot_lpips = torch.mean(torch.stack(one_shot_metrics["lpips"]))
+            one_shot_glyphloss = torch.mean(torch.stack(one_shot_metrics["glyphloss"]))
+            one_shot_token_acc = torch.mean(torch.stack(one_shot_metrics["token_accuracy"]))
+            self.write_scalar(f"Validation/{one_shot_label}_SSIM", one_shot_ssim)
+            self.write_scalar(f"Validation/{one_shot_label}_LPIPS", one_shot_lpips)
+            self.write_scalar(f"Validation/{one_shot_label}_glyphloss", one_shot_glyphloss)
+            self.write_scalar(f"Validation/{one_shot_label}_TokenAccuracy", one_shot_token_acc)
 
             tf_ssim = torch.mean(torch.stack(tf_metrics["ssim"]))
             tf_lpips = torch.mean(torch.stack(tf_metrics["lpips"]))
@@ -444,12 +438,6 @@ class MaskGITTrainingLoop(TrainingLoop):
             self.write_scalar(f"Validation/{gen_label}_LPIPS", fr_lpips)
             self.write_scalar(f"Validation/{gen_label}_glyphloss", fr_glyphloss)
             self.write_scalar(f"Validation/{gen_label}_TokenAccuracy", fr_token_acc)
-            gap = avg_token_acc - fr_token_acc
-            gap_ratio = gap / torch.clamp(avg_token_acc, min=1e-8)
-            self.write_scalar("Validation/TokenAccuracy_Gap_Absolute", gap)
-            self.write_scalar("Validation/TokenAccuracy_Gap_Relative", gap_ratio)
-            tf_gap = tf_token_acc - fr_token_acc
-            self.write_scalar("Validation/TeacherForced_TokenAccuracy_Gap", tf_gap)
 
             self.checkpoint_if_best(fr_glyphloss)
             self.visualize()
@@ -467,20 +455,24 @@ class MaskGITTrainingLoop(TrainingLoop):
         val_style = val_batch["style_renderings"].to(self.device)
         val_cp = val_batch["char"].to(self.device)
 
+        gt_tokens = self.model.target_token_indices_from_images(val_target)
+
         with self._autocast_context():
-            # Full-context reconstruction (bidirectional, full ground-truth).
-            val_output = self.model(
-                val_content,
-                val_style,
-                target_images=val_target,
+            # One-shot decode (cold-start: conditioning only).
+            prev_steps = self.model.maskgit_decoder.config.num_inference_steps
+            self.model.maskgit_decoder.config.num_inference_steps = 1
+            one_shot_output = self.model.generate(
+                content_images=val_content,
+                style_reference_images=val_style,
                 target_codepoints=val_cp,
             )
+            self.model.maskgit_decoder.config.num_inference_steps = prev_steps
             # Teacher-forced (masked oracle) reconstruction.
             tf_output = self.model.teacher_forced_reconstruct(
                 val_content,
                 val_style,
                 val_cp,
-                target_token_indices=val_output.target_token_indices,
+                target_token_indices=gt_tokens,
             )
             # Generation (free-running / iterative decode).
             gen_output = self.model.generate(
@@ -496,14 +488,14 @@ class MaskGITTrainingLoop(TrainingLoop):
                 val_content[:preview_count],
                 first_style,
                 val_target[:preview_count],
-                val_output.reconstructed_images[:preview_count],
+                one_shot_output.reconstructed_images[:preview_count],
                 tf_output.reconstructed_images[:preview_count],
                 gen_output.reconstructed_images[:preview_count],
             ],
             dim=0,
         )
         self.writer.add_image(
-            "Reconstruction/content_style_target_recon_tf_gen",
+            "Reconstruction/content_style_target_oneshot_tf_gen",
             torchvision.utils.make_grid(recon_grid, nrow=preview_count),
             self.global_step,
         )
