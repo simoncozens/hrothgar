@@ -49,6 +49,8 @@ class GtokTrainingLoop(TrainingLoop):
             "image_size": train_args.image_size,
             "bidirectional_decoder": getattr(train_args, "bidirectional_decoder", False),
         }
+        if getattr(train_args, "codebook_size", None) is not None:
+            gtok_config_kwargs["quantizer_codebook_size"] = train_args.codebook_size
         config = GtokConfig(**gtok_config_kwargs)
         config.save_sidecar(train_args.model_path)
 
@@ -67,8 +69,10 @@ class GtokTrainingLoop(TrainingLoop):
         self._maker = maker
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
-        # Register font classes from the dataset for the font classifier head.
-        font_classes = sorted({f.classification() for f in maker.googlefonts.fonts})
+        # Register font families (not coarse categories) for the font head.
+        # Use train families only: the head discriminates the styles it is
+        # actually trained on; test families are held out by the family split.
+        font_classes = sorted({f.family for f in maker.train_fonts})
         model.register_font_classes(font_classes)
 
         self.train_loader = maker.train_loader()
@@ -163,7 +167,7 @@ class GtokTrainingLoop(TrainingLoop):
         if self.model._font_class_map:
             fm = self.model._font_class_map
             font_labels = torch.tensor(
-                [fm.get(c, 0) for c in batch["classification"]],
+                [fm.get(c, 0) for c in batch["family"]],
                 device=self.device,
                 dtype=torch.long,
             )
@@ -339,6 +343,17 @@ if __name__ == "__main__":
         type=int,
         default=128,
         help="Square glyph raster size for GTok training.",
+    )
+    parser.add_argument(
+        "--codebook-size",
+        type=int,
+        default=None,
+        help=(
+            "Override the VQ codebook size.  Lower values force codes to be "
+            "shared across fonts and positions (better semantic structure, "
+            "slightly lower reconstruction fidelity).  Defaults to the GtokConfig "
+            "value."
+        ),
     )
     parser.add_argument(
         "--model-path",

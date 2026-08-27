@@ -35,7 +35,10 @@ class GtokConfig:
     bidirectional_decoder: bool = False
 
     # Quantization parameters
-    quantizer_codebook_size: int = 16384  # Size of the codebook
+    # A large codebook lets reconstruction memorise (font, glyph, position)
+    # combinations and hurts semantic structure.  Keep this small enough to
+    # force codes to be shared across fonts and positions.
+    quantizer_codebook_size: int = 4096  # Size of the codebook
     quantizer_beta: float = 0.25  # Commitment loss weight
     quantizer_entropy_loss_ratio: float = 0.2  # Entropy regularization weight
     quantizer_ema_decay: float = 0.95

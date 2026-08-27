@@ -329,10 +329,12 @@ class GTokDatasetMaker(DatasetMaker):
             item["font"].description_with_tags_and_display() for item in batch
         ]
         classifications = [item["font"].classification() for item in batch]
+        families = [item["font"].family for item in batch]
 
         return {
             "char": chars,
             "rendering": renderings,
             "description": descriptions,
             "classification": classifications,
+            "family": families,
         }

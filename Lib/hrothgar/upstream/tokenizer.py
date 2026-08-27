@@ -237,7 +237,10 @@ class ViTEncoder(nn.Module):
         self.apply(init_weights)
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
-        x = x + self.en_pos_embedding
+        # Deliberately no position embedding here: the pre-quantization features
+        # should be position-invariant so the codebook encodes glyph content
+        # rather than grid location.  Position is re-injected by the decoder
+        # (ViTDecoder.de_pos_embedding).
         x = self.transformer(x)
         return x
 

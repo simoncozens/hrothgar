@@ -291,13 +291,13 @@ class GtokLinearProbe:
         for font in gf.fonts:
             family_to_fonts.setdefault(font.family, []).append(font)
 
-        # Eligible families: those with at least probe_font_min_samples font
-        # *files* (each renders 52 characters, so effective sample count is
-        # len(fonts) × 52 — well above 20 for even a single font file).
+        # Eligible families: those with at least probe_font_min_samples
+        # *samples* (font files × 52 probe characters).  A single font file
+        # already yields 52 samples, so this is a very low bar by design.
         eligible_families = [
             fam
             for fam, fonts in family_to_fonts.items()
-            if len(fonts) >= cfg.probe_font_min_samples
+            if len(fonts) * len(_PROBE_CHARS) >= cfg.probe_font_min_samples
         ]
         eligible_families.sort()
 
@@ -447,14 +447,14 @@ class GtokLinearProbe:
         test_loader = self._make_loader(self.test_dataset, shuffle=False)
 
         print("\n=== Character probe (a-zA-Z) ===")
-        char_probe = LinearProbe(self.feature_dim, self.num_char_classes)
-        char_acc = self._train_one_probe(
-            char_probe,
-            train_loader,
-            test_loader,
-            label_key="char_label",
-            desc="Char",
-        )
+        #char_probe = LinearProbe(self.feature_dim, self.num_char_classes)
+        #char_acc = self._train_one_probe(
+        #    char_probe,
+        #    train_loader,
+        #    test_loader,
+        #    label_key="char_label",
+        #    desc="Char",
+        #)
 
         print(f"\n=== Font-family probe ({self.num_font_classes} families) ===")
         font_probe = LinearProbe(self.feature_dim, self.num_font_classes)

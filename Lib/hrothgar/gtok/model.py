@@ -528,9 +528,9 @@ class GtokModel(SaveLoadModel):
             nn.Linear(128, latincore_size),
         )
 
-        # Font classifier: predicts coarse style category from quantized
-        # vectors.  Built lazily via register_font_classes() once the
-        # training loop has enumerated all unique classification strings.
+        # Font classifier: predicts the font family from mean-pooled ViT
+        # encoder features.  Built lazily via register_font_classes() once the
+        # training loop has enumerated the unique training families.
         self.font_classifier: Optional[nn.Sequential] = None
         self._font_class_map: dict[str, int] = {}
 
@@ -551,10 +551,10 @@ class GtokModel(SaveLoadModel):
         return indices
 
     def register_font_classes(self, class_names: list[str]) -> None:
-        """Build the font classifier from a list of unique classification strings.
+        """Build the font classifier from a list of unique family strings.
 
         Must be called once before training starts.  The classifier takes
-        mean-pooled quantized vectors and predicts the font style category.
+        mean-pooled ViT encoder features and predicts the font family.
         """
         unique = sorted(set(class_names))
         self._font_class_map = {name: i for i, name in enumerate(unique)}
@@ -583,8 +583,8 @@ class GtokModel(SaveLoadModel):
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
             codepoints: Optional (B,) LongTensor of Unicode codepoints for
                 character classification loss.
-            font_labels: Optional (B,) LongTensor of font class indices for
-                font style classification loss.
+            font_labels: Optional (B,) LongTensor of font family indices for
+                font family classification loss.
 
         Returns:
             Tuple of:
@@ -653,7 +653,7 @@ class GtokModel(SaveLoadModel):
             character_ce = F.cross_entropy(char_logits, latincore_idx)
 
         # Font classification: mean-pool vit encoder features and predict
-        # coarse style category (SERIF, SANS_SERIF, etc.).
+        # the font family.
         font_ce: Optional[torch.Tensor] = None
         if (
             self.font_classifier is not None
@@ -721,8 +721,8 @@ class GtokModel(SaveLoadModel):
             images: Input glyph images of shape (batch_size, 3, image_size, image_size)
             codepoints: Optional (B,) LongTensor of Unicode codepoints for
                 character classification loss.
-            font_labels: Optional (B,) LongTensor of font class indices for
-                font style classification loss.
+            font_labels: Optional (B,) LongTensor of font family indices for
+                font family classification loss.
 
         Returns:
             Tuple of:
