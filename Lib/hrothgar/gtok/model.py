@@ -511,12 +511,15 @@ class GtokModel(SaveLoadModel):
             dropout=config.cnn_dropout,
         )
 
-        # Auxiliary AR prediction head (lightweight MLP, ~500K params at 2048×128)
-        #self.aux_ar_head = AuxARHead(
-        #    hidden_dim=config.vit_hidden_dim,
-        #    codebook_size=config.quantizer_codebook_size,
-        #    aux_hidden_dim=128,
-        #)
+        # Auxiliary AR prediction head: predicts the next codebook index from
+        # the current position's encoder features, encouraging the encoder to
+        # produce sequentially structured code sequences.  Kept shallow so the
+        # gradient signal guides rather than dominates reconstruction.
+        self.aux_ar_head = AuxARHead(
+            hidden_dim=config.vit_hidden_dim,
+            codebook_size=config.quantizer_codebook_size,
+            aux_hidden_dim=128,
+        )
 
         # Character classifier: encourages codebook to organise by character.
         # Takes mean-pooled quantized vectors and predicts class within the character set.
@@ -528,8 +531,8 @@ class GtokModel(SaveLoadModel):
             nn.Linear(128, latincore_size),
         )
 
-        # Font classifier: predicts the font family from mean-pooled ViT
-        # encoder features.  Built lazily via register_font_classes() once the
+        # Font classifier: predicts the font family from mean-pooled quantized
+        # code vectors.  Built lazily via register_font_classes() once the
         # training loop has enumerated the unique training families.
         self.font_classifier: Optional[nn.Sequential] = None
         self._font_class_map: dict[str, int] = {}
@@ -554,13 +557,13 @@ class GtokModel(SaveLoadModel):
         """Build the font classifier from a list of unique family strings.
 
         Must be called once before training starts.  The classifier takes
-        mean-pooled ViT encoder features and predicts the font family.
+        mean-pooled quantized code vectors and predicts the font family.
         """
         unique = sorted(set(class_names))
         self._font_class_map = {name: i for i, name in enumerate(unique)}
         num_classes = len(unique)
         self.font_classifier = nn.Sequential(
-            nn.Linear(self.config.vit_hidden_dim, 256),
+            nn.Linear(self.config.quantizer_code_dim, 256),
             nn.GELU(),
             nn.Linear(256, num_classes),
         ).to(next(self.parameters()).device)
@@ -625,8 +628,8 @@ class GtokModel(SaveLoadModel):
         )
 
         # Auxiliary AR loss: predict next code index from current ViT features.
-        #aux_ar_loss: Optional[torch.Tensor] = None
-        if hasattr(self, "aux_ar_head"):
+        aux_ar_loss: Optional[torch.Tensor] = None
+        if hasattr(self, "aux_ar_head") and self.training:
             # indices_info[2] is min_encoding_indices, shape (B*N,)
             code_indices = indices_info[2].view(
                 batch_size, self.sequence_length
@@ -652,15 +655,16 @@ class GtokModel(SaveLoadModel):
             char_logits = self.character_classifier(pooled)
             character_ce = F.cross_entropy(char_logits, latincore_idx)
 
-        # Font classification: mean-pool vit encoder features and predict
-        # the font family.
+        # Font classification: mean-pool quantized code vectors and predict
+        # the font family.  Operates on the discrete codes (not pre-quantization
+        # encoder features) so the codebook itself is pushed to be style-separable.
         font_ce: Optional[torch.Tensor] = None
         if (
             self.font_classifier is not None
             and font_labels is not None
             and self.training
         ):
-            pooled = vit_out.mean(dim=1)  # (B, vit_hidden_dim)
+            pooled = quantized.mean(dim=1)  # (B, code_dim)
             font_logits = self.font_classifier(pooled)
             font_ce = F.cross_entropy(font_logits, font_labels)
 
@@ -669,7 +673,7 @@ class GtokModel(SaveLoadModel):
             entropy_loss=raw_loss_info[2],
             codebook_usage=raw_loss_info[3],
             perplexity=indices_info[0],
-            #aux_ar_loss=aux_ar_loss,
+            aux_ar_loss=aux_ar_loss,
             character_ce=character_ce,
             font_ce=font_ce,
         )

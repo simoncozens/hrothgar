@@ -95,17 +95,16 @@ class ProbeConfig:
 
 
 class LinearProbe(nn.Module):
-    """Single linear layer on top of mean-pooled frozen G-Tok features.
+    """Single linear layer on top of flattened frozen G-Tok code vectors.
 
-    The probe operates on the *pre-quantization* projected features from the
-    G-Tok encoder (the output of ``vit_encoder_to_quantizer``).  These are
-    the same continuous representations the AR generator's content encoder is
-    designed to condition on, so probing them directly answers whether the
-    latent space separates content and style.
+    The probe operates on the *quantized* codebook vectors — the discrete-code
+    embeddings the decoder (and therefore the downstream MaskGIT generator)
+    actually consumes — not the pre-quantization encoder features.  Probing
+    these directly answers whether the *discrete code assignment* separates
+    content (codepoint) and style (font family).
 
-    The full token sequence is flattened (following the paper: "Features are
-    extracted and flattened from the frozen tokenizer encoder"), giving
-    ``N * code_dim`` features.
+    The full token sequence is flattened, preserving position so both content
+    and style structure can be read out, giving ``N * code_dim`` features.
     """
 
     def __init__(self, feature_dim: int, num_classes: int) -> None:
@@ -130,7 +129,7 @@ class LinearProbe(nn.Module):
 
 
 class FrozenGtokFeatureExtractor:
-    """Extract pre-quantization features from a frozen G-Tok model."""
+    """Extract quantized code vectors from a frozen G-Tok model."""
 
     def __init__(self, model: GtokModel, config: GtokConfig, device: torch.device):
         self.model = model
@@ -149,24 +148,18 @@ class FrozenGtokFeatureExtractor:
 
     @torch.no_grad()
     def extract(self, images: torch.Tensor) -> torch.Tensor:
-        """Return pre-quantization features for a batch of images.
+        """Return quantized code vectors for a batch of images.
 
         Args:
             images: ``(B, 3, H, W)`` float tensor in [0, 1].
 
         Returns:
-            Features of shape ``(B, N, code_dim)`` where N is the flattened
-            token grid size.
+            Quantized codebook vectors of shape ``(B, N, code_dim)`` where N
+            is the flattened token grid size.  These are the codebook
+            embeddings looked up by the discrete code indices.
         """
-        cnn_out = self.model.cnn_encoder(images)
-        # Patch projection (Conv2d) then flatten — matches upstream GAR-Font layout.
-        tokens = (
-            self.model.proj_patch(cnn_out).flatten(2).transpose(1, 2)
-        )  # (B, N, vit_hidden_dim)
-        # Upstream ViTEncoder: no class token, same-dim in/out.
-        vit_out = self.model.vit_encoder(tokens)  # (B, N, vit_hidden_dim)
-        features = self.model.vit_encoder_to_quantizer(vit_out)  # (B, N, code_dim)
-        return features
+        quantized, _ = self.model.encode(images)
+        return quantized  # (B, N, code_dim)
 
 
 # ---------------------------------------------------------------------------
@@ -447,14 +440,14 @@ class GtokLinearProbe:
         test_loader = self._make_loader(self.test_dataset, shuffle=False)
 
         print("\n=== Character probe (a-zA-Z) ===")
-        #char_probe = LinearProbe(self.feature_dim, self.num_char_classes)
-        #char_acc = self._train_one_probe(
-        #    char_probe,
-        #    train_loader,
-        #    test_loader,
-        #    label_key="char_label",
-        #    desc="Char",
-        #)
+        char_probe = LinearProbe(self.feature_dim, self.num_char_classes)
+        char_acc = self._train_one_probe(
+            char_probe,
+            train_loader,
+            test_loader,
+            label_key="char_label",
+            desc="Char",
+        )
 
         print(f"\n=== Font-family probe ({self.num_font_classes} families) ===")
         font_probe = LinearProbe(self.feature_dim, self.num_font_classes)
