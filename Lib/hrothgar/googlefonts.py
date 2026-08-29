@@ -150,6 +150,8 @@ class GoogleFonts:
     def should_skip(self, font: "GoogleFont") -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
+        if font.tags().get("/Special use/Symbols", 0):
+            return True
         # Skip CJK; we don't want these big fonts with lots of characters
         # and a different glyph construction style to dominate
         has_cjk = [

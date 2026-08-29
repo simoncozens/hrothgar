@@ -1,6 +1,6 @@
 {
   "dim": 256,
-  "count": 3132,
+  "count": 3123,
   "centered": true,
   "normalized": true,
   "labels": [
@@ -63,10 +63,6 @@
     {
       "path": "/home/simon/others-repos/fonts/ofl/adlamdisplay/ADLaMDisplay-Regular.ttf",
       "family": "ADLaM Display"
-    },
-    {
-      "path": "/home/simon/others-repos/fonts/ofl/adobeblank/AdobeBlank-Regular.ttf",
-      "family": "Adobe Blank"
     },
     {
       "path": "/home/simon/others-repos/fonts/ofl/adventpro/AdventPro-Italic[wdth,wght].ttf",
@@ -3665,10 +3661,6 @@
       "family": "Esteban"
     },
     {
-      "path": "/home/simon/others-repos/fonts/ofl/estedad/Estedad[wght].ttf",
-      "family": "Estedad"
-    },
-    {
       "path": "/home/simon/others-repos/fonts/ofl/estonia/Estonia-Regular.ttf",
       "family": "Estonia"
     },
@@ -6813,10 +6805,6 @@
       "family": "Linden Hill"
     },
     {
-      "path": "/home/simon/others-repos/fonts/ofl/linefont/Linefont[wdth,wght].ttf",
-      "family": "Linefont"
-    },
-    {
       "path": "/home/simon/others-repos/fonts/ofl/lisubosa/LisuBosa-Black.ttf",
       "family": "Lisu Bosa"
     },
@@ -9561,10 +9549,6 @@
       "family": "Pushster"
     },
     {
-      "path": "/home/simon/others-repos/fonts/ofl/qahiri/Qahiri-Regular.ttf",
-      "family": "Qahiri"
-    },
-    {
       "path": "/home/simon/others-repos/fonts/ofl/quando/Quando-Regular.ttf",
       "family": "Quando"
     },
@@ -12201,10 +12185,6 @@
       "family": "Waterfall"
     },
     {
-      "path": "/home/simon/others-repos/fonts/ofl/wavefont/Wavefont[ROND,YELA,wght].ttf",
-      "family": "Wavefont"
-    },
-    {
       "path": "/home/simon/others-repos/fonts/ofl/wellfleet/Wellfleet-Regular.ttf",
       "family": "Wellfleet"
     },
@@ -12331,22 +12311,6 @@
     {
       "path": "/home/simon/others-repos/fonts/ofl/yantramanav/Yantramanav-Thin.ttf",
       "family": "Yantramanav"
-    },
-    {
-      "path": "/home/simon/others-repos/fonts/ofl/yarndings12/Yarndings12-Regular.ttf",
-      "family": "Yarndings 12"
-    },
-    {
-      "path": "/home/simon/others-repos/fonts/ofl/yarndings12charted/Yarndings12Charted-Regular.ttf",
-      "family": "Yarndings 12 Charted"
-    },
-    {
-      "path": "/home/simon/others-repos/fonts/ofl/yarndings20/Yarndings20-Regular.ttf",
-      "family": "Yarndings 20"
-    },
-    {
-      "path": "/home/simon/others-repos/fonts/ofl/yarndings20charted/Yarndings20Charted-Regular.ttf",
-      "family": "Yarndings 20 Charted"
     },
     {
       "path": "/home/simon/others-repos/fonts/ofl/yatraone/YatraOne-Regular.ttf",

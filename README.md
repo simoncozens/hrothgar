@@ -99,12 +99,31 @@ Without a well-trained tokenizer, the generation component will fail. During tra
 | `Health/OracleAR/xChance` | Accuracy of an oracle autoregressive model, normalized to chance. |
 | `Health/LinearProbe/CharAccuracy` | Accuracy of a linear probe trained to predict character identity from the code sequence. If this is low, then the codebook is not expressive enough. |
 | `Health/LinearProbe/FontAccuracy` | Accuracy of a linear probe trained to predict font family from the code sequence. If this is high, then the codebook is memorizing font-specific patterns rather than general glyph structure. |
-| `Health/CoreEntropy/Mean` | Average normalized entropy across active codes. 1.0 = codes used uniformly by all fonts. If this drops over training, then codes are becoming font-specific and early stopping is indicated. |
-| `Health/CoreEntropy/Median` | A similar metrics but more robust to outliers than mean |
-| `Health/CoreEntropy/ActiveCodes` | How many codebook entries are actually used. If this value drops then the codebook is collapsing; something has gone wrong. |
-| `Health/CoreEntropy/FractionHighEntropy` | Fraction of codes with entropy > 0.5 × max. A high number suggests that codes are general rather than font-specific |
-| `Health/CoreEntropy/FractionLowEntropy` | Fraction of codes with entropy < 0.1 × max. If this rises, then the tokenizer is memorizing per-font patterns |
-| `Health/CoreEntropy/Distribution` | Histogram of all per-code entropies.  |
+| `Health/CodeEntropy/Mean` | Average normalized entropy across active codes. 1.0 = codes used uniformly by all fonts. If this drops over training, then codes are becoming font-specific and early stopping is indicated. |
+| `Health/CodeEntropy/Median` | A similar metric but more robust to outliers than mean. |
+| `Health/CodeEntropy/ActiveCodes` | How many codebook entries are actually used. If this value drops then the codebook is collapsing; something has gone wrong. |
+| `Health/CodeEntropy/FractionHighEntropy` | Fraction of codes with entropy > 0.5 × max. A high number suggests that codes are general rather than font-specific. |
+| `Health/CodeEntropy/FractionLowEntropy` | Fraction of codes with entropy < 0.1 × max. If this rises, then the tokenizer is memorizing per-font patterns. |
+| `Health/CodeEntropy/Distribution` | Histogram of all per-code entropies. |
+| `Health/CodeEntropy/PatchWhiteCodes` | Number of active codes used on blank (white) patches. |
+| `Health/CodeEntropy/PatchBlackCodes` | Number of active codes used on solid-ink (black) patches. |
+| `Health/CodeEntropy/PatchMixCodes` | Number of active codes used on edge/transition (mix) patches. |
+| `Health/CodeEntropy/PatchWhiteExclusive` | Codes used *only* on blank patches. |
+| `Health/CodeEntropy/PatchBlackExclusive` | Codes used *only* on solid-ink patches. |
+| `Health/CodeEntropy/PatchMixExclusive` | Codes used *only* on edge/transition patches. |
+| `Health/CodeEntropy/PurityMean` | Mean per-code patch-type purity. ⚠️ Coarse heuristic — see note below. |
+| `Health/CodeEntropy/PurityMedian` | Median purity. ⚠️ Same caveat. |
+| `Health/CodeEntropy/PurityHighFraction` | Fraction of codes with purity ≥ 0.9. ⚠️ Do **not** read low/falling values as "entanglement" — see note below. |
+| `Health/CodeEntropy/PurityScrambledFraction` | Fraction of codes with purity ≤ 0.4. ⚠️ Same caveat. |
+
+> ⚠️ **The patch-type and purity metrics are coarse heuristics, not gates.** They
+> classify each token-grid patch as blank / ink / edge and measure how confined
+> each code is to one of those. That assumes a code corresponds to a *pixel
+> patch* — which is not how VQ codes work, and is especially wrong at low code
+> dim, where codes are *abstract* (a "bowl + edge" code legitimately spans ink
+> and edge patches). So falling `PurityHighFraction` can accompany a *better*,
+> more abstract codebook. The decisive generatability signal is the
+> masked-prediction probe, not these.
 
 ## Inference (Native)
 

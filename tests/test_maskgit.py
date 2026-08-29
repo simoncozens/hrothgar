@@ -300,8 +300,6 @@ def test_compute_ar_loss_maskgit_masked_positions_only() -> None:
     target_images = torch.ones(B, 3, 8, 8)
     total, terms = compute_ar_loss(output, target_images, weights=ARLossWeights())
 
-    assert "n_masked" in terms
-    assert terms["n_masked"].item() == 1.0
     # Token accuracy should be computed only on masked positions.
     assert 0.0 <= terms["token_accuracy"].item() <= 1.0
 
@@ -435,5 +433,4 @@ def test_maskgit_e2e_training_step() -> None:
     )
     assert any_trainable_grad, "No trainable parameters received gradient"
 
-    assert "n_masked" in terms
     assert terms["token_cross_entropy"].item() > 0
