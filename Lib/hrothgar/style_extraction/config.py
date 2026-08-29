@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from hrothgar.dataset import LATIN_CORE
+from hrothgar.dataset import LATIN_KERNEL
 
 
 @dataclass
@@ -28,7 +28,7 @@ class StyleExtractionConfig:
     # *render* (embedded via ``CodepointEmbedding``).  The evidence glyphs are
     # sampled from the same set for now; widen this to LGC_ALL or beyond for
     # richer style evidence.
-    character_set: list[int] = field(default_factory=lambda: list(LATIN_CORE))
+    character_set: list[int] = field(default_factory=lambda: list(LATIN_KERNEL))
 
     # Number of evidence glyphs sampled per font per step.  More evidence gives
     # a richer style summary; the aggregator is permutation-invariant so the
