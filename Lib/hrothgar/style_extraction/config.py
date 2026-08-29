@@ -106,3 +106,6 @@ class StyleExtractionV2Config(StyleExtractionConfig):
     decoder_num_layers: int = 4
     decoder_num_heads: int = 8
     decoder_dropout: float = 0.0
+    # Coarse structural grid for reference-token position tags (replaces a fine
+    # per-pixel positional embedding on the style side).
+    coarse_grid_size: int = 8

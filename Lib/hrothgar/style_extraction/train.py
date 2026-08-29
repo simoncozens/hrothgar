@@ -110,10 +110,13 @@ class StyleExtractionTrainingLoop(TrainingLoop):
 
     def train_step(self, batch):
         style_images = batch["style_images"].to(self.device)
+        style_codepoint_idx = batch["style_codepoint_idx"].to(self.device)
         target_images = batch["target_images"].to(self.device)
         target_idx = batch["target_codepoint_idx"].to(self.device)
 
-        style_tokens = self.model.encode_style(style_images)
+        style_tokens = self.model.encode_style(
+            style_images, style_codepoint_idx=style_codepoint_idx
+        )
         reconstructed = self.model.decode(target_idx, style_tokens)
 
         terms: dict[str, torch.Tensor] = {}
@@ -187,10 +190,13 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         with torch.no_grad():
             for batch in itertools.islice(self.test_loader, self.validation_batches):
                 style_images = batch["style_images"].to(self.device)
+                style_codepoint_idx = batch["style_codepoint_idx"].to(self.device)
                 target_images = batch["target_images"].to(self.device)
                 target_idx = batch["target_codepoint_idx"].to(self.device)
 
-                reconstructed = self.model(style_images, target_idx)
+                reconstructed = self.model(
+                    style_images, target_idx, style_codepoint_idx=style_codepoint_idx
+                )
 
                 ssims.append(
                     self.ssim(reconstructed, target_images)
@@ -212,11 +218,14 @@ class StyleExtractionTrainingLoop(TrainingLoop):
     def visualize(self):
         batch = next(iter(self.test_loader))
         style_images = batch["style_images"].to(self.device)
+        style_codepoint_idx = batch["style_codepoint_idx"].to(self.device)
         target_images = batch["target_images"].to(self.device)
         target_idx = batch["target_codepoint_idx"].to(self.device)
 
         with torch.no_grad():
-            reconstructed = self.model(style_images, target_idx)
+            reconstructed = self.model(
+                style_images, target_idx, style_codepoint_idx=style_codepoint_idx
+            )
 
         n = min(8, target_images.shape[0])
         grid = torch.cat([target_images[:n], reconstructed[:n]], dim=0)

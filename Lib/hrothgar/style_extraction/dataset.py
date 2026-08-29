@@ -93,6 +93,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         size = self.image_size
 
         style_images = torch.zeros(b, g, 1, size, size, dtype=torch.float32)
+        style_codepoint_idx = torch.zeros(b, g, dtype=torch.long)
         target_images = torch.zeros(b, 1, size, size, dtype=torch.float32)
         target_codepoint_idx = torch.zeros(b, dtype=torch.long)
         target_codepoint = torch.zeros(b, dtype=torch.long)
@@ -115,6 +116,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
 
             for j, cp in enumerate(evidence):
                 style_images[i, j, 0] = render_glyph(font, cp, size)
+                style_codepoint_idx[i, j] = self._cp_to_idx[cp]
 
             target_images[i, 0] = render_glyph(font, target_cp, size)
             target_codepoint_idx[i] = self._cp_to_idx[target_cp]
@@ -122,6 +124,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
 
         return {
             "style_images": style_images,
+            "style_codepoint_idx": style_codepoint_idx,
             "target_images": target_images,
             "target_codepoint_idx": target_codepoint_idx,
             "target_codepoint": target_codepoint,

@@ -197,9 +197,21 @@ class StyleExtractionModelV2(SaveLoadModel):
         )
         self.codepoint_embedding = nn.Embedding(config.num_codepoints, d)
 
-        # Shared 2D positional embedding: one per grid position, added to both
-        # reference glyph tokens and decoder content queries.
-        self.pos_embed = nn.Parameter(torch.randn(self.grid_n, d) * 0.02)
+        # Decoder content-query positional embedding: fine, per output-grid
+        # position (the output grid is well-defined, so fine position is valid).
+        self.query_pos_embed = nn.Parameter(torch.randn(self.grid_n, d) * 0.02)
+
+        # Reference-token tags.  Codepoint identity is the semantic hook; a
+        # coarse structural region replaces fine spatial position, which is
+        # ill-posed across fonts because the skeleton itself is part of style.
+        coarse = config.coarse_grid_size
+        assert self.grid_size % coarse == 0
+        self.coarse_region_embed = nn.Parameter(torch.randn(coarse * coarse, d) * 0.02)
+        ys = torch.arange(self.grid_size) // (self.grid_size // coarse)
+        xs = torch.arange(self.grid_size) // (self.grid_size // coarse)
+        self.register_buffer(
+            "coarse_idx", (ys[:, None] * coarse + xs[None, :]).reshape(-1)
+        )
 
         # Perceiver: K latent tokens summarise the G*N reference tokens.
         self.style_latents = nn.Parameter(
@@ -230,12 +242,15 @@ class StyleExtractionModelV2(SaveLoadModel):
     def encode_style(
         self,
         style_images: torch.Tensor,
+        style_codepoint_idx: Optional[torch.Tensor] = None,
         style_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Encode a font's glyph set into ``(B, K, D)`` style tokens.
 
         Args:
             style_images: ``(B, G, 1, H, W)`` greyscale glyph renderings in [0, 1].
+            style_codepoint_idx: Optional ``(B, G)`` long indices identifying
+                which codepoint each evidence glyph is (the semantic hook).
             style_mask: Optional ``(B, G)`` boolean; ``True`` = glyph visible.
 
         Returns:
@@ -248,7 +263,15 @@ class StyleExtractionModelV2(SaveLoadModel):
         n = gh * gw
         feats = feats.reshape(b, g, d, gh, gw)  # (B, G, D, gh, gw)
         tokens = feats.permute(0, 1, 3, 4, 2).reshape(b, g, n, d)  # (B, G, n, D)
-        tokens = tokens + self.pos_embed[None, None]  # (B, G, n, D)
+
+        # Coarse structural region tag (replaces fine spatial position).
+        tokens = tokens + self.coarse_region_embed[self.coarse_idx][None, None]
+
+        # Codepoint identity tag: which glyph this token came from.
+        if style_codepoint_idx is not None:
+            cp_emb = self.codepoint_embedding(style_codepoint_idx)  # (B, G, D)
+            tokens = tokens + cp_emb[:, :, None, :]
+
         if style_mask is not None:
             mask = style_mask.to(tokens.dtype).reshape(b, g, 1, 1)
             tokens = tokens * mask
@@ -276,7 +299,7 @@ class StyleExtractionModelV2(SaveLoadModel):
         b = target_codepoint_idx.shape[0]
         d = self.config.glyph_encoder_feature_dim
         codepoint_emb = self.codepoint_embedding(target_codepoint_idx)  # (B, D)
-        queries = codepoint_emb[:, None, :] + self.pos_embed[None]  # (B, n, D)
+        queries = codepoint_emb[:, None, :] + self.query_pos_embed[None]  # (B, n, D)
 
         for blk in self.decoder_blocks:
             queries = blk(queries, style_tokens)
@@ -288,7 +311,12 @@ class StyleExtractionModelV2(SaveLoadModel):
         self,
         style_images: torch.Tensor,
         target_codepoint_idx: torch.Tensor,
+        style_codepoint_idx: Optional[torch.Tensor] = None,
         style_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        style_tokens = self.encode_style(style_images, style_mask=style_mask)
+        style_tokens = self.encode_style(
+            style_images,
+            style_codepoint_idx=style_codepoint_idx,
+            style_mask=style_mask,
+        )
         return self.decode(target_codepoint_idx, style_tokens)
