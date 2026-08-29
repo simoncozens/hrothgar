@@ -30,6 +30,7 @@ from hrothgar.style_extraction.losses import (
     adversarial_generator_loss,
     ink_coverage_loss,
     reconstruction_loss,
+    style_contrastive_loss,
 )
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.utils import TrainingLoop
@@ -48,6 +49,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             l1=getattr(train_args, "l1_weight", 1.0),
             adversarial=getattr(train_args, "adversarial", 0.0),
             ink_coverage=getattr(train_args, "ink_coverage", 0.5),
+            style_contrastive=getattr(train_args, "style_contrastive", 0.1),
+        )
+        self.style_contrastive_temperature = getattr(
+            train_args, "style_contrastive_temperature", 0.07
         )
 
         maker = StyleExtractionDatasetMaker(
@@ -149,6 +154,20 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             g_scores = self.discriminator(fake_input)
             adv_g = adversarial_generator_loss(g_scores)
 
+        # Style contrastive: the generated glyph's style should match its own
+        # evidence font, not other fonts in the batch.
+        style_contr = torch.tensor(0.0, device=self.device)
+        if self.loss_weights.style_contrastive > 0:
+            output_style = self.model.encode_style(
+                reconstructed.unsqueeze(1)
+            ).mean(dim=1)
+            evidence_style = style_tokens.mean(dim=1).detach()
+            style_contr = style_contrastive_loss(
+                output_style,
+                evidence_style,
+                temperature=self.style_contrastive_temperature,
+            )
+
         recon_total, recon_terms = reconstruction_loss(
             reconstructed,
             target_images,
@@ -163,9 +182,11 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             recon_total
             + self.loss_weights.adversarial * adv_g
             + self.loss_weights.ink_coverage * ink
+            + self.loss_weights.style_contrastive * style_contr
         )
         terms.update(recon_terms)
         terms["ink_coverage"] = ink.detach()
+        terms["style_contrastive"] = style_contr.detach()
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             terms["adversarial_g"] = adv_g.detach()
             terms["adversarial_g_weighted"] = (
@@ -258,6 +279,8 @@ if __name__ == "__main__":
     parser.add_argument("--adversarial", type=float, default=0.0)
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--ink-coverage", type=float, default=0.5)
+    parser.add_argument("--style-contrastive", type=float, default=0.1)
+    parser.add_argument("--style-contrastive-temperature", type=float, default=0.07)
     parser.add_argument("--discriminator-lr", type=float, default=None)
     args = parser.parse_args()
 

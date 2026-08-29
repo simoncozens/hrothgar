@@ -87,6 +87,7 @@ class StyleExtractionLossWeights:
     perceptual_lpips: float = 1.0
     adversarial: float = 0.0
     ink_coverage: float = 0.5
+    style_contrastive: float = 0.1
 
 
 @dataclass

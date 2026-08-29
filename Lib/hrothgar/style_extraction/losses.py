@@ -69,6 +69,29 @@ def ink_coverage_loss(
     return deficit.mean()
 
 
+def style_contrastive_loss(
+    output_style: torch.Tensor,
+    evidence_style: torch.Tensor,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """InfoNCE: each output's style should match its own evidence, not others'.
+
+    Args:
+        output_style: ``(B, D)`` style vectors for the generated glyphs.
+        evidence_style: ``(B, D)`` style vectors for the evidence glyphs
+            (detached by the caller — they are the targets).
+        temperature: softmax temperature.
+
+    Returns:
+        Scalar loss.
+    """
+    q = F.normalize(output_style, p=2, dim=-1)
+    k = F.normalize(evidence_style, p=2, dim=-1)
+    sim = torch.matmul(q, k.transpose(0, 1)) / temperature  # (B, B)
+    labels = torch.arange(sim.shape[0], device=sim.device)
+    return F.cross_entropy(sim, labels)
+
+
 def adversarial_generator_loss(fake_scores: torch.Tensor) -> torch.Tensor:
     """LSGAN generator loss: push fake images toward the real manifold."""
     return F.mse_loss(fake_scores, torch.ones_like(fake_scores))
