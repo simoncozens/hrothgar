@@ -1,15 +1,20 @@
+import math
+import random
 from collections import defaultdict
-from typing import Callable, Optional, Sequence, Set
+from typing import Callable, Generic, Optional, Sequence, Set, TypeVar
 
 import torch
 import uharfbuzz as hb
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.googlefonts import GoogleFonts
 
 from hrothgar.dataset_constants import CAPS_ONLY, LATIN_CORE, LATIN_KERNEL, LGC_ALL
+
+
+_T = TypeVar("_T")
 
 
 def _has_non_empty_outline(extents) -> bool:
@@ -23,6 +28,82 @@ def _has_non_empty_outline(extents) -> bool:
 def _hb_font_for_face(face):
     """Construct a HarfBuzz Font object for a face."""
     return getattr(hb, "Font")(face)
+
+
+class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
+    """Batch sampler that balances a class label within each emitted batch.
+
+    Items are grouped by a caller-supplied ``key`` (for example a font's
+    category or classification), and each batch draws an even quota of items
+    from every class.  This stops majority classes (e.g. sans-serif fonts)
+    from dominating training batches.
+    """
+
+    def __init__(
+        self,
+        items: Sequence[_T],
+        *,
+        key: Callable[[_T], str],
+        batch_size: int,
+        drop_last: bool,
+    ) -> None:
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if len(items) == 0:
+            raise ValueError("Cannot build class-balanced sampler for empty dataset")
+
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.dataset_size = len(items)
+
+        class_to_indices: dict[str, list[int]] = {}
+        for idx, item in enumerate(items):
+            class_to_indices.setdefault(key(item), []).append(idx)
+
+        if not class_to_indices:
+            raise ValueError("No classes found for class-balanced sampling")
+
+        self.class_to_indices = class_to_indices
+        self.classes = sorted(class_to_indices.keys())
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return self.dataset_size // self.batch_size
+        return math.ceil(self.dataset_size / self.batch_size)
+
+    def __iter__(self):
+        num_classes = len(self.classes)
+        num_batches = len(self)
+
+        class_cursor = random.randrange(num_classes)
+
+        for _ in range(num_batches):
+            batch_indices: list[int] = []
+
+            if num_classes <= self.batch_size:
+                base = self.batch_size // num_classes
+                remainder = self.batch_size % num_classes
+                class_order = self.classes[:]
+                random.shuffle(class_order)
+
+                for cls in class_order:
+                    indices = self.class_to_indices[cls]
+                    for _ in range(base):
+                        batch_indices.append(random.choice(indices))
+
+                for cls in class_order[:remainder]:
+                    batch_indices.append(random.choice(self.class_to_indices[cls]))
+            else:
+                selected_classes = [
+                    self.classes[(class_cursor + i) % num_classes]
+                    for i in range(self.batch_size)
+                ]
+                class_cursor = (class_cursor + self.batch_size) % num_classes
+                for cls in selected_classes:
+                    batch_indices.append(random.choice(self.class_to_indices[cls]))
+
+            random.shuffle(batch_indices)
+            yield batch_indices
 
 
 class DatasetMaker:

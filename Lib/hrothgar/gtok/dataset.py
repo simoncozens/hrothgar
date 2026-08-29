@@ -6,8 +6,6 @@ Loads the Google Fonts repository and produces batches of
 
 from __future__ import annotations
 
-import math
-import random
 from collections import Counter
 from typing import Iterable, List, Sequence
 
@@ -20,7 +18,7 @@ from torch.utils.data import (
     Dataset as TorchDataset,
 )
 
-from hrothgar.dataset import LATIN_CORE, DatasetMaker
+from hrothgar.dataset import LATIN_CORE, ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.glyph_rendering import crop_to_ink
 
 # Dataset-level oversampling policy for underperforming style buckets.
@@ -128,85 +126,12 @@ class GTokAxisDataset(TorchDataset):
         many draws), this sampler enforces near-equal class quotas *within each
         batch*.
         """
-        return _ClassBalancedBatchSampler(
+        return ClassBalancedBatchSampler(
             self.order,
+            key=lambda item: item[0].classification(),
             batch_size=batch_size,
             drop_last=drop_last,
         )
-
-
-class _ClassBalancedBatchSampler(BatchSampler):
-    """Batch sampler that balances classes within each emitted batch."""
-
-    def __init__(
-        self,
-        order: Sequence[tuple],
-        *,
-        batch_size: int,
-        drop_last: bool,
-    ) -> None:
-        if batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, got {batch_size}")
-        if len(order) == 0:
-            raise ValueError("Cannot build class-balanced sampler for empty dataset")
-
-        self.batch_size = batch_size
-        self.drop_last = drop_last
-
-        class_to_indices: dict[str, list[int]] = {}
-        for idx, (font, _char, _axis_position) in enumerate(order):
-            cls = font.classification()
-            class_to_indices.setdefault(cls, []).append(idx)
-
-        if not class_to_indices:
-            raise ValueError("No classes found for class-balanced sampling")
-
-        self.class_to_indices = class_to_indices
-        self.classes = sorted(class_to_indices.keys())
-        self.dataset_size = len(order)
-
-    def __len__(self) -> int:
-        if self.drop_last:
-            return self.dataset_size // self.batch_size
-        return math.ceil(self.dataset_size / self.batch_size)
-
-    def __iter__(self):
-        num_classes = len(self.classes)
-        num_batches = len(self)
-
-        # Keep coverage fair when there are more classes than batch slots.
-        class_cursor = random.randrange(num_classes)
-
-        for _ in range(num_batches):
-            batch_indices: list[int] = []
-
-            if num_classes <= self.batch_size:
-                # Distribute slots as evenly as possible across all classes.
-                base = self.batch_size // num_classes
-                remainder = self.batch_size % num_classes
-                class_order = self.classes[:]
-                random.shuffle(class_order)
-
-                for cls in class_order:
-                    indices = self.class_to_indices[cls]
-                    for _ in range(base):
-                        batch_indices.append(random.choice(indices))
-
-                for cls in class_order[:remainder]:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-            else:
-                # When classes outnumber slots, sample one item per class for a
-                # rotating subset to avoid starving classes.
-                selected_classes = [
-                    self.classes[(class_cursor + i) % num_classes]
-                    for i in range(self.batch_size)
-                ]
-                class_cursor = (class_cursor + self.batch_size) % num_classes
-                for cls in selected_classes:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-
-            random.shuffle(batch_indices)
-            yield batch_indices
 
 
 class GTokDatasetMaker(DatasetMaker):

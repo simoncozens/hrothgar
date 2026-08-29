@@ -7,17 +7,16 @@ contrastive objective learns invariance to *which* glyphs are shown.
 
 from __future__ import annotations
 
-import math
 import random
 from pathlib import Path
 from typing import Optional, Sequence
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import BatchSampler, DataLoader
+from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import DatasetMaker
+from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
@@ -216,8 +215,9 @@ class FontStyleDatasetMaker(DatasetMaker):
         if self._class_balanced:
             return DataLoader(
                 dataset,
-                batch_sampler=_ClassBalancedBatchSampler(
+                batch_sampler=ClassBalancedBatchSampler(
                     self.train_fonts,
+                    key=lambda font: font.category(),
                     batch_size=self.batch_size,
                     drop_last=True,
                 ),
@@ -354,65 +354,3 @@ class FontStyleDatasetMaker(DatasetMaker):
             result["text_embeddings"] = torch.stack(text_embs)  # (B, D)
 
         return result
-
-
-class _ClassBalancedBatchSampler(BatchSampler):
-    """Batch sampler that balances broad font categories within each batch."""
-
-    def __init__(
-        self,
-        fonts: Sequence[GoogleFont],
-        *,
-        batch_size: int,
-        drop_last: bool,
-    ) -> None:
-        self.fonts = list(fonts)
-        self.batch_size = batch_size
-        self.drop_last = drop_last
-
-        class_to_indices: dict[str, list[int]] = {}
-        for idx, font in enumerate(self.fonts):
-            cls = font.category()
-            class_to_indices.setdefault(cls, []).append(idx)
-
-        if not class_to_indices:
-            raise ValueError("No classes found for class-balanced sampling")
-
-        self.class_to_indices = class_to_indices
-        self.classes = sorted(class_to_indices.keys())
-
-    def __len__(self) -> int:
-        if self.drop_last:
-            return len(self.fonts) // self.batch_size
-        return math.ceil(len(self.fonts) / self.batch_size)
-
-    def __iter__(self):
-        num_classes = len(self.classes)
-        num_batches = len(self)
-        class_cursor = random.randrange(num_classes)
-
-        for _ in range(num_batches):
-            batch_indices: list[int] = []
-
-            if num_classes <= self.batch_size:
-                base = self.batch_size // num_classes
-                remainder = self.batch_size % num_classes
-                class_order = self.classes[:]
-                random.shuffle(class_order)
-                for cls in class_order:
-                    indices = self.class_to_indices[cls]
-                    for _ in range(base):
-                        batch_indices.append(random.choice(indices))
-                for cls in class_order[:remainder]:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-            else:
-                selected_classes = [
-                    self.classes[(class_cursor + i) % num_classes]
-                    for i in range(self.batch_size)
-                ]
-                class_cursor = (class_cursor + self.batch_size) % num_classes
-                for cls in selected_classes:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
-
-            random.shuffle(batch_indices)
-            yield batch_indices

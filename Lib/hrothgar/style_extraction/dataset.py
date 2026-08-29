@@ -23,7 +23,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import DatasetMaker
+from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.style_extraction.render_utils import render_glyph
 
@@ -54,10 +54,12 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         num_evidence_glyphs: int = 32,
         split_seed: int = 1234,
         canary_size: Optional[int] = None,
+        class_balanced: bool = True,
     ):
         # Set before super().__init__: the base class calls filter_fonts(),
         # which needs this attribute.
         self._num_evidence_glyphs = num_evidence_glyphs
+        self._class_balanced = class_balanced
 
         super().__init__(
             repo_url=str(repo_url),
@@ -132,8 +134,22 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         }
 
     def train_loader(self):
+        dataset = self.train_set()
+        if self._class_balanced:
+            return DataLoader(
+                dataset,
+                batch_sampler=ClassBalancedBatchSampler(
+                    self.train_fonts,
+                    key=lambda font: font.category(),
+                    batch_size=self.batch_size,
+                    drop_last=True,
+                ),
+                collate_fn=self._collate_fn,
+                num_workers=8,
+                pin_memory=True,
+            )
         return DataLoader(
-            self.train_set(),
+            dataset,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
