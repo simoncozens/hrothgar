@@ -128,6 +128,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
             "target_images": target_images,
             "target_codepoint_idx": target_codepoint_idx,
             "target_codepoint": target_codepoint,
+            "family": [font.family for font in fonts],
         }
 
     def train_loader(self):
