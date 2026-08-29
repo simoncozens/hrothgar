@@ -31,6 +31,7 @@ from hrothgar.style_extraction.losses import (
     ink_coverage_loss,
     reconstruction_loss,
     style_contrastive_loss,
+    style_token_diversity_loss,
 )
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.utils import TrainingLoop
@@ -50,6 +51,7 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             adversarial=getattr(train_args, "adversarial", 0.0),
             ink_coverage=getattr(train_args, "ink_coverage", 0.5),
             style_contrastive=getattr(train_args, "style_contrastive", 0.1),
+            token_diversity=getattr(train_args, "token_diversity", 0.1),
         )
         self.style_contrastive_temperature = getattr(
             train_args, "style_contrastive_temperature", 0.07
@@ -126,6 +128,11 @@ class StyleExtractionTrainingLoop(TrainingLoop):
 
         terms: dict[str, torch.Tensor] = {}
 
+        # Token diversity: keep the K style tokens mutually decorrelated so
+        # cross-attention has distinct axes to read rather than K copies of one
+        # mean vector.
+        token_div = style_token_diversity_loss(style_tokens)
+
         adv_g = torch.tensor(0.0, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             # Conditional discriminator input = [codepoint | style summary | image].
@@ -183,10 +190,12 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             + self.loss_weights.adversarial * adv_g
             + self.loss_weights.ink_coverage * ink
             + self.loss_weights.style_contrastive * style_contr
+            + self.loss_weights.token_diversity * token_div
         )
         terms.update(recon_terms)
         terms["ink_coverage"] = ink.detach()
         terms["style_contrastive"] = style_contr.detach()
+        terms["token_diversity"] = token_div.detach()
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             terms["adversarial_g"] = adv_g.detach()
             terms["adversarial_g_weighted"] = (
@@ -281,6 +290,10 @@ if __name__ == "__main__":
     parser.add_argument("--ink-coverage", type=float, default=0.5)
     parser.add_argument("--style-contrastive", type=float, default=0.1)
     parser.add_argument("--style-contrastive-temperature", type=float, default=0.07)
+    parser.add_argument("--token-diversity", type=float, default=0.1,
+                        help="Weight of the style-token diversity loss (0.0 to "
+                             "disable).  Keeps the K Perceiver latents mutually "
+                             "decorrelated instead of collapsing to one summary.")
     parser.add_argument("--discriminator-lr", type=float, default=None)
     args = parser.parse_args()
 

@@ -99,18 +99,28 @@ class _FFN(nn.Module):
 
 
 class PerceiverBlock(nn.Module):
-    """Latent queries cross-attend to the reference glyph tokens."""
+    """Latent queries cross-attend to reference tokens, then to each other.
+
+    The canonical Perceiver alternates cross-attention (latents ↔ inputs) with
+    self-attention (latents ↔ latents).  Without the self-attention step the K
+    latents are processed independently in parallel and collapse to near-
+    identical summaries of the same inputs; self-attention lets them coordinate
+    and specialise onto distinct style axes.
+    """
 
     def __init__(self, dim: int, heads: int, dropout: float = 0.0) -> None:
         super().__init__()
         self.cross = MultiHeadAttention(dim, heads, dropout)
         self.norm1 = nn.LayerNorm(dim)
-        self.ffn = _FFN(dim)
+        self.self_attn = MultiHeadAttention(dim, heads, dropout)
         self.norm2 = nn.LayerNorm(dim)
+        self.ffn = _FFN(dim)
+        self.norm3 = nn.LayerNorm(dim)
 
     def forward(self, latents, inputs):
         latents = self.norm1(latents + self.cross(latents, inputs, inputs))
-        latents = self.norm2(latents + self.ffn(latents))
+        latents = self.norm2(latents + self.self_attn(latents, latents, latents))
+        latents = self.norm3(latents + self.ffn(latents))
         return latents
 
 

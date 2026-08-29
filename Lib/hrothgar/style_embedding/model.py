@@ -116,7 +116,7 @@ class CategoryPredictionHead(nn.Module):
 
 
 class FontStyleEmbedder(SaveLoadModel):
-    """Font-level style embedder from glyph renderings via Gram (texture) pooling."""
+    """Font-level style embedder via coarse-spatial glyph pooling."""
 
     def __init__(self, config: FontStyleEmbedderConfig):
         super().__init__()
@@ -128,17 +128,14 @@ class FontStyleEmbedder(SaveLoadModel):
             downsample=config.encoder_downsample,
         )
 
-        # 1x1 channel projection before the Gram so the Gram matrix is compact.
-        self.gram_proj = nn.Conv2d(
-            config.encoder_feature_dim, config.gram_channels, 1, bias=False
+        # Coarse-spatial pooling.  A 1x1 projection compresses channels, then
+        # each glyph is downsampled to a coarse grid and pooled across glyphs.
+        self.spatial_proj = nn.Conv2d(
+            config.encoder_feature_dim, config.spatial_channels, 1, bias=False
         )
-        self.gram_embed = nn.Linear(
-            config.gram_channels * (config.gram_channels + 1) // 2,
+        self.spatial_embed = nn.Linear(
+            config.spatial_channels * config.coarse_grid_size * config.coarse_grid_size,
             config.encoder_feature_dim,
-        )
-        self.register_buffer(
-            "_gram_idx",
-            torch.triu_indices(config.gram_channels, config.gram_channels),
         )
 
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
@@ -192,7 +189,7 @@ class FontStyleEmbedder(SaveLoadModel):
             glyph_mask: Optional ``(B, G)`` boolean, ``True`` = glyph visible.
 
         Returns:
-            ``(B, encoder_feature_dim)`` Gram-based summary vector.
+            ``(B, encoder_feature_dim)`` summary vector.
         """
         b, g, c, h, w = images.shape
         assert c == 1, f"Expected single-channel glyphs, got {c} channels"
@@ -200,21 +197,20 @@ class FontStyleEmbedder(SaveLoadModel):
         flat = images.flatten(0, 1)  # (B*G, 1, H, W)
         features = self.encoder(flat)  # (B*G, F, h', w')
 
-        k = self.config.gram_channels
-        proj = self.gram_proj(features)  # (B*G, K, h', w')
-        n = proj.shape[2] * proj.shape[3]
-        proj = proj.reshape(b, g, k, n)  # (B, G, K, N)
-        flat_proj = proj.reshape(b * g, k, n)
-        gram = torch.bmm(flat_proj, flat_proj.transpose(1, 2)) / n  # (B*G, K, K)
-        gram = gram.reshape(b, g, k, k)
-        if glyph_mask is not None:
-            mask = glyph_mask.to(gram.dtype).reshape(b, g, 1, 1)
-            gram = (gram * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
-        else:
-            gram = gram.mean(dim=1)  # (B, K, K)
+        s = self.config.spatial_channels
+        cs = self.config.coarse_grid_size
+        proj = self.spatial_proj(features)  # (B*G, S, h', w')
+        proj = F.adaptive_avg_pool2d(proj, (cs, cs))  # (B*G, S, cs, cs)
+        proj = proj.reshape(b, g, s, cs, cs)  # (B, G, S, cs, cs)
 
-        tri = gram[:, self._gram_idx[0], self._gram_idx[1]]  # (B, K(K+1)/2)
-        summary = self.gram_embed(tri)  # (B, encoder_feature_dim)
+        if glyph_mask is not None:
+            mask = glyph_mask.to(proj.dtype).reshape(b, g, 1, 1, 1)
+            pooled = (proj * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+        else:
+            pooled = proj.mean(dim=1)  # (B, S, cs, cs)
+
+        pooled = pooled.flatten(1)  # (B, S * cs * cs)
+        summary = self.spatial_embed(pooled)  # (B, encoder_feature_dim)
         return self.enc_dropout(summary)
 
     def compute_embedding(

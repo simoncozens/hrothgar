@@ -92,6 +92,22 @@ def style_contrastive_loss(
     return F.cross_entropy(sim, labels)
 
 
+def style_token_diversity_loss(tokens: torch.Tensor) -> torch.Tensor:
+    """Penalise collapse of the style-token set onto a single direction.
+
+    ``tokens`` is ``(B, K, D)``.  The loss is the mean squared off-diagonal
+    cosine similarity, so it is 1.0 when the K tokens are identical and 0.0 when
+    they are mutually orthogonal.  Without some such pressure, Perceiver latents
+    collapse to K copies of one summary vector, and cross-attention in the
+    decoder can only ever read the mean.
+    """
+    tn = F.normalize(tokens, p=2, dim=-1)
+    sim = torch.matmul(tn, tn.transpose(-2, -1))  # (B, K, K)
+    k = sim.shape[-1]
+    eye = torch.eye(k, device=sim.device, dtype=torch.bool)
+    return (sim.masked_fill(eye, 0.0) ** 2).mean()
+
+
 def adversarial_generator_loss(fake_scores: torch.Tensor) -> torch.Tensor:
     """LSGAN generator loss: push fake images toward the real manifold."""
     return F.mse_loss(fake_scores, torch.ones_like(fake_scores))

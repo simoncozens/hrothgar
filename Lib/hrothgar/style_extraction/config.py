@@ -88,6 +88,7 @@ class StyleExtractionLossWeights:
     adversarial: float = 0.0
     ink_coverage: float = 0.5
     style_contrastive: float = 0.1
+    token_diversity: float = 0.1
 
 
 @dataclass

@@ -308,6 +308,9 @@ class FontStyleDatasetMaker(DatasetMaker):
             dtype=torch.long,
         )
         families = [font.family for font in fonts]
+        # Unique per font file — distinguishes different weights/styles of the
+        # same family for the font-level (soft family grouping) contrastive.
+        font_ids = [str(font.path) for font in fonts]
 
         # Per-font tag vectors for tag-weighted contrastive positives.
         style_vectors: list[torch.Tensor] = []
@@ -336,6 +339,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             "tag_masks": tag_masks,
             "category": categories,
             "family": families,
+            "font_ids": font_ids,
             "tag_vectors": tag_vectors,
         }
 

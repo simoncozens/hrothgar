@@ -20,10 +20,10 @@ class FontStyleEmbedderConfig:
     """Configuration for the font-level style embedder.
 
     The model renders a fixed set of glyphs (``input_codepoints``) for each
-    font, encodes each glyph with a shared CNN, computes a per-glyph Gram
-    matrix (channel correlations, spatial order destroyed), averages across
-    glyphs, and projects the flattened Gram into a compact texture summary.
-    That summary feeds contrastive, tag-prediction, and category objectives.
+    font, encodes each glyph with a shared CNN, downsamples each to a coarse
+    spatial grid, pools across glyphs (content-invariance), and projects the
+    flattened map into a compact summary.  That summary feeds contrastive,
+    tag-prediction, and category objectives.
     """
 
     # Input rendering.
@@ -39,10 +39,12 @@ class FontStyleEmbedderConfig:
     encoder_feature_dim: int = 256
     encoder_downsample: int = 4  # 64 -> 16
 
-    # Gram (texture) pooling.  A 1x1 channel projection reduces the encoder
-    # features to ``gram_channels`` before the Gram matrix is computed, then a
-    # linear map brings the flattened Gram back to ``encoder_feature_dim``.
-    gram_channels: int = 32
+    # Coarse-spatial pooling (replaces Gram).  Each glyph is downsampled to a
+    # coarse grid, then pooled across glyphs; a linear maps the flattened map
+    # back to ``encoder_feature_dim``.  Coarse enough to blur the skeleton
+    # (content-invariant), fine enough to keep serif/terminal shape.
+    coarse_grid_size: int = 8
+    spatial_channels: int = 32
 
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
@@ -65,7 +67,10 @@ class FontStyleEmbedderConfig:
     # via multi-positive contrastive loss.  Not needed at inference.
     text_encoder_name: str = ""
     text_embedding_dim: int = 384
-    multipos_use_family_positives: bool = True
+    # Soft positive weight for same-family, different-font pairs in the
+    # multi-positive contrastive loss (font-level objective).  A weight of 0
+    # disables the family-level soft positive entirely.
+    family_positive_weight: float = 0.3
 
     # Training.
     contrastive_temperature: float = 0.07
@@ -109,8 +114,7 @@ class FontStyleEmbedderConfig:
 class FontStyleEmbeddingLossWeights:
     """Weights for each loss term."""
 
-    contrastive: float = 1.0
     multipos_contrastive: float = 1.0
     tag_prediction: float = 0.5
-    use_family_positives: bool = True
+    family_positive_weight: float = 0.3
     tag_positive_weight: float = 1.0

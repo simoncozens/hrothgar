@@ -18,36 +18,40 @@ def multipos_contrastive_loss(
     projections: torch.Tensor,
     family_labels: list[str],
     *,
+    font_ids: Optional[list[str]] = None,
     text_embeddings: Optional[torch.Tensor] = None,
     tag_vectors: Optional[torch.Tensor] = None,
     temperature: float = 0.07,
-    use_family_positives: bool = True,
+    family_positive_weight: float = 0.3,
     tag_threshold: float = 0.1,
     tag_weight: float = 1.0,
 ) -> torch.Tensor:
-    """Multi-positive contrastive loss with optional text / tag conditioning.
+    """Multi-positive contrastive loss with font-/family-/text-/tag conditioning.
 
     Each image anchor (all 2B views) is contrasted against a joint candidate
     set of all 2B images plus (optionally) B text embeddings.  Positives:
 
-    * Its other view (same font, different phrase) — hard positive.
+    * Its other view (same font, different phrase) — hard positive (weight 1).
+    * Same family, *different* font — soft positive (weight
+      ``family_positive_weight``), so a font is closer to its family than to
+      unrelated fonts, but not as close as it is to itself.
     * When ``text_embeddings`` is provided: the text embedding for its font
       family — hard positive.
     * When ``tag_vectors`` is provided: other images weighted by tag cosine
-      similarity (soft positive).  When absent and ``use_family_positives``
-      is True: binary same-family positives.
-
-    At least one of ``text_embeddings`` or ``tag_vectors`` should be provided
-    for the multi-positive path to be useful.
+      similarity (soft positive).
 
     Args:
         projections: ``(2B, D)`` L2-normalized — view 1 stacked on view 2.
         family_labels: *2B* family name strings (duplicated for the two views).
+        font_ids: Optional *2B* font identifiers (duplicated for the two views).
+            Required for the same-family/different-font soft positive.
         text_embeddings: Optional ``(B, D)`` L2-normalized.
         tag_vectors: Optional ``(B, num_tags)`` tag centiles in [0, 1].
         temperature: Softmax temperature.
-        use_family_positives: Only used when neither text nor tags are given.
+        family_positive_weight: Soft-positive weight for same-family,
+            different-font pairs (0 disables it).
         tag_threshold: Minimum cosine similarity for tag-based positives.
+        tag_weight: Weight of tag-based soft positives.
 
     Returns:
         Scalar loss.
@@ -108,8 +112,7 @@ def multipos_contrastive_loss(
         font_idx = torch.arange(N, device=device) % B
         pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
 
-    # 3. Image-image soft positives: tag-weighted when available,
-    #    binary same-family otherwise.
+    # 3. Image-image soft positives from tag vectors (when available).
     if tag_vectors is not None:
         # Normalize tag vectors and compute cosine similarity.
         tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)   # (B, T)
@@ -126,19 +129,24 @@ def multipos_contrastive_loss(
         for i in range(N):
             img_pos[i, other[i]] = 0.0
         pos_mask[:, :N] += tag_weight * img_pos
-    elif use_family_positives:
+    # Same family, *different font*: soft positive (closer than cross-family,
+    # but not as close as the same font).
+    if font_ids is not None and family_positive_weight > 0:
         import numpy as np
 
         fams_arr = np.array(family_labels)  # (2B,)
+        fids_arr = np.array(font_ids)  # (2B,)
         same_family = torch.tensor(
             fams_arr[:, None] == fams_arr[None, :],
             device=device,
             dtype=torch.float32,
         )  # (2B, 2B)
-        same_family.fill_diagonal_(0.0)
-        for i in range(N):
-            same_family[i, other[i]] = 0.0
-        pos_mask[:, :N] += same_family
+        diff_font = torch.tensor(
+            fids_arr[:, None] != fids_arr[None, :],
+            device=device,
+            dtype=torch.float32,
+        )  # (2B, 2B)
+        pos_mask[:, :N] += family_positive_weight * (same_family * diff_font)
 
     # ---- Mask self-similarity in sim ------------------------------------
     sim[torch.arange(N), torch.arange(N)] = float("-inf")
@@ -275,6 +283,7 @@ def compute_losses(
     temperature: float = 0.07,
     tag_masks: Optional[dict[str, torch.Tensor]] = None,
     family_labels: Optional[list[str]] = None,
+    font_ids: Optional[list[str]] = None,
     category_logits: Optional[torch.Tensor] = None,
     category_targets: Optional[torch.Tensor] = None,
     text_embeddings: Optional[torch.Tensor] = None,
@@ -287,26 +296,20 @@ def compute_losses(
     """
     device = projections.device
 
-    # Contrastive loss — use multi-positive variant when text or tag
-    # conditioning is available, otherwise fall back to plain NT-Xent.
-    if text_embeddings is not None or tag_vectors is not None:
-        contr = multipos_contrastive_loss(
-            projections,
-            family_labels if family_labels is not None else [],
-            text_embeddings=text_embeddings,
-            tag_vectors=tag_vectors,
-            temperature=temperature,
-            use_family_positives=weights.use_family_positives,
-            tag_weight=weights.tag_positive_weight,
-        )
-        weight = weights.multipos_contrastive
-    else:
-        contr = contrastive_loss(
-            projections,
-            temperature=temperature,
-            family_labels=family_labels,
-        )
-        weight = weights.contrastive
+    # Multi-positive contrastive loss.  Without text/tags this still uses the
+    # same-font other-view hard positive plus (when font_ids are present) the
+    # same-family soft positive.
+    contr = multipos_contrastive_loss(
+        projections,
+        family_labels if family_labels is not None else [],
+        font_ids=font_ids,
+        text_embeddings=text_embeddings,
+        tag_vectors=tag_vectors,
+        temperature=temperature,
+        family_positive_weight=weights.family_positive_weight,
+        tag_weight=weights.tag_positive_weight,
+    )
+    weight = weights.multipos_contrastive
 
     # Tag prediction loss.
     tag_loss = torch.tensor(0.0, device=device)

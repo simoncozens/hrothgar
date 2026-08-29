@@ -21,6 +21,7 @@ from hrothgar.style_extraction.losses import (
     ink_coverage_loss,
     reconstruction_loss,
     style_contrastive_loss,
+    style_token_diversity_loss,
 )
 from hrothgar.style_extraction.model import StyleExtractionModel
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
@@ -38,6 +39,7 @@ __all__ = [
     "reconstruction_loss",
     "ink_coverage_loss",
     "style_contrastive_loss",
+    "style_token_diversity_loss",
     "adversarial_generator_loss",
     "adversarial_discriminator_loss",
 ]

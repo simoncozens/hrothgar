@@ -95,19 +95,20 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 print(f"After filtering by [{tag_filter}]: {len(tag_names)} tags")
 
         text_encoder_name = getattr(train_args, "text_encoder", None) or ""
-        multipos_family = getattr(train_args, "multipos_family_positives", True)
+        family_positive_weight = getattr(train_args, "family_positive_weight", 0.3)
         config = FontStyleEmbedderConfig(
             glyph_size=getattr(train_args, "glyph_size", 64),
             glyph_sample_size=getattr(train_args, "glyph_sample_size", 32),
             encoder_downsample=getattr(train_args, "encoder_downsample", 4),
-            gram_channels=getattr(train_args, "gram_channels", 32),
+            coarse_grid_size=getattr(train_args, "coarse_grid_size", 8),
+            spatial_channels=getattr(train_args, "spatial_channels", 32),
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
             tag_num_classes=train_args.tag_num_classes,
             tag_dropout=train_args.tag_dropout,
             use_category_head=train_args.use_category_head,
             text_encoder_name=text_encoder_name,
-            multipos_use_family_positives=multipos_family,
+            family_positive_weight=family_positive_weight,
         )
         if getattr(train_args, "input_glyphs", None):
             config.input_codepoints = [
@@ -151,7 +152,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
         # ── Loss ────────────────────────────────────────────────────────
         self.loss_weights = FontStyleEmbeddingLossWeights(
-            use_family_positives=config.multipos_use_family_positives,
+            family_positive_weight=config.family_positive_weight,
             tag_positive_weight=getattr(train_args, "tag_positive_weight", 1.0),
         )
 
@@ -245,6 +246,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         target_tags = {k: v.to(self.device) for k, v in batch["tags"].items()}
         tag_masks = {k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()}
         family = batch.get("family", None)
+        font_ids = batch.get("font_ids", None)
         category = batch.get("category")
         tag_vectors = batch.get("tag_vectors")
         if tag_vectors is not None:
@@ -257,6 +259,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         target_tags_2x = {k: torch.cat([v, v], dim=0) for k, v in target_tags.items()}  # type: ignore[arg-type]
         tag_masks_2x = {k: torch.cat([v, v], dim=0) for k, v in tag_masks.items()}  # type: ignore[arg-type]
         family_2x = family + family if family else None
+        font_ids_2x = font_ids + font_ids if font_ids else None
         category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
 
         with self._autocast_context():
@@ -272,6 +275,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 weights=self.loss_weights,
                 temperature=self.model.config.contrastive_temperature,
                 family_labels=family_2x,
+                font_ids=font_ids_2x,
                 category_logits=category_logits,
                 category_targets=category_2x,
                 text_embeddings=text_embeddings,
@@ -316,6 +320,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                     for k, v in val_batch.get("tag_masks", {}).items()
                 }
                 family = val_batch.get("family", None)
+                font_ids = val_batch.get("font_ids", None)
                 category = val_batch.get("category")
                 tag_vectors = val_batch.get("tag_vectors")
                 if tag_vectors is not None:
@@ -334,6 +339,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                     for k, v in tag_masks.items()
                 }
                 family_2x = family + family if family else None
+                font_ids_2x = font_ids + font_ids if font_ids else None
                 category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
 
                 with self._autocast_context():
@@ -348,6 +354,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         weights=self.loss_weights,
                         temperature=self.model.config.contrastive_temperature,
                         family_labels=family_2x,
+                        font_ids=font_ids_2x,
                         category_logits=category_logits,
                         category_targets=category_2x,
                         text_embeddings=text_embeddings,
@@ -574,8 +581,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--encoder-downsample", type=int, default=4,
                    choices=[2, 4, 8],
                    help="Spatial downsample ratio of the per-glyph encoder.")
-    p.add_argument("--gram-channels", type=int, default=32,
-                   help="Channel count for the 1x1 projection before the Gram matrix.")
+    p.add_argument("--coarse-grid-size", type=int, default=8,
+                   help="Coarse spatial grid side for glyph pooling (replaces Gram).")
+    p.add_argument("--spatial-channels", type=int, default=32,
+                   help="Channel count after the 1x1 projection before coarse pooling.")
     p.add_argument("--glyph-sample-size", type=int, default=32,
                    help="Number of glyphs sampled per font per step "
                         "(split into two disjoint views for contrastive learning).")
@@ -597,11 +606,11 @@ def _parse_args() -> argparse.Namespace:
                    help="HuggingFace model for frozen text conditioning "
                         "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
                         "Enables multi-positive contrastive loss.")
-    p.add_argument("--no-family-positives", action="store_false",
-                   dest="multipos_family_positives",
-                   help="Disable same-family image positives in multi-positive "
-                        "loss.  Only same-font other-view + text are positives.  "
-                        "Use this if contrastive loss overfits.")
+    p.add_argument("--family-positive-weight", type=float, default=0.3,
+                   help="Soft positive weight for same-family, different-font "
+                        "pairs in the multi-positive contrastive loss.  0.0 "
+                        "disables the family-level soft positive; higher values "
+                        "pull same-family fonts closer together.")
     p.add_argument("--no-class-balance", action="store_true",
                    help="Disable class-balanced batch sampling.  Without this, "
                         "each batch is guaranteed to contain fonts from all 6 "
