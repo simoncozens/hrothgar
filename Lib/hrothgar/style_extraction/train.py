@@ -13,7 +13,6 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
@@ -21,8 +20,8 @@ from glyphloss import GlyphReconstructionLoss
 from hrothgar.glyphloss_curvature import CurvatureWeightedGlyphLoss
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.style_extraction.config import (
-    StyleExtractionConfig,
     StyleExtractionLossWeights,
+    StyleExtractionV2Config,
 )
 from hrothgar.style_extraction.dataset import StyleExtractionDatasetMaker
 from hrothgar.style_extraction.losses import (
@@ -32,18 +31,18 @@ from hrothgar.style_extraction.losses import (
     ink_coverage_loss,
     reconstruction_loss,
 )
-from hrothgar.style_extraction.model import StyleExtractionModel
+from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.utils import TrainingLoop
 
 
 class StyleExtractionTrainingLoop(TrainingLoop):
     def post_init(self, train_args) -> None:
-        config = StyleExtractionConfig(
+        config = StyleExtractionV2Config(
             image_size=getattr(train_args, "image_size", 128),
-            num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 32),
+            num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
         )
         config.save_sidecar(train_args.model_path)
-        model = StyleExtractionModel(config).to(self.device)
+        model = StyleExtractionModelV2(config).to(self.device)
 
         self.loss_weights = StyleExtractionLossWeights(
             l1=getattr(train_args, "l1_weight", 1.0),
@@ -114,24 +113,25 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         target_images = batch["target_images"].to(self.device)
         target_idx = batch["target_codepoint_idx"].to(self.device)
 
-        style_map = self.model.encode_style(style_images)
-        conditioning = self.model.build_conditioning(target_idx, style_map)
-        reconstructed = self.model.decode(target_idx, style_map)
+        style_tokens = self.model.encode_style(style_images)
+        reconstructed = self.model.decode(target_idx, style_tokens)
 
         terms: dict[str, torch.Tensor] = {}
 
         adv_g = torch.tensor(0.0, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
-            # Conditioning is detached so the adversarial gradient shapes only
-            # the decoder output, not the style encoder / codepoint embedding.
-            cond_up = F.interpolate(
-                conditioning,
-                size=target_images.shape[-2:],
-                mode="bilinear",
-                align_corners=False,
-            ).detach()
-            real_input = torch.cat([cond_up, target_images], dim=1)
-            fake_input = torch.cat([cond_up, reconstructed], dim=1)
+            # Conditional discriminator input = [codepoint | style summary | image].
+            # The conditioning is detached so the adversarial gradient flows only
+            # through the generated image (the decoder), not the style encoder /
+            # codepoint embedding.
+            codepoint_emb = self.model.codepoint_embedding(target_idx)  # (B, D)
+            style_summary = style_tokens.mean(dim=1)  # (B, D)
+            cond = torch.cat([codepoint_emb, style_summary], dim=1)  # (B, 2D)
+            cond_map = cond[:, :, None, None].expand(
+                -1, -1, *target_images.shape[-2:]
+            ).detach()  # (B, 2D, H, W)
+            real_input = torch.cat([cond_map, target_images], dim=1)
+            fake_input = torch.cat([cond_map, reconstructed], dim=1)
 
             # 1. Discriminator update on detached real/fake.
             self.disc_optimizer.zero_grad(set_to_none=True)
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default="models/style_extraction.pth")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--num-evidence-glyphs", type=int, default=32)
+    parser.add_argument("--num-evidence-glyphs", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--target-steps", type=int, default=500_000)

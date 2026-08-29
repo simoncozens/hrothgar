@@ -87,3 +87,22 @@ class StyleExtractionLossWeights:
     perceptual_lpips: float = 1.0
     adversarial: float = 0.0
     ink_coverage: float = 0.5
+
+
+@dataclass
+class StyleExtractionV2Config(StyleExtractionConfig):
+    """v2 config: Perceiver style tokens + cross-attention decoder.
+
+    Adds transformer hyperparameters.  The token dimension is
+    ``glyph_encoder_feature_dim`` (no extra projection), and the positional
+    embedding is shared between the reference glyph tokens and the decoder
+    content queries (both live on the normalized glyph grid).
+    """
+
+    num_evidence_glyphs: int = 16  # fewer than v1: G*N feeds the Perceiver
+    num_style_tokens: int = 128
+    perceiver_num_layers: int = 2
+    perceiver_num_heads: int = 8
+    decoder_num_layers: int = 4
+    decoder_num_heads: int = 8
+    decoder_dropout: float = 0.0

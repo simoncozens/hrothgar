@@ -11,6 +11,7 @@ acceptance signal.
 from hrothgar.style_extraction.config import (
     StyleExtractionConfig,
     StyleExtractionLossWeights,
+    StyleExtractionV2Config,
 )
 from hrothgar.style_extraction.dataset import StyleExtractionDatasetMaker
 from hrothgar.style_extraction.losses import (
@@ -21,11 +22,14 @@ from hrothgar.style_extraction.losses import (
     reconstruction_loss,
 )
 from hrothgar.style_extraction.model import StyleExtractionModel
+from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.style_extraction.train import StyleExtractionTrainingLoop
 
 __all__ = [
     "StyleExtractionModel",
+    "StyleExtractionModelV2",
     "StyleExtractionConfig",
+    "StyleExtractionV2Config",
     "StyleExtractionLossWeights",
     "StyleExtractionTrainingLoop",
     "StyleExtractionDatasetMaker",
