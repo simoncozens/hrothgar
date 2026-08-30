@@ -14,6 +14,7 @@ random init and make them unrenderable.
 """
 
 from __future__ import annotations
+import os
 
 import random
 from pathlib import Path
@@ -26,6 +27,8 @@ from torch.utils.data import Dataset as TorchDataset
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.style_extraction.render_utils import render_glyph
+
+NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
 
 class _FontDataset(TorchDataset):
@@ -145,7 +148,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
                     drop_last=True,
                 ),
                 collate_fn=self._collate_fn,
-                num_workers=8,
+                num_workers=NUM_WORKERS,
                 pin_memory=True,
             )
         return DataLoader(
@@ -154,17 +157,31 @@ class StyleExtractionDatasetMaker(DatasetMaker):
             shuffle=True,
             drop_last=True,
             collate_fn=self._collate_fn,
-            num_workers=8,
+            num_workers=NUM_WORKERS,
             pin_memory=True,
         )
 
     def test_loader(self):
+        dataset = self.test_set()
+        if self._class_balanced:
+            return DataLoader(
+                dataset,
+                batch_sampler=ClassBalancedBatchSampler(
+                    self.test_fonts,
+                    key=lambda font: font.category(),
+                    batch_size=self.batch_size,
+                    drop_last=True,
+                ),
+                collate_fn=self._collate_fn,
+                num_workers=NUM_WORKERS,
+                pin_memory=True,
+            )
         return DataLoader(
-            self.test_set(),
+            dataset,
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
             collate_fn=self._collate_fn,
-            num_workers=8,
+            num_workers=NUM_WORKERS,
             pin_memory=True,
         )
