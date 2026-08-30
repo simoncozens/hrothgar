@@ -46,7 +46,13 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
         key: Callable[[_T], str],
         batch_size: int,
         drop_last: bool,
+        rng=None,
     ) -> None:
+        """
+        ``rng`` is the RNG used for font selection; defaults to the global
+        ``random`` module.  Passing a dedicated ``random.Random`` makes batch
+        composition reproducible (canary mode).
+        """
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
         if len(items) == 0:
@@ -55,6 +61,7 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.dataset_size = len(items)
+        self._rng = rng if rng is not None else random
 
         class_to_indices: dict[str, list[int]] = {}
         for idx, item in enumerate(items):
@@ -75,7 +82,7 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
         num_classes = len(self.classes)
         num_batches = len(self)
 
-        class_cursor = random.randrange(num_classes)
+        class_cursor = self._rng.randrange(num_classes)
 
         for _ in range(num_batches):
             batch_indices: list[int] = []
@@ -84,15 +91,15 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
                 base = self.batch_size // num_classes
                 remainder = self.batch_size % num_classes
                 class_order = self.classes[:]
-                random.shuffle(class_order)
+                self._rng.shuffle(class_order)
 
                 for cls in class_order:
                     indices = self.class_to_indices[cls]
                     for _ in range(base):
-                        batch_indices.append(random.choice(indices))
+                        batch_indices.append(self._rng.choice(indices))
 
                 for cls in class_order[:remainder]:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
+                    batch_indices.append(self._rng.choice(self.class_to_indices[cls]))
             else:
                 selected_classes = [
                     self.classes[(class_cursor + i) % num_classes]
@@ -100,9 +107,9 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
                 ]
                 class_cursor = (class_cursor + self.batch_size) % num_classes
                 for cls in selected_classes:
-                    batch_indices.append(random.choice(self.class_to_indices[cls]))
+                    batch_indices.append(self._rng.choice(self.class_to_indices[cls]))
 
-            random.shuffle(batch_indices)
+            self._rng.shuffle(batch_indices)
             yield batch_indices
 
 
@@ -128,7 +135,13 @@ class DatasetMaker:
         if having is not None:
             having_filter = set(having)
 
-        self.googlefonts = GoogleFonts(repo_url, having=having_filter)
+        self.googlefonts = GoogleFonts(
+            repo_url,
+            having=having_filter,
+            # Canary mode only needs the first few fonts; don't scan the whole
+            # repository to get them.
+            max_fonts=canary_size,
+        )
         self.filter_fonts()
         self.batch_size = batch_size
         self.image_size = image_size

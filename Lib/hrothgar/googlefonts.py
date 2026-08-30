@@ -116,7 +116,18 @@ class GoogleFonts:
     tags = {}
     families_by_name = {}
 
-    def __init__(self, repo: str | Path, having: Optional[Set[int]] = None):
+    def __init__(
+        self,
+        repo: str | Path,
+        having: Optional[Set[int]] = None,
+        max_fonts: Optional[int] = None,
+    ):
+        """Load fonts from ``repo`` (``ofl/*/*.ttf``), newest first by path.
+
+        ``max_fonts`` stops loading after that many fonts pass the ``having``
+        and skip filters — used by canary mode so a small dataset doesn't pay
+        the full cost of scanning thousands of fonts.
+        """
         self.repo_path = Path(repo)
         self.fonts = []
         for font_path in sorted(self.repo_path.glob("ofl/*/*.ttf")):
@@ -132,6 +143,8 @@ class GoogleFonts:
                 if any(not font.has_codepoint(cp) for cp in having):
                     continue
             self.fonts.append(font)
+            if max_fonts is not None and len(self.fonts) >= max_fonts:
+                break
         self._init_tags()
 
     def _init_tags(self):

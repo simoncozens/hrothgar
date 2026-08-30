@@ -7,6 +7,8 @@ from Torch/data pipeline code so it can be tested in isolation.
 from __future__ import annotations
 
 import argparse
+import ctypes
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -24,11 +26,19 @@ def _bitmap_to_array(bitmap: Any) -> np.ndarray:
 
     pitch = int(bitmap.pitch)
     pitch_abs = abs(pitch)
-    buffer = bitmap.buffer
-    if isinstance(buffer, (bytes, bytearray, memoryview)):
-        flat = np.frombuffer(buffer, dtype=np.uint8)
+    raw_pointer = getattr(bitmap, "_FT_Bitmap", None)
+    if raw_pointer is not None and getattr(raw_pointer, "buffer", None):
+        # One C-level memcpy.  ``bitmap.buffer`` (the public property) instead
+        # builds a Python list with one ctypes dereference *per byte*, which
+        # costs ~1.5 ms per 128px glyph and dominates rendering time.
+        data = ctypes.string_at(raw_pointer.buffer, rows * pitch_abs)
+        flat = np.frombuffer(data, dtype=np.uint8)
     else:
-        flat = np.asarray(buffer, dtype=np.uint8)
+        buffer = bitmap.buffer
+        if isinstance(buffer, (bytes, bytearray, memoryview)):
+            flat = np.frombuffer(buffer, dtype=np.uint8)
+        else:
+            flat = np.asarray(buffer, dtype=np.uint8)
     if flat.size < rows * pitch_abs:
         return np.zeros((0, 0), dtype=np.uint8)
 
@@ -77,6 +87,19 @@ def _paste_bitmap_onto_canvas(
     canvas[dst_y0_clamped:dst_y1_clamped, dst_x0_clamped:dst_x1_clamped] = 255 - src
 
 
+@lru_cache(maxsize=128)
+def _face_for_path(
+    font_path: str, axis_position: Optional[tuple]
+) -> "freetype.Face":
+    """Return a cached FreeType face, configured with the requested axis
+    position (``None`` = default instance)."""
+    face = freetype.Face(font_path)
+    if axis_position:
+        # freetype-py forwards this to FT_Set_Var_Design_Coordinates.
+        face.set_var_design_coords([float(v) for v in axis_position])
+    return face
+
+
 # from matrix_disk_cache import MatrixDiskCache
 
 # Initialize the cache with an optional maxsize
@@ -109,10 +132,12 @@ def render_gid(
     if gid < 0:
         raise ValueError("gid must be non-negative")
 
-    face = freetype.Face(str(font_path))
-    if axis_position:
-        # freetype-py forwards this to FT_Set_Var_Design_Coordinates.
-        face.set_var_design_coords([float(v) for v in axis_position])
+    # Parsing a font file is expensive (especially large variable fonts), and
+    # rendering pipelines call this once per glyph, so cache the face.  The
+    # axis position is part of the key so a cached face never leaks design
+    # coordinates from one call site to another.
+    axis_tuple = tuple(axis_position) if axis_position is not None else None
+    face = _face_for_path(str(font_path), axis_tuple)
     upem = int(face.units_per_EM)
     if upem <= 0:
         raise ValueError(f"Font has invalid units-per-em: {upem}")
