@@ -216,6 +216,8 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         self.model.eval()
         ssims: list[torch.Tensor] = []
         lpipss: list[torch.Tensor] = []
+        glyphlosses: list[torch.Tensor] = []
+        token_divs: list[torch.Tensor] = []
 
         with torch.no_grad():
             for batch in itertools.islice(self.test_loader, self.validation_batches):
@@ -224,9 +226,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 target_images = batch["target_images"].to(self.device)
                 target_idx = batch["target_codepoint_idx"].to(self.device)
 
-                reconstructed = self.model(
-                    style_images, target_idx, style_codepoint_idx=style_codepoint_idx
+                style_tokens = self.model.encode_style(
+                    style_images, style_codepoint_idx=style_codepoint_idx
                 )
+                reconstructed = self.model.decode(target_idx, style_tokens)
 
                 ssims.append(
                     self.ssim(reconstructed, target_images)
@@ -234,12 +237,18 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 lpipss.append(
                     self.lpips(reconstructed.clamp(0, 1), target_images.clamp(0, 1)).mean()
                 )
+                glyphlosses.append(self.glyphloss_fn(reconstructed, target_images))
+                token_divs.append(style_token_diversity_loss(style_tokens))
 
         if ssims:
             avg_ssim = torch.mean(torch.stack(ssims))
             avg_lpips = torch.mean(torch.stack(lpipss))
+            avg_glyphloss = torch.mean(torch.stack(glyphlosses))
+            avg_token_div = torch.mean(torch.stack(token_divs))
             self.write_scalar("Validation/SSIM", avg_ssim)
             self.write_scalar("Validation/LPIPS", avg_lpips)
+            self.write_scalar("Validation/glyphloss", avg_glyphloss)
+            self.write_scalar("Validation/token_diversity", avg_token_div)
             self.visualize()
             self.checkpoint_if_best(avg_lpips)
 

@@ -145,6 +145,8 @@ class DatasetMaker:
             random_state=self.split_seed,
         )
 
+        self.canary_size = canary_size
+
         if canary_size is not None:
             fonts = self.googlefonts.fonts[:canary_size]
         else:

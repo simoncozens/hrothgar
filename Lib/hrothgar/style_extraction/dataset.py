@@ -103,6 +103,10 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         target_codepoint_idx = torch.zeros(b, dtype=torch.long)
         target_codepoint = torch.zeros(b, dtype=torch.long)
 
+        if self.canary_size is not None:
+            # Reseed the RNG each time so that we get the same CP/evidence glyphs
+            random.seed(42)
+
         needed = set(self._character_set)
         for i, font in enumerate(fonts):
             avail = sorted(set(font.codepoints) & needed)
@@ -162,6 +166,9 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         )
 
     def test_loader(self):
+        if self.canary_size is not None:
+            # Test is train
+            return self.train_loader()
         dataset = self.test_set()
         if self._class_balanced:
             return DataLoader(

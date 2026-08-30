@@ -128,6 +128,31 @@ class TrainingLoop:
                 f"Model file {self.model_path} already exists, loading it before training."
             )
             self.model.load(self.model_path, device=self.device, strict=False)
+            self._load_optimizer_state()
+
+    def _optimizer_state_path(self) -> str:
+        return str(self.model_path) + ".optim"
+
+    def _load_optimizer_state(self) -> None:
+        """Restore optimizer state after a resume, if a sidecar exists.
+
+        The model checkpoint stores only weights; without this, a resume creates a
+        fresh optimizer and Adam must re-accumulate its second-moment estimate, which
+        produces a several-thousand-step transient before training settles again.
+        """
+        optim_path = Path(self._optimizer_state_path())
+        if not optim_path.exists():
+            return
+        try:
+            self.optimizer.load_state_dict(
+                torch.load(optim_path, map_location=self.device)
+            )
+            print(f"Restored optimizer state from {optim_path}.")
+        except Exception as exc:  # stale state after an architecture change
+            print(
+                f"Could not restore optimizer state ({exc}); "
+                "starting with a fresh optimizer."
+            )
 
     def must_stop(self):
         if self.target_steps is None:
@@ -143,6 +168,9 @@ class TrainingLoop:
         if is_best:
             self.validation_metric = validation_returned.item()
             self.model.save(self.model_path)
+            # Persist optimizer state alongside the weights so a resume does not
+            # restart Adam's second-moment accumulation (a multi-k-step transient).
+            torch.save(self.optimizer.state_dict(), self._optimizer_state_path())
         return bool(is_best)
 
     def post_train_step(self):
