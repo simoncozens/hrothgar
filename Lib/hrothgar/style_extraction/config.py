@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,6 +90,37 @@ class StyleExtractionLossWeights:
     ink_coverage: float = 0.5
     style_contrastive: float = 0.1
     token_diversity: float = 0.1
+    position_reg: float = 0.0  # guard against global (position-independent) cross-attention
+
+
+@dataclass(frozen=True)
+class LossSchedule:
+    """Cosine coarse-to-fine schedule for reconstruction loss weights.
+
+    ``_ramp`` interpolates a weight from its start value to ``*_final`` over
+    ``schedule_steps`` using a cosine curve (smooth, zero derivative at both
+    ends).  After ``schedule_steps`` the weight stays at its final value.
+
+    Defaults ramp L1 down (the blur ceiling — it averages fine detail late) while
+    keeping glyphloss constant; glyphloss's curvature weighting already makes it
+    inert early (blurry output has no corners) and active late.
+    """
+
+    schedule_steps: int = 50000
+    l1_final: float = 0.3
+    glyphloss_final: float = 1.0  # 1.0 = keep glyphloss constant
+
+    def _ramp(self, step: int, start: float, end: float) -> float:
+        if self.schedule_steps <= 0 or start == end:
+            return start
+        t = min(max(int(step), 0), self.schedule_steps) / self.schedule_steps
+        return end + (start - end) * 0.5 * (1.0 + math.cos(math.pi * t))
+
+    def l1(self, step: int, start: float) -> float:
+        return self._ramp(step, start, self.l1_final)
+
+    def glyphloss(self, step: int, start: float) -> float:
+        return self._ramp(step, start, self.glyphloss_final)
 
 
 @dataclass
@@ -111,3 +143,18 @@ class StyleExtractionV2Config(StyleExtractionConfig):
     # Coarse structural grid for reference-token position tags (replaces a fine
     # per-pixel positional embedding on the style side).
     coarse_grid_size: int = 8
+
+
+@dataclass
+class StyleExtractionV3Config(StyleExtractionV2Config):
+    """v3 config: content-conditioned SPADE decoder.
+
+    Same encoder/Perceiver as v2; the decoder replaces the additive
+    cross-attention (which collapsed to a global style vector) with a
+    content-conditioned SPADE head — cross-attention produces a per-position
+    style map that spatially-adaptively normalizes the CNN features.
+    """
+
+    # Self-attention layers applied to the content queries before cross-attention,
+    # so the skeleton can cohere before the style map is read out.
+    decoder_self_attn_layers: int = 2

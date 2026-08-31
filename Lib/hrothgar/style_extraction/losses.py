@@ -108,6 +108,20 @@ def style_token_diversity_loss(tokens: torch.Tensor) -> torch.Tensor:
     return (sim.masked_fill(eye, 0.0) ** 2).mean()
 
 
+def position_dependence_loss(
+    attn: torch.Tensor, floor: float = 1e-4
+) -> torch.Tensor:
+    """Reward position-dependent cross-attention (penalise global pooling).
+
+    ``attn`` is ``(B, heads, nq, K)``.  ``q_var`` is the variance of attention
+    across the ``nq`` query positions; ~0 means every position attends the same
+    way (a global style vector — the v2 failure mode).  We penalise being below
+    ``floor``, so attention is pushed toward a per-position pattern.
+    """
+    q_var = attn.var(dim=2).mean()
+    return torch.clamp(floor - q_var, min=0.0)
+
+
 def adversarial_generator_loss(fake_scores: torch.Tensor) -> torch.Tensor:
     """LSGAN generator loss: push fake images toward the real manifold."""
     return F.mse_loss(fake_scores, torch.ones_like(fake_scores))

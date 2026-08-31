@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from dataclasses import replace
 from typing import Optional
 
 import torch
@@ -20,8 +21,10 @@ from glyphloss import GlyphReconstructionLoss
 from hrothgar.glyphloss_curvature import CurvatureWeightedGlyphLoss
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.style_extraction.config import (
+    LossSchedule,
     StyleExtractionLossWeights,
     StyleExtractionV2Config,
+    StyleExtractionV3Config,
 )
 from hrothgar.style_extraction.dataset import StyleExtractionDatasetMaker
 from hrothgar.style_extraction.losses import (
@@ -29,30 +32,49 @@ from hrothgar.style_extraction.losses import (
     adversarial_discriminator_loss,
     adversarial_generator_loss,
     ink_coverage_loss,
+    position_dependence_loss,
     reconstruction_loss,
     style_contrastive_loss,
     style_token_diversity_loss,
 )
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
+from hrothgar.style_extraction.model_v3 import StyleExtractionModelV3
 from hrothgar.utils import TrainingLoop
 
 
 class StyleExtractionTrainingLoop(TrainingLoop):
     def post_init(self, train_args) -> None:
-        config = StyleExtractionV2Config(
-            image_size=getattr(train_args, "image_size", 128),
-            num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
-        )
+        self.model_version = getattr(train_args, "model_version", "v3")
+        if self.model_version == "v3":
+            config = StyleExtractionV3Config(
+                image_size=getattr(train_args, "image_size", 128),
+                num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
+                decoder_self_attn_layers=getattr(train_args, "decoder_self_attn_layers", 2),
+            )
+            model = StyleExtractionModelV3(config).to(self.device)
+        else:
+            config = StyleExtractionV2Config(
+                image_size=getattr(train_args, "image_size", 128),
+                num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
+            )
+            model = StyleExtractionModelV2(config).to(self.device)
         config.save_sidecar(train_args.model_path)
-        model = StyleExtractionModelV2(config).to(self.device)
 
         self.loss_weights = StyleExtractionLossWeights(
             l1=getattr(train_args, "l1_weight", 1.0),
+            glyphloss=getattr(train_args, "glyphloss_weight", 1.0),
             adversarial=getattr(train_args, "adversarial", 0.0),
             ink_coverage=getattr(train_args, "ink_coverage", 0.5),
             style_contrastive=getattr(train_args, "style_contrastive", 0.1),
             token_diversity=getattr(train_args, "token_diversity", 0.1),
+            position_reg=getattr(train_args, "position_reg", 0.0),
         )
+        self.schedule = LossSchedule(
+            schedule_steps=getattr(train_args, "schedule_steps", 50000),
+            l1_final=getattr(train_args, "l1_final_weight", 0.3),
+            glyphloss_final=getattr(train_args, "glyphloss_final_weight", 1.0),
+        )
+        self.position_reg_floor = getattr(train_args, "position_reg_floor", 1e-4)
         self.style_contrastive_temperature = getattr(
             train_args, "style_contrastive_temperature", 0.07
         )
@@ -124,7 +146,13 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         style_tokens = self.model.encode_style(
             style_images, style_codepoint_idx=style_codepoint_idx
         )
-        reconstructed = self.model.decode(target_idx, style_tokens)
+        if self.model_version == "v3":
+            reconstructed, attn = self.model.decode(
+                target_idx, style_tokens, return_attention=True
+            )
+        else:
+            reconstructed = self.model.decode(target_idx, style_tokens)
+            attn = None
 
         terms: dict[str, torch.Tensor] = {}
 
@@ -132,6 +160,12 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         # cross-attention has distinct axes to read rather than K copies of one
         # mean vector.
         token_div = style_token_diversity_loss(style_tokens)
+
+        # Position-dependence guard: keep the decoder's cross-attention per-position
+        # rather than collapsing to a global style vector (the v2 failure mode).
+        position_reg = torch.tensor(0.0, device=self.device)
+        if attn is not None and self.loss_weights.position_reg > 0:
+            position_reg = position_dependence_loss(attn, self.position_reg_floor)
 
         adv_g = torch.tensor(0.0, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
@@ -175,10 +209,16 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 temperature=self.style_contrastive_temperature,
             )
 
+        # Coarse-to-fine schedule: L1 ramps down (it blurs fine detail late);
+        # glyphloss stays constant by default (its curvature weighting self-gates).
+        l1_w = self.schedule.l1(self.global_step, self.loss_weights.l1)
+        glyph_w = self.schedule.glyphloss(self.global_step, self.loss_weights.glyphloss)
+        weights = replace(self.loss_weights, l1=l1_w, glyphloss=glyph_w)
+
         recon_total, recon_terms = reconstruction_loss(
             reconstructed,
             target_images,
-            weights=self.loss_weights,
+            weights=weights,
             lpips_metric=self.lpips,
             glyphloss_fn=self.glyphloss_fn,
         )
@@ -191,11 +231,15 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             + self.loss_weights.ink_coverage * ink
             + self.loss_weights.style_contrastive * style_contr
             + self.loss_weights.token_diversity * token_div
+            + self.loss_weights.position_reg * position_reg
         )
         terms.update(recon_terms)
         terms["ink_coverage"] = ink.detach()
         terms["style_contrastive"] = style_contr.detach()
         terms["token_diversity"] = token_div.detach()
+        terms["position_reg"] = position_reg.detach()
+        terms["l1_weight"] = torch.tensor(l1_w, device=self.device)
+        terms["glyphloss_weight"] = torch.tensor(glyph_w, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             terms["adversarial_g"] = adv_g.detach()
             terms["adversarial_g_weighted"] = (
@@ -295,7 +339,23 @@ if __name__ == "__main__":
     parser.add_argument("--curvature-weight", type=float, default=20.0)
     parser.add_argument("--glyphloss-spectral-weight", type=float, default=2.5)
     parser.add_argument("--adversarial", type=float, default=0.0)
+    parser.add_argument("--model-version", type=str, default="v3", choices=["v2", "v3"],
+                        help="Which decoder to train (v3 = SPADE, v2 = additive cross-attention).")
+    parser.add_argument("--decoder-self-attn-layers", type=int, default=2,
+                        help="Self-attention layers on content queries before cross-attention (v3).")
     parser.add_argument("--l1-weight", type=float, default=1.0)
+    parser.add_argument("--l1-final-weight", type=float, default=0.3,
+                        help="L1 weight at the end of the coarse-to-fine schedule.")
+    parser.add_argument("--glyphloss-weight", type=float, default=1.0,
+                        help="glyphloss weight at the start of the schedule.")
+    parser.add_argument("--glyphloss-final-weight", type=float, default=1.0,
+                        help="glyphloss weight at the end of the schedule (1.0 = constant).")
+    parser.add_argument("--schedule-steps", type=int, default=50000,
+                        help="Horizon (in steps) over which the cosine schedule runs.")
+    parser.add_argument("--position-reg", type=float, default=0.0,
+                        help="Weight of the position-dependence guard on cross-attention (0.0 = off).")
+    parser.add_argument("--position-reg-floor", type=float, default=1e-4,
+                        help="q_var floor below which the position-dependence loss is active.")
     parser.add_argument("--ink-coverage", type=float, default=0.5)
     parser.add_argument("--style-contrastive", type=float, default=0.1)
     parser.add_argument("--style-contrastive-temperature", type=float, default=0.07)
