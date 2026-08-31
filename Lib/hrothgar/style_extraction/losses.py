@@ -109,14 +109,19 @@ def style_token_diversity_loss(tokens: torch.Tensor) -> torch.Tensor:
 
 
 def position_dependence_loss(
-    attn: torch.Tensor, floor: float = 1e-4
+    attn: torch.Tensor, floor: float = 1e-3
 ) -> torch.Tensor:
     """Reward position-dependent cross-attention (penalise global pooling).
 
     ``attn`` is ``(B, heads, nq, K)``.  ``q_var`` is the variance of attention
     across the ``nq`` query positions; ~0 means every position attends the same
     way (a global style vector — the v2 failure mode).  We penalise being below
-    ``floor``, so attention is pushed toward a per-position pattern.
+    ``floor``.
+
+    Note: this is a *soft* nudge, not a structural fix — its gradient on the
+    attention weights is weak relative to the reconstruction loss, so it needs a
+    large weight to matter.  The robust fix is a positional bias in the
+    cross-attention (see model_v3).
     """
     q_var = attn.var(dim=2).mean()
     return torch.clamp(floor - q_var, min=0.0)

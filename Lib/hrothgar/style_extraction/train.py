@@ -50,6 +50,7 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 image_size=getattr(train_args, "image_size", 128),
                 num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
                 decoder_self_attn_layers=getattr(train_args, "decoder_self_attn_layers", 2),
+                cross_attn_pos_bias=getattr(train_args, "cross_attn_pos_bias", True),
             )
             model = StyleExtractionModelV3(config).to(self.device)
         else:
@@ -343,6 +344,9 @@ if __name__ == "__main__":
                         help="Which decoder to train (v3 = SPADE, v2 = additive cross-attention).")
     parser.add_argument("--decoder-self-attn-layers", type=int, default=2,
                         help="Self-attention layers on content queries before cross-attention (v3).")
+    parser.add_argument("--cross-attn-pos-bias", dest="cross_attn_pos_bias",
+                        action=argparse.BooleanOptionalAction, default=True,
+                        help="Add a learned positional bias to the cross-attention (breaks global collapse).")
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--l1-final-weight", type=float, default=0.3,
                         help="L1 weight at the end of the coarse-to-fine schedule.")
@@ -353,8 +357,9 @@ if __name__ == "__main__":
     parser.add_argument("--schedule-steps", type=int, default=50000,
                         help="Horizon (in steps) over which the cosine schedule runs.")
     parser.add_argument("--position-reg", type=float, default=0.0,
-                        help="Weight of the position-dependence guard on cross-attention (0.0 = off).")
-    parser.add_argument("--position-reg-floor", type=float, default=1e-4,
+                        help="Weight of the position-dependence guard on cross-attention "
+                             "(0.0 = off).  Soft nudge only; needs a large weight to matter.")
+    parser.add_argument("--position-reg-floor", type=float, default=1e-3,
                         help="q_var floor below which the position-dependence loss is active.")
     parser.add_argument("--ink-coverage", type=float, default=0.5)
     parser.add_argument("--style-contrastive", type=float, default=0.1)

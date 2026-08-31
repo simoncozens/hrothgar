@@ -158,3 +158,9 @@ class StyleExtractionV3Config(StyleExtractionV2Config):
     # Self-attention layers applied to the content queries before cross-attention,
     # so the skeleton can cohere before the style map is read out.
     decoder_self_attn_layers: int = 2
+
+    # Learned absolute positional bias in the cross-attention logits.  Breaks the
+    # position-independence symmetry that let v2/v3 collapse to a global style
+    # vector (q_var ≈ 0): each query position gets a fixed, learnable bias over
+    # the K tokens, which the content-conditioned q·k term then refines.
+    cross_attn_pos_bias: bool = True

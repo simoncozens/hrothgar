@@ -50,4 +50,35 @@ __all__ = [
     "position_dependence_loss",
     "adversarial_generator_loss",
     "adversarial_discriminator_loss",
+    "load_model",
 ]
+
+
+def load_model(path, device, strict: bool = False):
+    """Load a style-extraction checkpoint (v2 or v3) and return ``(model, config)``.
+
+    Detects the architecture from the sidecar JSON (v3 adds the
+    ``decoder_self_attn_layers`` field) and constructs the matching model, so the
+    probe scripts don't need to know which version produced a checkpoint.
+    """
+    import json
+    from pathlib import Path
+
+    config_path = Path(str(path)).with_suffix(".conf.json")
+    if not config_path.exists():
+        config_path = Path(str(path).replace(".pth", ".conf.json"))
+    with config_path.open(encoding="utf-8") as f:
+        data = json.load(f)
+
+    if "decoder_self_attn_layers" in data:
+        config = StyleExtractionV3Config.from_sidecar(path)
+        model = StyleExtractionModelV3(config).to(device)
+    else:
+        config = StyleExtractionV2Config.from_sidecar(path)
+        model = StyleExtractionModelV2(config).to(device)
+
+    model.load(path, device=device, strict=strict)
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+    return model, config

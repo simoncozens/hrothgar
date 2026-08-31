@@ -65,7 +65,15 @@ class CrossAttentionWithWeights(nn.Module):
     (``q_var``) that guards against the attention collapsing to a global pool.
     """
 
-    def __init__(self, dim: int, heads: int, dropout: float = 0.0) -> None:
+    def __init__(
+        self,
+        dim: int,
+        heads: int,
+        dropout: float = 0.0,
+        nq: Optional[int] = None,
+        num_tokens: Optional[int] = None,
+        use_pos_bias: bool = False,
+    ) -> None:
         super().__init__()
         assert dim % heads == 0
         self.heads = heads
@@ -75,6 +83,10 @@ class CrossAttentionWithWeights(nn.Module):
         self.v_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
         self.dropout = dropout
+        self.pos_bias: Optional[nn.Parameter] = None
+        if use_pos_bias:
+            assert nq is not None and num_tokens is not None
+            self.pos_bias = nn.Parameter(torch.randn(nq, num_tokens) * 0.02)
 
     def forward(
         self, query: torch.Tensor, key_value: torch.Tensor
@@ -85,6 +97,8 @@ class CrossAttentionWithWeights(nn.Module):
         k = self.k_proj(key_value).view(b, nkv, self.heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(key_value).view(b, nkv, self.heads, self.head_dim).transpose(1, 2)
         attn = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if self.pos_bias is not None:
+            attn = attn + self.pos_bias[None, None]  # (1,1,nq,K) broadcast over (B,h,nq,K)
         attn = attn.softmax(dim=-1)  # (B, heads, nq, nkv)
         if self.training and self.dropout > 0:
             attn = F.dropout(attn, p=self.dropout)
@@ -200,7 +214,12 @@ class StyleExtractionModelV3(SaveLoadModel):
             ]
         )
         self.cross_attn = CrossAttentionWithWeights(
-            d, config.decoder_num_heads, config.decoder_dropout
+            d,
+            config.decoder_num_heads,
+            config.decoder_dropout,
+            nq=self.grid_n,
+            num_tokens=config.num_style_tokens,
+            use_pos_bias=config.cross_attn_pos_bias,
         )
         self.cnn_head = SPADECNNHead(
             d,
