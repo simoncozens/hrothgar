@@ -165,7 +165,8 @@ class StyleExtractionDatasetMaker(DatasetMaker):
 
     def _collate_fn(self, batch: list[dict]) -> dict:
         fonts: list[GoogleFont] = [item["font"] for item in batch]
-        return self._render_batch(fonts, rng=random)
+        # The global ``random`` module is itself a Random instance.
+        return self._render_batch(fonts, rng=random)  # type: ignore[arg-type]
 
     def _build_canary_loader(self) -> _PrecomputedBatches:
         """Render every canary batch once up front.

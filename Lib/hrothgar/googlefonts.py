@@ -10,7 +10,6 @@ from gftools.util.google_fonts import Metadata
 
 from hrothgar.render import render_gid
 
-
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
 
 class Font:
@@ -105,6 +104,7 @@ class Font:
         hbfont = hb.Font(self.hb_face)
         return hbfont.get_glyph_h_advance(gid)
 
+
 class GoogleFonts:
     """A class for interacting with the Google Fonts repository.
     It loads all the fonts and their metadata, and provides methods for accessing them.
@@ -163,7 +163,11 @@ class GoogleFonts:
     def should_skip(self, font: "GoogleFont") -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
-        if font.tags().get("/Special use/Symbols", 0):
+        if (
+            font.tags().get("/Special use/Symbols", 0)
+            or font.tags().get("/Special use/Barcode", 0)
+            or font.tags().get("/Special use/Redaction", 0)
+        ):
             return True
         # Skip CJK; we don't want these big fonts with lots of characters
         # and a different glyph construction style to dominate
@@ -241,7 +245,6 @@ class GoogleFont(Font):
                     cat = maybe_tag
         return cat
 
-
     def display_score(self) -> float:
         """Compute the display-ness score for this font (0-100).
 
@@ -272,7 +275,11 @@ class GoogleFont(Font):
             or hint == "noto-sans"
         ):
             return GoogleFonts.families_by_name.get("Noto Sans")
-        elif self.metadata.stroke == "SERIF" or self.metadata.category == "SERIF" or hint == "noto-serif":
+        elif (
+            self.metadata.stroke == "SERIF"
+            or self.metadata.category == "SERIF"
+            or hint == "noto-serif"
+        ):
             return GoogleFonts.families_by_name.get("Noto Serif")
         elif hint == "adobe-blank":
             # Debugging
