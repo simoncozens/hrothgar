@@ -101,14 +101,16 @@ class LossSchedule:
     ``schedule_steps`` using a cosine curve (smooth, zero derivative at both
     ends).  After ``schedule_steps`` the weight stays at its final value.
 
-    Defaults ramp L1 down (the blur ceiling — it averages fine detail late) while
-    keeping glyphloss constant; glyphloss's curvature weighting already makes it
-    inert early (blurry output has no corners) and active late.
+    Defaults are deliberately aggressive: L1 (the blur ceiling) and LPIPS
+    (structural) ramp *down* while glyphloss (fine-detail, curvature-weighted)
+    ramps *up*, so the localized signal dominates before the decoder can lock
+    into the global-style shortcut (the v2/v3 collapse).
     """
 
-    schedule_steps: int = 50000
-    l1_final: float = 0.3
-    glyphloss_final: float = 1.0  # 1.0 = keep glyphloss constant
+    schedule_steps: int = 20000
+    l1_final: float = 0.05
+    glyphloss_final: float = 3.0
+    lpips_final: float = 0.3
 
     def _ramp(self, step: int, start: float, end: float) -> float:
         if self.schedule_steps <= 0 or start == end:
@@ -121,6 +123,9 @@ class LossSchedule:
 
     def glyphloss(self, step: int, start: float) -> float:
         return self._ramp(step, start, self.glyphloss_final)
+
+    def lpips(self, step: int, start: float) -> float:
+        return self._ramp(step, start, self.lpips_final)
 
 
 @dataclass

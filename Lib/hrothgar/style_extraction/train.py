@@ -71,9 +71,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             position_reg=getattr(train_args, "position_reg", 0.0),
         )
         self.schedule = LossSchedule(
-            schedule_steps=getattr(train_args, "schedule_steps", 50000),
-            l1_final=getattr(train_args, "l1_final_weight", 0.3),
-            glyphloss_final=getattr(train_args, "glyphloss_final_weight", 1.0),
+            schedule_steps=getattr(train_args, "schedule_steps", 20000),
+            l1_final=getattr(train_args, "l1_final_weight", 0.05),
+            glyphloss_final=getattr(train_args, "glyphloss_final_weight", 3.0),
+            lpips_final=getattr(train_args, "lpips_final_weight", 0.3),
         )
         self.position_reg_floor = getattr(train_args, "position_reg_floor", 1e-4)
         self.style_contrastive_temperature = getattr(
@@ -210,11 +211,14 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 temperature=self.style_contrastive_temperature,
             )
 
-        # Coarse-to-fine schedule: L1 ramps down (it blurs fine detail late);
-        # glyphloss stays constant by default (its curvature weighting self-gates).
+        # Coarse-to-fine schedule: L1/LPIPS ramp down (they blur fine detail late),
+        # glyphloss ramps up (it's the localized fine-detail signal).
         l1_w = self.schedule.l1(self.global_step, self.loss_weights.l1)
         glyph_w = self.schedule.glyphloss(self.global_step, self.loss_weights.glyphloss)
-        weights = replace(self.loss_weights, l1=l1_w, glyphloss=glyph_w)
+        lpips_w = self.schedule.lpips(self.global_step, self.loss_weights.perceptual_lpips)
+        weights = replace(
+            self.loss_weights, l1=l1_w, glyphloss=glyph_w, perceptual_lpips=lpips_w
+        )
 
         recon_total, recon_terms = reconstruction_loss(
             reconstructed,
@@ -241,6 +245,7 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         terms["position_reg"] = position_reg.detach()
         terms["l1_weight"] = torch.tensor(l1_w, device=self.device)
         terms["glyphloss_weight"] = torch.tensor(glyph_w, device=self.device)
+        terms["lpips_weight"] = torch.tensor(lpips_w, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             terms["adversarial_g"] = adv_g.detach()
             terms["adversarial_g_weighted"] = (
@@ -348,13 +353,15 @@ if __name__ == "__main__":
                         action=argparse.BooleanOptionalAction, default=True,
                         help="Add a learned positional bias to the cross-attention (breaks global collapse).")
     parser.add_argument("--l1-weight", type=float, default=1.0)
-    parser.add_argument("--l1-final-weight", type=float, default=0.3,
+    parser.add_argument("--l1-final-weight", type=float, default=0.05,
                         help="L1 weight at the end of the coarse-to-fine schedule.")
+    parser.add_argument("--lpips-final-weight", type=float, default=0.3,
+                        help="LPIPS weight at the end of the schedule.")
     parser.add_argument("--glyphloss-weight", type=float, default=1.0,
                         help="glyphloss weight at the start of the schedule.")
-    parser.add_argument("--glyphloss-final-weight", type=float, default=1.0,
-                        help="glyphloss weight at the end of the schedule (1.0 = constant).")
-    parser.add_argument("--schedule-steps", type=int, default=50000,
+    parser.add_argument("--glyphloss-final-weight", type=float, default=3.0,
+                        help="glyphloss weight at the end of the schedule.")
+    parser.add_argument("--schedule-steps", type=int, default=20000,
                         help="Horizon (in steps) over which the cosine schedule runs.")
     parser.add_argument("--position-reg", type=float, default=0.0,
                         help="Weight of the position-dependence guard on cross-attention "
