@@ -145,7 +145,11 @@ class StyleExtractionModelV4(SaveLoadModel):
             queries = blk(queries)
 
         content = queries.transpose(1, 2).reshape(b, d, self.grid_size, self.grid_size)
-        style_summary = style_tokens.mean(dim=1)  # (B, D) — global style
+        # Detach the global style summary.  The coarse stage's strong L1 gradient
+        # must not flow back into the style tokens, or it pushes all tokens toward
+        # their mean (a uniform gradient) and collapses the token set — which then
+        # starves the fine cross-attention and drives q_var back to zero.
+        style_summary = style_tokens.mean(dim=1).detach()  # (B, D)
         style_map = style_summary[:, :, None, None].expand(
             -1, -1, self.grid_size, self.grid_size
         )
