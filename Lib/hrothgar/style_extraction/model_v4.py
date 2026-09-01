@@ -89,9 +89,22 @@ class StyleExtractionModelV4(SaveLoadModel):
         self.fine_encoder = PerGlyphEncoder(
             config.glyph_encoder_base_channels, d, config.glyph_encoder_downsample
         )
-        # No positional bias: the query is grounded in the coarse output already.
+        # Grounded query + fixed sinusoidal positional bias.  The grounding alone
+        # produced position-dependence only weakly (q_var rose linearly), which is
+        # not enough to reproduce fine axis detail.  A fixed, non-collapsible bias
+        # forces position-dependence so we can test whether that is the bottleneck.
+        # Scale (config.cross_attn_pos_bias_scale, default 0.5) is set so the bias
+        # clearly raises q_var (~3e-4) without underusing the token set.
         self.fine_cross_attn = CrossAttentionWithWeights(
-            d, config.decoder_num_heads, config.decoder_dropout
+            d,
+            config.decoder_num_heads,
+            config.decoder_dropout,
+            nq=self.grid_n,
+            num_tokens=config.num_style_tokens,
+            grid_size=self.grid_size,
+            use_pos_bias=config.cross_attn_pos_bias,
+            pos_bias_trainable=config.cross_attn_pos_bias_trainable,
+            pos_bias_scale=config.cross_attn_pos_bias_scale,
         )
         self.fine_head = SPADECNNHead(
             d,

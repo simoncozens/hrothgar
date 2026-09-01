@@ -263,6 +263,7 @@ class StyleExtractionModelV3(SaveLoadModel):
             grid_size=self.grid_size,
             use_pos_bias=config.cross_attn_pos_bias,
             pos_bias_trainable=config.cross_attn_pos_bias_trainable,
+            pos_bias_scale=config.cross_attn_pos_bias_scale,
         )
         self.cnn_head = SPADECNNHead(
             d,

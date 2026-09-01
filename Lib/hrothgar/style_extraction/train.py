@@ -54,6 +54,13 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 image_size=getattr(train_args, "image_size", 128),
                 num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
                 decoder_self_attn_layers=getattr(train_args, "decoder_self_attn_layers", 2),
+                cross_attn_pos_bias=getattr(train_args, "cross_attn_pos_bias", True),
+                cross_attn_pos_bias_trainable=getattr(
+                    train_args, "cross_attn_pos_bias_trainable", False
+                ),
+                cross_attn_pos_bias_scale=getattr(
+                    train_args, "cross_attn_pos_bias_scale", 0.5
+                ),
             )
             model = StyleExtractionModelV4(config).to(self.device)
         elif self.model_version == "v3":
@@ -64,6 +71,9 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 cross_attn_pos_bias=getattr(train_args, "cross_attn_pos_bias", True),
                 cross_attn_pos_bias_trainable=getattr(
                     train_args, "cross_attn_pos_bias_trainable", False
+                ),
+                cross_attn_pos_bias_scale=getattr(
+                    train_args, "cross_attn_pos_bias_scale", 0.5
                 ),
             )
             model = StyleExtractionModelV3(config).to(self.device)
@@ -440,6 +450,11 @@ if __name__ == "__main__":
     parser.add_argument("--cross-attn-pos-bias-trainable", dest="cross_attn_pos_bias_trainable",
                         action=argparse.BooleanOptionalAction, default=False,
                         help="Make the positional bias learnable (False = fixed sinusoidal, non-collapsible).")
+    parser.add_argument("--cross-attn-pos-bias-scale", dest="cross_attn_pos_bias_scale",
+                        type=float, default=0.5,
+                        help="Scale of the fixed positional bias (only when non-trainable). "
+                             "0.5 -> q_var~3e-4; 1.0 -> ~1.8e-3 (but underuses tokens); "
+                             "0.1 -> ~5e-6 (too weak, invisible).")
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--l1-final-weight", type=float, default=0.05,
                         help="L1 weight at the end of the coarse-to-fine schedule.")

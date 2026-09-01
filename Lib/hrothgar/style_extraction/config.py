@@ -172,6 +172,17 @@ class StyleExtractionV3Config(StyleExtractionV2Config):
     # When False (default), the bias is *fixed* (non-learnable sinusoidal) so the
     # model cannot collapse it away.  True uses a learnable bias (v2-style).
     cross_attn_pos_bias_trainable: bool = False
+    # Magnitude of the fixed positional bias (only used when
+    # ``cross_attn_pos_bias`` and not ``cross_attn_pos_bias_trainable``).  This is
+    # the *scale* of the random projection in ``_fixed_sinusoidal_pos_bias``, not
+    # a std directly.  ``q_var`` is the variance of near-uniform attention weights
+    # (~1/K each), so it scales as the *square* of the logit perturbation:
+    #   0.1 -> q_var ~5e-6  (invisible against the content baseline)
+    #   0.5 -> q_var ~3e-4  (clear, still reads ~28 tokens/position)
+    #   1.0 -> q_var ~1.8e-3 (strong, but underuses tokens: eff_tokens ~6.5)
+    # 0.5 is the default: strong enough to force position-dependence for the
+    # experiment, not so strong it degenerates to a content-blind lookup.
+    cross_attn_pos_bias_scale: float = 0.5
 
 
 @dataclass
