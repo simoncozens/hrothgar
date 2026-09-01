@@ -172,3 +172,17 @@ class StyleExtractionV3Config(StyleExtractionV2Config):
     # When False (default), the bias is *fixed* (non-learnable sinusoidal) so the
     # model cannot collapse it away.  True uses a learnable bias (v2-style).
     cross_attn_pos_bias_trainable: bool = False
+
+
+@dataclass
+class StyleExtractionV4Config(StyleExtractionV3Config):
+    """v4 config: two-stage coarse-to-fine decoder.
+
+    Stage 1 (coarse) is L1-driven and produces a coarse glyph; stage 2 (fine)
+    encodes that coarse glyph into spatial features and uses them as the query
+    for a glyphloss-driven SPADE refinement.  The coarse output supplies the
+    spatial condition that v3's cross-attention query (codepoint + learned
+    position) was missing.
+    """
+
+    two_stage: bool = True

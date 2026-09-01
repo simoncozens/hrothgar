@@ -14,12 +14,14 @@ from hrothgar.style_extraction.config import (
     StyleExtractionLossWeights,
     StyleExtractionV2Config,
     StyleExtractionV3Config,
+    StyleExtractionV4Config,
 )
 from hrothgar.style_extraction.dataset import StyleExtractionDatasetMaker
 from hrothgar.style_extraction.losses import (
     NLayerDiscriminator,
     adversarial_discriminator_loss,
     adversarial_generator_loss,
+    attention_health,
     ink_coverage_loss,
     position_dependence_loss,
     reconstruction_loss,
@@ -29,15 +31,18 @@ from hrothgar.style_extraction.losses import (
 from hrothgar.style_extraction.model import StyleExtractionModel
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.style_extraction.model_v3 import StyleExtractionModelV3
+from hrothgar.style_extraction.model_v4 import StyleExtractionModelV4
 from hrothgar.style_extraction.train import StyleExtractionTrainingLoop
 
 __all__ = [
     "StyleExtractionModel",
     "StyleExtractionModelV2",
     "StyleExtractionModelV3",
+    "StyleExtractionModelV4",
     "StyleExtractionConfig",
     "StyleExtractionV2Config",
     "StyleExtractionV3Config",
+    "StyleExtractionV4Config",
     "LossSchedule",
     "StyleExtractionLossWeights",
     "StyleExtractionTrainingLoop",
@@ -48,6 +53,7 @@ __all__ = [
     "style_contrastive_loss",
     "style_token_diversity_loss",
     "position_dependence_loss",
+    "attention_health",
     "adversarial_generator_loss",
     "adversarial_discriminator_loss",
     "load_model",
@@ -55,11 +61,10 @@ __all__ = [
 
 
 def load_model(path, device, strict: bool = False):
-    """Load a style-extraction checkpoint (v2 or v3) and return ``(model, config)``.
+    """Load a style-extraction checkpoint (v2/v3/v4) and return ``(model, config)``.
 
-    Detects the architecture from the sidecar JSON (v3 adds the
-    ``decoder_self_attn_layers`` field) and constructs the matching model, so the
-    probe scripts don't need to know which version produced a checkpoint.
+    Detects the architecture from the sidecar JSON (v4 adds ``two_stage``, v3 adds
+    ``decoder_self_attn_layers``) and constructs the matching model.
     """
     import json
     from pathlib import Path
@@ -70,7 +75,10 @@ def load_model(path, device, strict: bool = False):
     with config_path.open(encoding="utf-8") as f:
         data = json.load(f)
 
-    if "decoder_self_attn_layers" in data:
+    if data.get("two_stage"):
+        config = StyleExtractionV4Config.from_sidecar(path)
+        model = StyleExtractionModelV4(config).to(device)
+    elif "decoder_self_attn_layers" in data:
         config = StyleExtractionV3Config.from_sidecar(path)
         model = StyleExtractionModelV3(config).to(device)
     else:

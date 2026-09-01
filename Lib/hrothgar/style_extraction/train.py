@@ -14,6 +14,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
@@ -25,6 +26,7 @@ from hrothgar.style_extraction.config import (
     StyleExtractionLossWeights,
     StyleExtractionV2Config,
     StyleExtractionV3Config,
+    StyleExtractionV4Config,
 )
 from hrothgar.style_extraction.dataset import StyleExtractionDatasetMaker
 from hrothgar.style_extraction.losses import (
@@ -40,13 +42,21 @@ from hrothgar.style_extraction.losses import (
 )
 from hrothgar.style_extraction.model_v2 import StyleExtractionModelV2
 from hrothgar.style_extraction.model_v3 import StyleExtractionModelV3
+from hrothgar.style_extraction.model_v4 import StyleExtractionModelV4
 from hrothgar.utils import TrainingLoop
 
 
 class StyleExtractionTrainingLoop(TrainingLoop):
     def post_init(self, train_args) -> None:
         self.model_version = getattr(train_args, "model_version", "v3")
-        if self.model_version == "v3":
+        if self.model_version == "v4":
+            config = StyleExtractionV4Config(
+                image_size=getattr(train_args, "image_size", 128),
+                num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
+                decoder_self_attn_layers=getattr(train_args, "decoder_self_attn_layers", 2),
+            )
+            model = StyleExtractionModelV4(config).to(self.device)
+        elif self.model_version == "v3":
             config = StyleExtractionV3Config(
                 image_size=getattr(train_args, "image_size", 128),
                 num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
@@ -80,6 +90,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             glyphloss_final=getattr(train_args, "glyphloss_final_weight", 3.0),
             lpips_final=getattr(train_args, "lpips_final_weight", 0.3),
         )
+        # v4 two-stage loss weights (fixed — the structural split replaces the schedule).
+        self.coarse_l1_weight = getattr(train_args, "coarse_l1_weight", 1.0)
+        self.fine_glyphloss_weight = getattr(train_args, "fine_glyphloss_weight", 3.0)
+        self.fine_lpips_weight = getattr(train_args, "fine_lpips_weight", 0.3)
         self.position_reg_floor = getattr(train_args, "position_reg_floor", 1e-4)
         self.style_contrastive_temperature = getattr(
             train_args, "style_contrastive_temperature", 0.07
@@ -152,7 +166,13 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         style_tokens = self.model.encode_style(
             style_images, style_codepoint_idx=style_codepoint_idx
         )
-        if self.model_version == "v3":
+        coarse = None
+        if self.model_version == "v4":
+            coarse = self.model.decode_coarse(target_idx, style_tokens)
+            reconstructed, attn = self.model.decode_fine(
+                target_idx, coarse, style_tokens, return_attention=True
+            )
+        elif self.model_version == "v3":
             reconstructed, attn = self.model.decode(
                 target_idx, style_tokens, return_attention=True
             )
@@ -215,22 +235,38 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 temperature=self.style_contrastive_temperature,
             )
 
-        # Coarse-to-fine schedule: L1/LPIPS ramp down (they blur fine detail late),
-        # glyphloss ramps up (it's the localized fine-detail signal).
-        l1_w = self.schedule.l1(self.global_step, self.loss_weights.l1)
-        glyph_w = self.schedule.glyphloss(self.global_step, self.loss_weights.glyphloss)
-        lpips_w = self.schedule.lpips(self.global_step, self.loss_weights.perceptual_lpips)
-        weights = replace(
-            self.loss_weights, l1=l1_w, glyphloss=glyph_w, perceptual_lpips=lpips_w
-        )
-
-        recon_total, recon_terms = reconstruction_loss(
-            reconstructed,
-            target_images,
-            weights=weights,
-            lpips_metric=self.lpips,
-            glyphloss_fn=self.glyphloss_fn,
-        )
+        if self.model_version == "v4":
+            coarse_l1 = F.l1_loss(coarse, target_images)
+            fine_glyphloss = self.glyphloss_fn(reconstructed, target_images)
+            fine_lpips = self.lpips(
+                reconstructed.clamp(0, 1), target_images.clamp(0, 1)
+            ).mean()
+            recon_total = (
+                self.coarse_l1_weight * coarse_l1
+                + self.fine_glyphloss_weight * fine_glyphloss
+                + self.fine_lpips_weight * fine_lpips
+            )
+            recon_terms = {
+                "coarse_l1": coarse_l1.detach(),
+                "fine_glyphloss": fine_glyphloss.detach(),
+                "fine_lpips": fine_lpips.detach(),
+            }
+        else:
+            # Coarse-to-fine schedule: L1/LPIPS ramp down (they blur fine detail
+            # late), glyphloss ramps up (it's the localized fine-detail signal).
+            l1_w = self.schedule.l1(self.global_step, self.loss_weights.l1)
+            glyph_w = self.schedule.glyphloss(self.global_step, self.loss_weights.glyphloss)
+            lpips_w = self.schedule.lpips(self.global_step, self.loss_weights.perceptual_lpips)
+            weights = replace(
+                self.loss_weights, l1=l1_w, glyphloss=glyph_w, perceptual_lpips=lpips_w
+            )
+            recon_total, recon_terms = reconstruction_loss(
+                reconstructed,
+                target_images,
+                weights=weights,
+                lpips_metric=self.lpips,
+                glyphloss_fn=self.glyphloss_fn,
+            )
 
         ink = ink_coverage_loss(reconstructed, target_images)
 
@@ -247,9 +283,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         terms["style_contrastive"] = style_contr.detach()
         terms["token_diversity"] = token_div.detach()
         terms["position_reg"] = position_reg.detach()
-        terms["l1_weight"] = torch.tensor(l1_w, device=self.device)
-        terms["glyphloss_weight"] = torch.tensor(glyph_w, device=self.device)
-        terms["lpips_weight"] = torch.tensor(lpips_w, device=self.device)
+        if self.model_version != "v4":
+            terms["l1_weight"] = torch.tensor(l1_w, device=self.device)
+            terms["glyphloss_weight"] = torch.tensor(glyph_w, device=self.device)
+            terms["lpips_weight"] = torch.tensor(lpips_w, device=self.device)
         if self.discriminator is not None and self.loss_weights.adversarial > 0:
             terms["adversarial_g"] = adv_g.detach()
             terms["adversarial_g_weighted"] = (
@@ -272,6 +309,7 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         lpipss: list[torch.Tensor] = []
         glyphlosses: list[torch.Tensor] = []
         token_divs: list[torch.Tensor] = []
+        coarse_l1s: list[torch.Tensor] = []
         q_vars: list[torch.Tensor] = []
         attn_entropies: list[torch.Tensor] = []
         attn_effs: list[torch.Tensor] = []
@@ -286,10 +324,17 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 style_tokens = self.model.encode_style(
                     style_images, style_codepoint_idx=style_codepoint_idx
                 )
-                if self.model_version == "v3":
-                    reconstructed, attn = self.model.decode(
-                        target_idx, style_tokens, return_attention=True
-                    )
+                if self.model_version in ("v3", "v4"):
+                    if self.model_version == "v4":
+                        coarse = self.model.decode_coarse(target_idx, style_tokens)
+                        reconstructed, attn = self.model.decode_fine(
+                            target_idx, coarse, style_tokens, return_attention=True
+                        )
+                        coarse_l1s.append(F.l1_loss(coarse, target_images))
+                    else:
+                        reconstructed, attn = self.model.decode(
+                            target_idx, style_tokens, return_attention=True
+                        )
                     q_var, ent, eff = attention_health(attn)
                     q_vars.append(q_var)
                     attn_entropies.append(ent)
@@ -315,6 +360,8 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             self.write_scalar("Validation/LPIPS", avg_lpips)
             self.write_scalar("Validation/glyphloss", avg_glyphloss)
             self.write_scalar("Validation/token_diversity", avg_token_div)
+            if coarse_l1s:
+                self.write_scalar("Validation/coarse_l1", torch.mean(torch.stack(coarse_l1s)))
             if q_vars:
                 self.write_scalar("Validation/attn_q_var", torch.mean(torch.stack(q_vars)))
                 self.write_scalar("Validation/attn_entropy", torch.mean(torch.stack(attn_entropies)))
@@ -332,12 +379,20 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         target_idx = batch["target_codepoint_idx"].to(self.device)
 
         with torch.no_grad():
-            reconstructed = self.model(
-                style_images, target_idx, style_codepoint_idx=style_codepoint_idx
+            style_tokens = self.model.encode_style(
+                style_images, style_codepoint_idx=style_codepoint_idx
             )
+            if self.model_version == "v4":
+                coarse = self.model.decode_coarse(target_idx, style_tokens)
+                reconstructed = self.model.decode_fine(target_idx, coarse, style_tokens)
+            else:
+                reconstructed = self.model.decode(target_idx, style_tokens)
 
         n = min(8, target_images.shape[0])
-        grid = torch.cat([target_images[:n], reconstructed[:n]], dim=0)
+        if self.model_version == "v4":
+            grid = torch.cat([target_images[:n], coarse[:n], reconstructed[:n]], dim=0)
+        else:
+            grid = torch.cat([target_images[:n], reconstructed[:n]], dim=0)
         self.writer.add_image(
             "Reconstruction/GT_vs_Recon",
             torchvision.utils.make_grid(grid, nrow=n),
@@ -365,10 +420,17 @@ if __name__ == "__main__":
     parser.add_argument("--curvature-weight", type=float, default=20.0)
     parser.add_argument("--glyphloss-spectral-weight", type=float, default=2.5)
     parser.add_argument("--adversarial", type=float, default=0.0)
-    parser.add_argument("--model-version", type=str, default="v3", choices=["v2", "v3"],
-                        help="Which decoder to train (v3 = SPADE, v2 = additive cross-attention).")
+    parser.add_argument("--model-version", type=str, default="v3", choices=["v2", "v3", "v4"],
+                        help="Which decoder to train (v4 = two-stage coarse-to-fine SPADE, "
+                             "v3 = SPADE, v2 = additive cross-attention).")
+    parser.add_argument("--coarse-l1-weight", type=float, default=1.0,
+                        help="(v4) L1 weight on the coarse stage.")
+    parser.add_argument("--fine-glyphloss-weight", type=float, default=3.0,
+                        help="(v4) glyphloss weight on the fine stage.")
+    parser.add_argument("--fine-lpips-weight", type=float, default=0.3,
+                        help="(v4) LPIPS weight on the fine stage.")
     parser.add_argument("--decoder-self-attn-layers", type=int, default=2,
-                        help="Self-attention layers on content queries before cross-attention (v3).")
+                        help="Self-attention layers on content queries before cross-attention (v3/v4).")
     parser.add_argument("--cross-attn-pos-bias", dest="cross_attn_pos_bias",
                         action=argparse.BooleanOptionalAction, default=True,
                         help="Add a positional bias to the cross-attention (breaks global collapse).")
