@@ -237,17 +237,20 @@ class StyleExtractionTrainingLoop(TrainingLoop):
 
         if self.model_version == "v4":
             coarse_l1 = F.l1_loss(coarse, target_images)
+            coarse_ink = ink_coverage_loss(coarse, target_images)
             fine_glyphloss = self.glyphloss_fn(reconstructed, target_images)
             fine_lpips = self.lpips(
                 reconstructed.clamp(0, 1), target_images.clamp(0, 1)
             ).mean()
             recon_total = (
                 self.coarse_l1_weight * coarse_l1
+                + self.loss_weights.ink_coverage * coarse_ink
                 + self.fine_glyphloss_weight * fine_glyphloss
                 + self.fine_lpips_weight * fine_lpips
             )
             recon_terms = {
                 "coarse_l1": coarse_l1.detach(),
+                "coarse_ink": coarse_ink.detach(),
                 "fine_glyphloss": fine_glyphloss.detach(),
                 "fine_lpips": fine_lpips.detach(),
             }
@@ -423,7 +426,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-version", type=str, default="v3", choices=["v2", "v3", "v4"],
                         help="Which decoder to train (v4 = two-stage coarse-to-fine SPADE, "
                              "v3 = SPADE, v2 = additive cross-attention).")
-    parser.add_argument("--coarse-l1-weight", type=float, default=1.0,
+    parser.add_argument("--coarse-l1-weight", type=float, default=3.0,
                         help="(v4) L1 weight on the coarse stage.")
     parser.add_argument("--fine-glyphloss-weight", type=float, default=3.0,
                         help="(v4) glyphloss weight on the fine stage.")
