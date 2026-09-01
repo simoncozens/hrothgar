@@ -8,6 +8,8 @@ by default (``adversarial`` weight 0) to keep the first version stable.
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -125,6 +127,23 @@ def position_dependence_loss(
     """
     q_var = attn.var(dim=2).mean()
     return torch.clamp(floor - q_var, min=0.0)
+
+
+def attention_health(
+    attn: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return ``(q_var, normalized_entropy, effective_tokens)`` for attention.
+
+    ``attn`` is ``(B, heads, nq, K)`` post-softmax cross-attention.  ``q_var`` is
+    the position-dependence (variance across queries); ``entropy`` is normalised
+    to [0, 1] (1 = uniform); ``effective_tokens`` is the participation ratio per
+    query (≈ K = uniform, ≈ 1 = one-hot).
+    """
+    k = attn.shape[-1]
+    ent = -(attn * (attn + 1e-12).log()).sum(dim=-1) / math.log(k)
+    eff = 1.0 / (attn ** 2).sum(dim=-1)
+    q_var = attn.var(dim=2).mean()
+    return q_var, ent.mean(), eff.mean()
 
 
 def adversarial_generator_loss(fake_scores: torch.Tensor) -> torch.Tensor:

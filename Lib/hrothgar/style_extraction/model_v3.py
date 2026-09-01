@@ -58,11 +58,40 @@ class SelfAttnBlock(nn.Module):
         return x
 
 
+def _fixed_sinusoidal_pos_bias(
+    grid_size: int, num_tokens: int, scale: float = 0.5
+) -> torch.Tensor:
+    """Fixed (non-learnable) sinusoidal positional bias of shape ``(nq, K)``.
+
+    Position-dependent by construction — the model cannot learn it away, which is
+    what we need to force cross-attention out of the global-collapse regime.
+    """
+    nq = grid_size * grid_size
+    y = torch.arange(grid_size, dtype=torch.float32).reshape(-1, 1)
+    x = torch.arange(grid_size, dtype=torch.float32).reshape(1, -1)
+    yy = y.expand(grid_size, grid_size).reshape(-1) / max(grid_size - 1, 1)
+    xx = x.expand(grid_size, grid_size).reshape(-1) / max(grid_size - 1, 1)
+    sigs = []
+    for octave in range(4):
+        f = 2.0 ** octave
+        sigs += [
+            torch.sin(2 * math.pi * f * yy),
+            torch.cos(2 * math.pi * f * yy),
+            torch.sin(2 * math.pi * f * xx),
+            torch.cos(2 * math.pi * f * xx),
+        ]
+    sig = torch.stack(sigs, dim=1)  # (nq, 16)
+    proj = torch.randn(sig.shape[1], num_tokens) * scale  # (16, K)
+    return sig @ proj  # (nq, K)
+
+
 class CrossAttentionWithWeights(nn.Module):
     """Cross-attention that also returns the (post-softmax) attention weights.
 
-    The weights are needed to compute the position-dependence regularizer
-    (``q_var``) that guards against the attention collapsing to a global pool.
+    The weights are needed to compute the position-dependence guard (``q_var``).
+    When ``use_pos_bias`` and not ``pos_bias_trainable``, a *fixed* sinusoidal
+    positional bias is added to the logits — non-learnable, so it cannot collapse
+    to position-independent like a learned bias does.
     """
 
     def __init__(
@@ -72,7 +101,10 @@ class CrossAttentionWithWeights(nn.Module):
         dropout: float = 0.0,
         nq: Optional[int] = None,
         num_tokens: Optional[int] = None,
+        grid_size: Optional[int] = None,
         use_pos_bias: bool = False,
+        pos_bias_trainable: bool = False,
+        pos_bias_scale: float = 0.5,
     ) -> None:
         super().__init__()
         assert dim % heads == 0
@@ -83,10 +115,19 @@ class CrossAttentionWithWeights(nn.Module):
         self.v_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
         self.dropout = dropout
-        self.pos_bias: Optional[nn.Parameter] = None
         if use_pos_bias:
             assert nq is not None and num_tokens is not None
-            self.pos_bias = nn.Parameter(torch.randn(nq, num_tokens) * 0.02)
+            if pos_bias_trainable:
+                self.pos_bias = nn.Parameter(torch.randn(nq, num_tokens) * 0.02)
+            else:
+                assert grid_size is not None
+                self.register_buffer(
+                    "pos_bias",
+                    _fixed_sinusoidal_pos_bias(grid_size, num_tokens, pos_bias_scale),
+                )
+        else:
+            self.pos_bias = None
+                #)
 
     def forward(
         self, query: torch.Tensor, key_value: torch.Tensor
@@ -219,7 +260,9 @@ class StyleExtractionModelV3(SaveLoadModel):
             config.decoder_dropout,
             nq=self.grid_n,
             num_tokens=config.num_style_tokens,
+            grid_size=self.grid_size,
             use_pos_bias=config.cross_attn_pos_bias,
+            pos_bias_trainable=config.cross_attn_pos_bias_trainable,
         )
         self.cnn_head = SPADECNNHead(
             d,

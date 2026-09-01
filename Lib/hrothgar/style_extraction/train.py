@@ -31,6 +31,7 @@ from hrothgar.style_extraction.losses import (
     NLayerDiscriminator,
     adversarial_discriminator_loss,
     adversarial_generator_loss,
+    attention_health,
     ink_coverage_loss,
     position_dependence_loss,
     reconstruction_loss,
@@ -51,6 +52,9 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 num_evidence_glyphs=getattr(train_args, "num_evidence_glyphs", 16),
                 decoder_self_attn_layers=getattr(train_args, "decoder_self_attn_layers", 2),
                 cross_attn_pos_bias=getattr(train_args, "cross_attn_pos_bias", True),
+                cross_attn_pos_bias_trainable=getattr(
+                    train_args, "cross_attn_pos_bias_trainable", False
+                ),
             )
             model = StyleExtractionModelV3(config).to(self.device)
         else:
@@ -268,6 +272,9 @@ class StyleExtractionTrainingLoop(TrainingLoop):
         lpipss: list[torch.Tensor] = []
         glyphlosses: list[torch.Tensor] = []
         token_divs: list[torch.Tensor] = []
+        q_vars: list[torch.Tensor] = []
+        attn_entropies: list[torch.Tensor] = []
+        attn_effs: list[torch.Tensor] = []
 
         with torch.no_grad():
             for batch in itertools.islice(self.test_loader, self.validation_batches):
@@ -279,7 +286,16 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                 style_tokens = self.model.encode_style(
                     style_images, style_codepoint_idx=style_codepoint_idx
                 )
-                reconstructed = self.model.decode(target_idx, style_tokens)
+                if self.model_version == "v3":
+                    reconstructed, attn = self.model.decode(
+                        target_idx, style_tokens, return_attention=True
+                    )
+                    q_var, ent, eff = attention_health(attn)
+                    q_vars.append(q_var)
+                    attn_entropies.append(ent)
+                    attn_effs.append(eff)
+                else:
+                    reconstructed = self.model.decode(target_idx, style_tokens)
 
                 ssims.append(
                     self.ssim(reconstructed, target_images)
@@ -299,6 +315,10 @@ class StyleExtractionTrainingLoop(TrainingLoop):
             self.write_scalar("Validation/LPIPS", avg_lpips)
             self.write_scalar("Validation/glyphloss", avg_glyphloss)
             self.write_scalar("Validation/token_diversity", avg_token_div)
+            if q_vars:
+                self.write_scalar("Validation/attn_q_var", torch.mean(torch.stack(q_vars)))
+                self.write_scalar("Validation/attn_entropy", torch.mean(torch.stack(attn_entropies)))
+                self.write_scalar("Validation/attn_eff_tokens", torch.mean(torch.stack(attn_effs)))
             self.visualize()
             self.checkpoint_if_best(avg_lpips)
 
@@ -351,7 +371,10 @@ if __name__ == "__main__":
                         help="Self-attention layers on content queries before cross-attention (v3).")
     parser.add_argument("--cross-attn-pos-bias", dest="cross_attn_pos_bias",
                         action=argparse.BooleanOptionalAction, default=True,
-                        help="Add a learned positional bias to the cross-attention (breaks global collapse).")
+                        help="Add a positional bias to the cross-attention (breaks global collapse).")
+    parser.add_argument("--cross-attn-pos-bias-trainable", dest="cross_attn_pos_bias_trainable",
+                        action=argparse.BooleanOptionalAction, default=False,
+                        help="Make the positional bias learnable (False = fixed sinusoidal, non-collapsible).")
     parser.add_argument("--l1-weight", type=float, default=1.0)
     parser.add_argument("--l1-final-weight", type=float, default=0.05,
                         help="L1 weight at the end of the coarse-to-fine schedule.")
