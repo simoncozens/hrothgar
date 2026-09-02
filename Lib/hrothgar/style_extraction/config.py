@@ -197,3 +197,30 @@ class StyleExtractionV4Config(StyleExtractionV3Config):
     """
 
     two_stage: bool = True
+
+
+@dataclass
+class StyleExtractionV5Config(StyleExtractionV3Config):
+    """v5 config: global style bottleneck + slot-attention style atoms.
+
+    The encoder mean-pools the evidence glyphs into a single global style vector
+    (the transferable bottleneck), then a slot-attention module expands that
+    vector into K *style atoms* over a learned continuous basis.  The decoder is
+    a single-stage content-conditioned SPADE head: content queries (codepoint +
+    position) cross-attend to the atoms to form a per-position style map.
+
+    ``cross_attn_pos_bias`` is off by default here — unlike v3/v4 the decoder is
+    intended to be content-conditioned, not position-forced.
+    """
+
+    # Number of style atoms produced by the slot attention (K).
+    num_style_slots: int = 32
+    # Size of the learned continuous basis the slots attend to (M).
+    slot_basis_size: int = 64
+    # Slot-attention refinement iterations.
+    slot_num_iters: int = 3
+    # Number of learned queries in the global attention pool (the bottleneck
+    # that turns evidence tokens into ``z``).
+    global_pool_queries: int = 4
+
+    cross_attn_pos_bias: bool = False
