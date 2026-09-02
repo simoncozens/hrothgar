@@ -348,10 +348,11 @@ class StyleExtractionTrainingLoop(TrainingLoop):
                         reconstructed, attn = self.model.decode(
                             target_idx, style_tokens, return_attention=True
                         )
-                    q_var, ent, eff = attention_health(attn)
-                    q_vars.append(q_var)
-                    attn_entropies.append(ent)
-                    attn_effs.append(eff)
+                    if attn is not None:
+                        q_var, ent, eff = attention_health(attn)
+                        q_vars.append(q_var)
+                        attn_entropies.append(ent)
+                        attn_effs.append(eff)
                 else:
                     reconstructed = self.model.decode(target_idx, style_tokens)
 

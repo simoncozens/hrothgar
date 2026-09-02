@@ -169,10 +169,22 @@ class _UpsampleBlock(nn.Module):
 
 
 class CNNHead(nn.Module):
-    """``(B, D, h, w)`` -> ``(B, 1, H, W)``."""
+    """``(B, D, h, w)`` -> ``(B, 1, H, W)``.
 
-    def __init__(self, in_channels, base_channels, num_res_blocks, downsample):
+    ``activation=False`` skips the final sigmoid, returning unconstrained values
+    for use as a *residual* correction (added to a coarse output elsewhere).
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        base_channels,
+        num_res_blocks,
+        downsample,
+        activation: bool = True,
+    ):
         super().__init__()
+        self.activation = activation
         self.proj = nn.Conv2d(in_channels, base_channels, 3, padding=1)
         self.blocks = nn.Sequential(
             *[_ResBlock(base_channels) for _ in range(num_res_blocks)]
@@ -189,7 +201,8 @@ class CNNHead(nn.Module):
         x = self.blocks(x)
         for up in self.ups:
             x = up(x)
-        return torch.sigmoid(self.out(F.silu(self.norm(x))))
+        y = self.out(F.silu(self.norm(x)))
+        return torch.sigmoid(y) if self.activation else y
 
 
 class StyleExtractionModelV2(SaveLoadModel):
