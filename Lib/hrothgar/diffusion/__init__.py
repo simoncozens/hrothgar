@@ -15,33 +15,57 @@ it, wraps it in a clean facade, and provides the datasets/metrics/training glue.
 from hrothgar.diffusion.config import (
     DiffusionConfig,
     DiffusionLossWeights,
+    ExemplarDiffusionConfig,
+    FontIdDiffusionConfig,
 )
 from hrothgar.diffusion.dataset import (
     ClassConditionalGlyphDataset,
     RONDVocab,
+    build_exemplar_rond_data,
+    build_fontid_rond_data,
     build_rond_dataset,
     materialize,
 )
 from hrothgar.diffusion.losses import (
     AxisHead,
+    attention_health,
     diag_off,
     mean_abs_diff,
     save_montage,
 )
 from hrothgar.diffusion.model import DiffusionGlyphModel, build_diffusion_model
+from hrothgar.diffusion.exemplar import (
+    ExemplarDiffusionModel,
+    build_exemplar_model,
+)
+from hrothgar.diffusion.fontid import (
+    FontIdDiffusionModel,
+    build_fontid_model,
+)
+from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.train import DiffusionTrainer
 
 __all__ = [
     "DiffusionConfig",
     "DiffusionLossWeights",
+    "ExemplarDiffusionConfig",
+    "FontIdDiffusionConfig",
     "DiffusionGlyphModel",
     "build_diffusion_model",
     "DiffusionTrainer",
+    "ExemplarDiffusionModel",
+    "build_exemplar_model",
+    "FontIdDiffusionModel",
+    "build_fontid_model",
+    "FontIdDatasetMaker",
     "ClassConditionalGlyphDataset",
     "RONDVocab",
     "build_rond_dataset",
+    "build_exemplar_rond_data",
+    "build_fontid_rond_data",
     "materialize",
     "AxisHead",
+    "attention_health",
     "diag_off",
     "mean_abs_diff",
     "save_montage",

@@ -50,6 +50,24 @@ def mean_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a - b).abs().mean().item())
 
 
+def attention_health(attn: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return ``(q_var, entropy, effective_tokens)`` for cross-attention weights.
+
+    ``attn`` is ``(B, heads, nq, K)`` post-softmax.  ``q_var`` is the variance
+    of attention across query positions (~0 means every query attends the same
+    way — the global-collapse failure mode); ``entropy`` is normalised to
+    [0, 1] (1 = uniform, 0 = one-hot); ``effective_tokens`` is the
+    participation ratio (K = uniform, 1 = one-hot).
+    """
+    import math
+
+    k = attn.shape[-1]
+    ent = -(attn * (attn + 1e-12).log()).sum(dim=-1) / math.log(k)
+    eff = 1.0 / (attn ** 2).sum(dim=-1)
+    q_var = attn.var(dim=2).mean()
+    return q_var, ent.mean(), eff.mean()
+
+
 class AxisHead(nn.Module):
     """Regress a style-axis value (0..1) from a grayscale glyph image."""
 

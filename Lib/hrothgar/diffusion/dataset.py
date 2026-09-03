@@ -118,3 +118,80 @@ def materialize(dataset: ClassConditionalGlyphDataset) -> tuple[torch.Tensor, to
         images.append(img)
         class_ids.append(class_id)
     return torch.stack(images), torch.tensor(class_ids, dtype=torch.long)
+
+
+def build_exemplar_rond_data(
+    render_fns: Sequence[RenderFn],
+    rond_values: Sequence[int],
+    glyphs: Sequence[int],
+    num_evidence: int,
+    image_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[int, int]]:
+    """Build the exemplar (many-shot) canary dataset.
+
+    For every ``(font, target codepoint)`` pair, render ``num_evidence``
+    evidence glyphs (the style references, excluding the target) and the target
+    glyph.  Returns:
+
+    * ``evidence`` ``(T, N, 1, H, W)``
+    * ``target_codepoint`` ``(T,)`` long (index into the sorted glyph list)
+    * ``target_image`` ``(T, 1, H, W)``
+    * ``cp_to_idx`` mapping codepoint -> embedding index
+    """
+    from hrothgar.style_extraction.render_utils import render_glyph
+
+    sorted_glyphs = sorted(glyphs)
+    cp_to_idx = {cp: i for i, cp in enumerate(sorted_glyphs)}
+
+    evidence_list: list[torch.Tensor] = []
+    cp_list: list[int] = []
+    target_list: list[torch.Tensor] = []
+
+    for render_fn in render_fns:
+        for cp in sorted_glyphs:
+            ev_cps = [g for g in sorted_glyphs if g != cp][:num_evidence]
+            ev = torch.stack([render_fn(g, image_size) for g in ev_cps])  # (N, H, W)
+            evidence_list.append(ev.unsqueeze(1))  # (N, 1, H, W)
+            cp_list.append(cp_to_idx[cp])
+            target_list.append(render_fn(cp, image_size).unsqueeze(0))  # (1, H, W)
+
+    evidence = torch.stack(evidence_list)
+    codepoints = torch.tensor(cp_list, dtype=torch.long)
+    targets = torch.stack(target_list)
+    return evidence, codepoints, targets, cp_to_idx
+
+
+def build_fontid_rond_data(
+    render_fns: Sequence[RenderFn],
+    glyphs: Sequence[int],
+    image_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[int, int]]:
+    """Build the factorized (codepoint, font-ID) canary dataset.
+
+    For every ``(font, codepoint)`` pair, render the glyph.  Returns:
+
+    * ``images`` ``(T, 1, H, W)``
+    * ``codepoints`` ``(T,)`` long (index into the sorted glyph list)
+    * ``font_ids`` ``(T,)`` long (index into ``render_fns``)
+    * ``cp_to_idx`` mapping codepoint -> embedding index
+    """
+    from hrothgar.style_extraction.render_utils import render_glyph
+
+    sorted_glyphs = sorted(glyphs)
+    cp_to_idx = {cp: i for i, cp in enumerate(sorted_glyphs)}
+
+    images: list[torch.Tensor] = []
+    cp_list: list[int] = []
+    fid_list: list[int] = []
+    for fid, render_fn in enumerate(render_fns):
+        for cp in sorted_glyphs:
+            images.append(render_fn(cp, image_size).unsqueeze(0))  # (1, H, W)
+            cp_list.append(cp_to_idx[cp])
+            fid_list.append(fid)
+
+    return (
+        torch.stack(images),
+        torch.tensor(cp_list, dtype=torch.long),
+        torch.tensor(fid_list, dtype=torch.long),
+        cp_to_idx,
+    )
