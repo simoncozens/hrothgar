@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import random
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.gtok.llamagen_lpips import LPIPS
+from hrothgar.style_extraction.render_utils import render_glyph
 from hrothgar.utils import TrainingLoop
 
 
@@ -141,12 +143,32 @@ class FontIdTrainingLoop(TrainingLoop):
                 recs = self.model.sample(codepoints, font_ids)
         recs = recs.float().clamp(0.0, 1.0)
 
-        grid = torch.cat([gts, recs], dim=0)
+        # A second codepoint from each font, as a style reference for the eye,
+        # plus the (family, codepoint) identity of each row for debugging.
+        rng = random.Random(self.maker.split_seed)
+        refs, text_lines = [], []
+        for i in range(n):
+            fid = font_ids[i].item()
+            target_cp = self.maker.cp_list[codepoints[i].item()]
+            font = self.maker.fonts[fid]
+            avail = sorted(
+                (set(font.codepoints) & set(self.maker.character_set)) - {target_cp}
+            )
+            ref_cp = rng.choice(avail) if avail else target_cp
+            refs.append(render_glyph(font, ref_cp, self.maker.image_size).unsqueeze(0))
+            text_lines.append(
+                f"{font.family} | target {chr(target_cp)!r} U+{target_cp:04X} "
+                f"| ref {chr(ref_cp)!r} U+{ref_cp:04X}"
+            )
+        refs = torch.stack(refs).to(self.device)
+
+        grid = torch.cat([gts, refs, recs], dim=0)
         self.writer.add_image(
-            "Validation/gt_recon",
+            "Validation/gt_ref_recon",
             torchvision.utils.make_grid(grid, nrow=n),
             self.global_step,
         )
+        self.writer.add_text("Validation/pairs", "\n".join(text_lines), self.global_step)
 
 
 # ══════════════════════════════════════════════════════════════════════════
