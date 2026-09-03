@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 import torch
@@ -60,6 +61,16 @@ class FontIdTrainingLoop(TrainingLoop):
             self.model.parameters(), lr=train_args.learning_rate
         )
 
+        # Mixed precision.  bf16 needs no loss scaling (same exponent range as
+        # fp32); the FFT-based glyphloss is not in this model's path, so bf16
+        # is safe.
+        self.use_amp = train_args.precision == "bf16"
+        self.amp_dtype = torch.bfloat16 if self.use_amp else None
+        if self.use_amp and self.device.type != "cuda":
+            raise ValueError(
+                f"precision={train_args.precision} requires CUDA, got {self.device}"
+            )
+
         self.train_loader = maker.train_loader()
         self.val_loader = maker.val_loader()
 
@@ -72,13 +83,19 @@ class FontIdTrainingLoop(TrainingLoop):
         self.num_epochs = (self.target_steps // max(len(self.train_loader), 1)) + 1
         self.validation_direction = "lower"  # minimize held-out LPIPS
 
+    def _autocast_context(self):
+        if not self.use_amp:
+            return nullcontext()
+        return torch.autocast(device_type="cuda", dtype=self.amp_dtype)
+
     def train_step(self, batch):
         images = batch["images"].to(self.device)
         codepoints = batch["codepoints"].to(self.device)
         font_ids = batch["font_ids"].to(self.device)
 
-        loss = self.model(images, codepoints, font_ids)
-        return loss, {"loss": loss.detach()}
+        with self._autocast_context():
+            loss = self.model(images, codepoints, font_ids)
+        return loss, {"loss": loss.detach().float()}
 
     def post_train_step(self):
         if self.global_step % self.validation_every != 0:
@@ -90,9 +107,12 @@ class FontIdTrainingLoop(TrainingLoop):
             for batch in itertools.islice(self.val_loader, self.validation_batches):
                 codepoints = batch["codepoints"].to(self.device)
                 font_ids = batch["font_ids"].to(self.device)
-                gts = batch["images"].to(self.device)
+                gts = batch["images"].to(self.device).float()
 
-                recs = self.model.sample(codepoints, font_ids).clamp(0.0, 1.0)
+                with self._autocast_context():
+                    recs = self.model.sample(codepoints, font_ids)
+                # Metrics in fp32 (LPIPS/SSIM are precision-sensitive).
+                recs = recs.float().clamp(0.0, 1.0)
                 l1s.append(F.l1_loss(recs, gts))
                 lpipss.append(self.lpips(recs, gts).mean())
                 ssims.append(self.ssim(recs, gts))
@@ -114,10 +134,12 @@ class FontIdTrainingLoop(TrainingLoop):
         n = min(8, batch["images"].shape[0])
         codepoints = batch["codepoints"][:n].to(self.device)
         font_ids = batch["font_ids"][:n].to(self.device)
-        gts = batch["images"][:n].to(self.device)
+        gts = batch["images"][:n].to(self.device).float()
 
         with torch.no_grad():
-            recs = self.model.sample(codepoints, font_ids).clamp(0.0, 1.0)
+            with self._autocast_context():
+                recs = self.model.sample(codepoints, font_ids)
+        recs = recs.float().clamp(0.0, 1.0)
 
         grid = torch.cat([gts, recs], dim=0)
         self.writer.add_image(
@@ -156,6 +178,8 @@ if __name__ == "__main__":
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--timesteps", type=int, default=250)
     parser.add_argument("--sampling-timesteps", type=int, default=50)
+    parser.add_argument("--precision", type=str, choices=["fp32", "bf16"], default="bf16",
+                        help="Training precision (bf16 = AMP, fp32 = no AMP)")
     parser.add_argument("--validation-every", type=int, default=1000)
     parser.add_argument("--validation-batches", type=int, default=20)
     parser.add_argument("--model-path", type=str,
