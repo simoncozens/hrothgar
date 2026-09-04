@@ -22,6 +22,8 @@ composes them, rather than memorizing each pair.
 
 from __future__ import annotations
 
+from random import random
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,13 +80,17 @@ class FontIdConditionalUnet(nn.Module):
         channels: int = 1,
         attn_dim_head: int = 32,
         attn_heads: int = 4,
+        self_condition: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.out_dim = channels
-        self.self_condition = False
+        self.self_condition = self_condition
 
-        self.init_conv = nn.Conv2d(channels, dim, 7, padding=3)
+        # With self-conditioning the denoiser also receives its own predicted
+        # x0 from the previous step, concatenated channel-wise with x.
+        input_channels = channels * (2 if self_condition else 1)
+        self.init_conv = nn.Conv2d(input_channels, dim, 7, padding=3)
 
         dims = [dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -175,7 +181,12 @@ class FontIdConditionalUnet(nn.Module):
         time: torch.Tensor,
         codepoint: torch.Tensor,
         font_id: torch.Tensor,
+        x_self_cond: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if self.self_condition:
+            x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
+            x = torch.cat((x_self_cond, x), dim=1)
+
         x = self.init_conv(x)
         r = x.clone()
 
@@ -216,16 +227,18 @@ class FontIdDiffusion(nn.Module):
         model: FontIdConditionalUnet,
         *,
         image_size: int,
-        timesteps: int = 250,
+        timesteps: int = 1000,
         sampling_timesteps: int | None = 50,
         beta_schedule: str = "cosine",
         ddim_sampling_eta: float = 0.0,
+        self_condition: bool = False,
     ) -> None:
         super().__init__()
         assert model.channels == model.out_dim
         self.model = model
         self.channels = model.channels
         self.image_size = image_size
+        self.self_condition = self_condition
 
         if beta_schedule == "linear":
             betas = linear_beta_schedule(timesteps)
@@ -271,7 +284,17 @@ class FontIdDiffusion(nn.Module):
     def p_losses(self, x_start, t, codepoint, font_id, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
-        pred = self.model(x, t, codepoint, font_id)
+
+        # Self-conditioning: ~50% of the time run a first pass under no_grad to
+        # estimate x0, then feed it back as a conditioning channel.  This slows
+        # training ~25% but improves sample quality.
+        x_self_cond = None
+        if self.self_condition and random() < 0.5:
+            with torch.no_grad():
+                first_pred = self.model(x, t, codepoint, font_id)
+                x_self_cond = self.predict_start_from_noise(x, t, first_pred).clamp(-1.0, 1.0).detach()
+
+        pred = self.model(x, t, codepoint, font_id, x_self_cond=x_self_cond)
         return F.mse_loss(pred, noise)
 
     def forward(self, img, codepoint, font_id, times=None):
@@ -302,9 +325,12 @@ class FontIdDiffusion(nn.Module):
         time_pairs = list(zip(times[:-1], times[1:]))
 
         img = torch.randn(shape, device=device)
+        x_start = None
         for time, time_next in time_pairs:
             time_cond = torch.full((b,), time, device=device, dtype=torch.long)
-            pred_noise = self.model(img, time_cond, codepoint, font_id)
+            pred_noise = self.model(
+                img, time_cond, codepoint, font_id, x_self_cond=x_start
+            )
             x_start = self.predict_start_from_noise(img, time_cond, pred_noise)
             x_start = x_start.clamp(-1.0, 1.0)
 
@@ -339,6 +365,7 @@ class FontIdDiffusionModel(SaveLoadModel):
             channels=config.channels,
             attn_dim_head=config.attn_dim_head,
             attn_heads=config.attn_heads,
+            self_condition=config.self_condition,
         )
         self.diffusion = FontIdDiffusion(
             unet,
@@ -347,6 +374,7 @@ class FontIdDiffusionModel(SaveLoadModel):
             sampling_timesteps=config.sampling_timesteps,
             beta_schedule=config.beta_schedule,
             ddim_sampling_eta=config.ddim_sampling_eta,
+            self_condition=config.self_condition,
         )
 
     def forward(

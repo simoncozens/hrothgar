@@ -206,14 +206,19 @@ class FontIdDiffusionConfig:
     attn_heads: int = 4
 
     # Diffusion process.
-    timesteps: int = 250
+    timesteps: int = 1000
     sampling_timesteps: int | None = 50
     beta_schedule: str = "cosine"
     ddim_sampling_eta: float = 0.0
+    # Self-conditioning: condition the denoiser on its own predicted x0 from the
+    # previous sampling step (and ~50% of the time during training).
+    self_condition: bool = True
 
     # Training.
-    learning_rate: float = 1e-4
+    learning_rate: float = 3.24e-5
     weight_decay: float = 0.0
+    # Linear LR warmup (steps), then hold constant at ``learning_rate``.
+    warmup_steps: int = 2000
     # Weight of the geometry regression objective (em-unit labels).  The head
     # predicts scale_x/scale_y/left_sidebearing/baseline_offset/advance so the
     # generated glyph can be placed back on the baseline.

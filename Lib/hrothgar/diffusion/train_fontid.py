@@ -55,6 +55,7 @@ class FontIdTrainingLoop(TrainingLoop):
             timesteps=train_args.timesteps,
             sampling_timesteps=train_args.sampling_timesteps,
             learning_rate=train_args.learning_rate,
+            warmup_steps=train_args.warmup_steps,
             geometry_loss_weight=train_args.geometry_weight,
         )
         config.save_sidecar(train_args.model_path)
@@ -65,6 +66,8 @@ class FontIdTrainingLoop(TrainingLoop):
 
         self.model = build_fontid_model(config).to(self.device)
         self.geometry_weight = train_args.geometry_weight
+        self.base_lr = train_args.learning_rate
+        self.warmup_steps = train_args.warmup_steps
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(), lr=train_args.learning_rate
         )
@@ -96,7 +99,19 @@ class FontIdTrainingLoop(TrainingLoop):
             return nullcontext()
         return torch.autocast(device_type="cuda", dtype=self.amp_dtype)
 
+    def _set_lr(self) -> float:
+        """Linear LR warmup from 0 to ``base_lr`` over ``warmup_steps``."""
+        if self.warmup_steps > 0:
+            frac = min(1.0, (self.global_step + 1) / self.warmup_steps)
+            lr = self.base_lr * frac
+        else:
+            lr = self.base_lr
+        for group in self.optimizer.param_groups:
+            group["lr"] = lr
+        return lr
+
     def train_step(self, batch):
+        self._set_lr()
         images = batch["images"].to(self.device)
         codepoints = batch["codepoints"].to(self.device)
         font_ids = batch["font_ids"].to(self.device)
@@ -144,6 +159,11 @@ class FontIdTrainingLoop(TrainingLoop):
             self.write_scalar("Validation/L1", l1)
             self.write_scalar("Validation/LPIPS", lpips)
             self.write_scalar("Validation/SSIM", ssim)
+            self.writer.add_scalar(
+                "LearningRate",
+                self.optimizer.param_groups[0]["lr"],
+                self.global_step,
+            )
 
             geometry_mse = torch.stack(geo_mses).mean()
             self.write_scalar("Validation/geometry_mse", geometry_mse)
@@ -232,12 +252,14 @@ if __name__ == "__main__":
                         help="Minimum training fonts kept per codepoint")
     parser.add_argument("--split-seed", type=int, default=1234)
     parser.add_argument("--target-steps", type=int, default=600_000)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--learning-rate", type=float, default=3.24e-5)
+    parser.add_argument("--warmup-steps", type=int, default=2000,
+                        help="Linear LR warmup steps (then hold constant at --learning-rate)")
     parser.add_argument("--geometry-weight", type=float, default=1.0,
                         help="Weight of the geometry regression objective (em-unit labels)")
     parser.add_argument("--dim", type=int, default=64)
-    parser.add_argument("--timesteps", type=int, default=250)
-    parser.add_argument("--sampling-timesteps", type=int, default=50)
+    parser.add_argument("--timesteps", type=int, default=1000)
+    parser.add_argument("--sampling-timesteps", type=int, default=100)
     parser.add_argument("--precision", type=str, choices=["fp32", "bf16"], default="bf16",
                         help="Training precision (bf16 = AMP, fp32 = no AMP)")
     parser.add_argument("--validation-every", type=int, default=1000)
