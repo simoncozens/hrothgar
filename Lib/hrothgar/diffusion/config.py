@@ -214,6 +214,10 @@ class FontIdDiffusionConfig:
     # Training.
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
+    # Weight of the geometry regression objective (em-unit labels).  The head
+    # predicts scale_x/scale_y/left_sidebearing/baseline_offset/advance so the
+    # generated glyph can be placed back on the baseline.
+    geometry_loss_weight: float = 1.0
 
     def save_sidecar(self, model_path) -> None:
         """Save config as a JSON sidecar alongside the model weights."""

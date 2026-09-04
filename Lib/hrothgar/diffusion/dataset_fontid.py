@@ -32,7 +32,8 @@ from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset import LATIN_KERNEL, _has_non_empty_outline, _hb_font_for_face
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
-from hrothgar.style_extraction.render_utils import render_glyph
+from hrothgar.glyph_rendering import geometry_tensor
+from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
@@ -58,9 +59,12 @@ class _PairDataset(TorchDataset):
     def __getitem__(self, idx: int) -> dict:
         font_id, cp_idx = self.pairs[idx]
         cp = self.cp_list[cp_idx]
-        img = render_glyph(self.fonts[font_id], cp, self.image_size)  # (H, W)
+        img, geometry = render_glyph_with_geometry(
+            self.fonts[font_id], cp, self.image_size
+        )  # img: (H, W); geometry: dict of em-unit labels
         return {
             "image": img.unsqueeze(0),  # (1, H, W)
+            "geometry": geometry_tensor(geometry),  # (5,)
             "cp_idx": cp_idx,
             "font_id": font_id,
         }
@@ -69,6 +73,7 @@ class _PairDataset(TorchDataset):
 def _collate_fn(batch: list[dict]) -> dict:
     return {
         "images": torch.stack([b["image"] for b in batch]),
+        "geometry": torch.stack([b["geometry"] for b in batch]),
         "codepoints": torch.tensor([b["cp_idx"] for b in batch], dtype=torch.long),
         "font_ids": torch.tensor([b["font_id"] for b in batch], dtype=torch.long),
     }
@@ -84,6 +89,9 @@ class FontIdDatasetMaker:
         *,
         image_size: int = 128,
         character_set: Optional[Sequence[int]] = None,
+        extra_codepoints: Optional[Sequence[int]] = None,
+        remove_codepoints: Optional[Sequence[int]] = None,
+        oversample_codepoints: Optional[dict[int, int]] = None,
         heldout_fraction: float = 0.25,
         min_train_fonts_per_codepoint: int = 20,
         split_seed: int = 1234,
@@ -91,7 +99,15 @@ class FontIdDatasetMaker:
     ) -> None:
         self.image_size = image_size
         self.batch_size = batch_size
-        self.character_set = sorted(set(character_set or LATIN_KERNEL))
+        # Vocabulary = base set + extras - removals.
+        base = set(character_set or LATIN_KERNEL)
+        base |= set(extra_codepoints or [])
+        base -= set(remove_codepoints or [])
+        self.character_set = sorted(base)
+        # Codepoint -> oversample factor.  Oversampled codepoints are fully
+        # trained (no held-out split) so rare glyphs like the rupee sign get
+        # every available example, then their training pairs are duplicated.
+        self.oversample_codepoints = dict(oversample_codepoints or {})
         self.heldout_fraction = heldout_fraction
         self.min_train_fonts_per_codepoint = min_train_fonts_per_codepoint
         self.split_seed = split_seed
@@ -139,6 +155,15 @@ class FontIdDatasetMaker:
         self.train_pairs: list[tuple[int, int]] = []
         self.val_pairs: list[tuple[int, int]] = []
         for cp_idx, font_ids in cp_to_fonts.items():
+            cp = self.cp_list[cp_idx]
+            if cp in self.oversample_codepoints:
+                # Rare/acceptance codepoints: train on every font that has the
+                # glyph (no held-out), duplicated by the oversample factor.
+                factor = self.oversample_codepoints[cp]
+                for fid in font_ids:
+                    self.train_pairs.extend([(fid, cp_idx)] * factor)
+                continue
+
             n = len(font_ids)
             max_holdout = max(0, n - self.min_train_fonts_per_codepoint)
             n_holdout = min(int(self.heldout_fraction * n), max_holdout)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -85,6 +86,20 @@ def _paste_bitmap_onto_canvas(
     src = bitmap_array[src_y0:src_y1, src_x0:src_x1]
     # FreeType grayscale is coverage alpha. Composite as black ink on white.
     canvas[dst_y0_clamped:dst_y1_clamped, dst_x0_clamped:dst_x1_clamped] = 255 - src
+
+
+@dataclass
+class RawGlyph:
+    """A rendered glyph's raw bitmap plus its placement metrics.
+
+    All quantities are in *pixels* at the requested ``ppem``.  The conversion to
+    font-independent em units (divide by ``ppem``) happens in the caller.
+    """
+
+    bitmap: np.ndarray  # (rows, width) uint8 coverage; 0 = no ink, 255 = full ink
+    bitmap_left: int  # left sidebearing in px (signed; negative = overhang)
+    bitmap_top: int  # top bearing in px, positive above the baseline
+    advance_px: float  # advance width in px
 
 
 @lru_cache(maxsize=128)
@@ -171,6 +186,48 @@ def render_gid(
 
     out = image.astype(np.float32) / 255.0
     return np.stack([out, out, out], axis=0)
+
+
+def render_gid_raw(
+    font_path: str | Path,
+    gid: int,
+    size: int,
+    axis_position: Optional[Sequence[float]] = None,
+) -> RawGlyph:
+    """Render a glyph to its raw FreeType bitmap without pasting onto a canvas.
+
+    Unlike :func:`render_gid`, this does not crop to a fixed square, clip
+    descenders at the baseline, or clip negative left sidebearings at ``x=0``.
+    The caller receives the tightly-fit coverage bitmap plus its offsets, from
+    which the ink bbox and baseline position can be recovered exactly.
+
+    Returns:
+        :class:`RawGlyph` with the coverage bitmap and per-glyph placement in
+        pixels.  ``1 em == size`` pixels, so dividing by ``size`` yields em
+        units (font-independent).
+    """
+    if size <= 0:
+        raise ValueError("size must be positive")
+    if gid < 0:
+        raise ValueError("gid must be non-negative")
+
+    axis_tuple = tuple(axis_position) if axis_position is not None else None
+    face = _face_for_path(str(font_path), axis_tuple)
+    ppem = size
+    face.set_pixel_sizes(0, ppem)
+    face.load_glyph(
+        gid,
+        freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
+        | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
+    )
+
+    glyph_slot = face.glyph
+    return RawGlyph(
+        bitmap=_bitmap_to_array(glyph_slot.bitmap),
+        bitmap_left=int(glyph_slot.bitmap_left),
+        bitmap_top=int(glyph_slot.bitmap_top),
+        advance_px=glyph_slot.linearHoriAdvance / 65536.0,
+    )
 
 
 def render_phrase(

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -25,6 +26,21 @@ if TYPE_CHECKING:
 
 # Ink is rendered near 0.0 on a white (1.0) background.
 _INK_THRESHOLD = 0.5
+
+# Canonical geometry label order and em-unit ranges.  The factorized
+# (codepoint, font-ID) diffusion model's geometry regression head predicts these
+# five values in this order, using sigmoid (non-negative widths) or tanh
+# (signed offsets) scaled by the em range below.  ``left_sidebearing`` and
+# ``baseline_offset`` are signed; the rest are non-negative.
+GEOMETRY_SPEC = (
+    # (name, activation, em-scale)
+    ("scale_x", "sigmoid", 1.5),
+    ("scale_y", "sigmoid", 1.2),
+    ("left_sidebearing", "tanh", 1.0),
+    ("baseline_offset", "tanh", 0.8),
+    ("advance", "sigmoid", 1.5),
+)
+GEOMETRY_NAMES = tuple(name for name, _, _ in GEOMETRY_SPEC)
 
 
 def render_glyph(
@@ -113,3 +129,80 @@ def render_normalized(
     """
     rendering = render_glyph(font, codepoint, size, axis_position=axis_position)
     return crop_to_ink(rendering, size), ink_bbox(rendering, size)
+
+
+def geometry_tensor(geometry: dict[str, float]) -> torch.Tensor:
+    """Pack a geometry dict into a ``(5,)`` float32 tensor in canonical order."""
+    return torch.tensor(
+        [geometry[name] for name in GEOMETRY_NAMES], dtype=torch.float32
+    )
+
+
+def normalize_bitmap(
+    bitmap: np.ndarray,
+    bitmap_left: int,
+    bitmap_top: int,
+    advance_px: float,
+    size: int,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Crop a raw FreeType bitmap to its ink and normalize it to a square.
+
+    ``bitmap`` is a ``(rows, width)`` uint8 coverage array (0 = no ink,
+    255 = full ink).  ``bitmap_left``/``bitmap_top`` are the FreeType bitmap
+    offsets in pixels (left sidebearing and top bearing); ``advance_px`` is the
+    glyph advance width in pixels.  All returned geometry values are in **em
+    units** (1 em = ``size`` px at ``ppem=size``), so they are font-independent.
+
+    Returns:
+        ``(image, geometry)`` where ``image`` is a ``(1, size, size)`` float32
+        tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is a dict of the
+        five labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
+        ``baseline_offset``, ``advance`` in em units.
+    """
+    if bitmap.size == 0:
+        # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
+        image = torch.ones((1, size, size), dtype=torch.float32)
+        geometry = {
+            "scale_x": 0.0,
+            "scale_y": 0.0,
+            "left_sidebearing": 0.0,
+            "baseline_offset": 0.0,
+            "advance": advance_px / size,
+        }
+        return image, geometry
+
+    coverage = np.asarray(bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
+    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches crop_to_ink's threshold
+
+    if not ink.any():
+        image = torch.ones((1, size, size), dtype=torch.float32)
+        geometry = {
+            "scale_x": 0.0,
+            "scale_y": 0.0,
+            "left_sidebearing": float(bitmap_left) / size,
+            "baseline_offset": float(bitmap_top) / size,
+            "advance": advance_px / size,
+        }
+        return image, geometry
+
+    ys, xs = ink.nonzero()
+    y0, y1 = int(ys.min()), int(ys.max())
+    x0, x1 = int(xs.min()), int(xs.max())
+
+    # Ink as 0.0 on a white 1.0 background (matches the shared render convention).
+    crop = 1.0 - coverage[y0 : y1 + 1, x0 : x1 + 1]  # (h, w) float32
+    crop_t = (
+        torch.from_numpy(np.ascontiguousarray(crop)).float().unsqueeze(0).unsqueeze(0)
+    )
+    image = F.interpolate(
+        crop_t, size=(size, size), mode="bilinear", align_corners=False
+    )[0]  # (1, size, size)
+
+    geometry = {
+        "scale_x": (x1 - x0 + 1) / size,
+        "scale_y": (y1 - y0 + 1) / size,
+        "left_sidebearing": (bitmap_left + x0) / size,
+        "baseline_offset": (bitmap_top - y0) / size,
+        "advance": advance_px / size,
+    }
+    return image, geometry

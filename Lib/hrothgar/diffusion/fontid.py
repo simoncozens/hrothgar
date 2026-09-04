@@ -44,7 +44,21 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
 )
 
 from hrothgar.diffusion.config import FontIdDiffusionConfig
+from hrothgar.glyph_rendering import GEOMETRY_SPEC
 from hrothgar.utils import SaveLoadModel
+
+
+def _apply_activation(raw: torch.Tensor, activation: str) -> torch.Tensor:
+    """Apply the geometry head's per-output activation."""
+    return torch.sigmoid(raw) if activation == "sigmoid" else torch.tanh(raw)
+
+
+def _decode_geometry(raw: torch.Tensor) -> torch.Tensor:
+    """Decode ``(B, 5)`` raw head logits to em-unit geometry values."""
+    cols = []
+    for i, (_, activation, scale) in enumerate(GEOMETRY_SPEC):
+        cols.append(_apply_activation(raw[:, i], activation) * scale)
+    return torch.stack(cols, dim=1)
 
 
 class FontIdConditionalUnet(nn.Module):
@@ -86,6 +100,14 @@ class FontIdConditionalUnet(nn.Module):
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
         self.font_emb = nn.Embedding(num_fonts, time_dim)
         cond_dim = time_dim * 2  # codepoint + font, concatenated
+        # Per-(codepoint, font) geometry regression head: predicts the five
+        # em-unit labels (scale_x, scale_y, left_sidebearing, baseline_offset,
+        # advance) needed to place a generated glyph back on the baseline.
+        self.geometry_head = nn.Sequential(
+            nn.Linear(cond_dim, time_dim),
+            nn.GELU(),
+            nn.Linear(time_dim, len(GEOMETRY_SPEC)),
+        )
 
         resnet_block = lambda din, dout: ResnetBlock(
             din, dout, time_emb_dim=time_dim, classes_emb_dim=cond_dim
@@ -123,6 +145,30 @@ class FontIdConditionalUnet(nn.Module):
         self.final_res_block = resnet_block(dim * 2, dim)
         self.final_conv = nn.Conv2d(dim, channels, 1)
 
+    def _cond(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
+        """Concatenated codepoint + font conditioning embedding."""
+        return torch.cat([self.codepoint_emb(codepoint), self.font_emb(font_id)], dim=-1)
+
+    def predict_geometry(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
+        """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
+        raw = self.geometry_head(self._cond(codepoint, font_id))
+        return _decode_geometry(raw)
+
+    def geometry_loss(
+        self,
+        codepoint: torch.Tensor,
+        font_id: torch.Tensor,
+        gt_geometry: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-value MSE in em units.
+
+        ``gt_geometry`` is ``(B, 5)`` in em units.  The loss is the mean over the
+        batch of the squared error, averaged over the five labels — so each
+        label contributes equally regardless of its em magnitude.
+        """
+        pred = self.predict_geometry(codepoint, font_id)  # (B, 5) em units
+        return ((pred - gt_geometry) ** 2).mean()
+
     def forward(
         self,
         x: torch.Tensor,
@@ -134,7 +180,7 @@ class FontIdConditionalUnet(nn.Module):
         r = x.clone()
 
         t = self.time_mlp(time)
-        c = torch.cat([self.codepoint_emb(codepoint), self.font_emb(font_id)], dim=-1)
+        c = self._cond(codepoint, font_id)
 
         h = []
         for block1, block2, attn, downsample in self.downs:
@@ -311,6 +357,16 @@ class FontIdDiffusionModel(SaveLoadModel):
     @torch.no_grad()
     def sample(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
         return self.diffusion.sample(codepoint, font_id)
+
+    def predict_geometry(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
+        """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
+        return self.diffusion.model.predict_geometry(codepoint, font_id)
+
+    def geometry_loss(
+        self, codepoint: torch.Tensor, font_id: torch.Tensor, gt_geometry: torch.Tensor
+    ) -> torch.Tensor:
+        """Normalized MSE between predicted and target geometry labels."""
+        return self.diffusion.model.geometry_loss(codepoint, font_id, gt_geometry)
 
 
 def build_fontid_model(config: FontIdDiffusionConfig) -> FontIdDiffusionModel:
