@@ -14,6 +14,7 @@ import random
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision
@@ -22,7 +23,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.fontid import build_fontid_model
-from hrothgar.glyph_rendering import GEOMETRY_NAMES
+from hrothgar.glyph_rendering import GEOMETRY_NAMES, place_glyph
 from hrothgar.gtok.llamagen_lpips import LPIPS
 from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
 from hrothgar.utils import TrainingLoop
@@ -182,11 +183,14 @@ class FontIdTrainingLoop(TrainingLoop):
         codepoints = batch["codepoints"][:n].to(self.device)
         font_ids = batch["font_ids"][:n].to(self.device)
         gts = batch["images"][:n].to(self.device).float()
+        geometry = batch["geometry"][:n]  # (n, 5) GT geometry (CPU)
 
         with torch.no_grad():
             with self._autocast_context():
                 recs = self.model.sample(codepoints, font_ids)
+                pred_geometry = self.model.predict_geometry(codepoints, font_ids)
         recs = recs.float().clamp(0.0, 1.0)
+        pred_geometry = pred_geometry.float()
 
         # A second codepoint from each font, as a style reference for the eye,
         # plus the (family, codepoint) identity of each row for debugging.
@@ -217,6 +221,42 @@ class FontIdTrainingLoop(TrainingLoop):
             self.global_step,
         )
         self.writer.add_text("Validation/pairs", "\n".join(text_lines), self.global_step)
+
+        self._geometry_montage(gts, recs, geometry, pred_geometry, n)
+
+    def _geometry_montage(self, gts, recs, geometry, pred_geometry, n):
+        """Denormalize each glyph with its geometry and place it on the baseline.
+
+        Top row: GT images placed with GT geometry.  Bottom row: predicted images
+        placed with predicted geometry.  Blue lines mark the X origin (vertical)
+        and baseline (horizontal); a green line marks the advance width.
+        """
+        gts_np = gts.cpu().numpy()[:, 0]  # (n, H, W)
+        recs_np = recs.cpu().numpy()[:, 0]
+        gt_geo = geometry.numpy() if isinstance(geometry, torch.Tensor) else np.asarray(geometry)
+        pred_geo = pred_geometry.cpu().numpy()
+
+        cells = []
+        for i in range(n):
+            cells.append(self._place_rgb(gts_np[i], gt_geo[i]))
+        for i in range(n):
+            cells.append(self._place_rgb(recs_np[i], pred_geo[i]))
+
+        grid = torchvision.utils.make_grid(torch.stack(cells), nrow=n)
+        self.writer.add_image("Validation/geometry_placed", grid, self.global_step)
+
+    @staticmethod
+    def _place_rgb(image: np.ndarray, geometry: np.ndarray) -> torch.Tensor:
+        """Place a single glyph and overlay origin/baseline/advance markers."""
+        canvas, origin_x, baseline_y, advance_x = place_glyph(image, geometry.tolist())
+        rgb = np.repeat(canvas[..., None], 3, axis=2)  # (H, W, 3) grayscale
+
+        thickness = 2
+        rgb[:, origin_x : origin_x + thickness] = (0.0, 0.0, 1.0)  # X origin (blue)
+        rgb[baseline_y : baseline_y + thickness, :] = (0.0, 0.0, 1.0)  # baseline (blue)
+        rgb[:, advance_x : advance_x + thickness] = (0.0, 1.0, 0.0)  # advance (green)
+
+        return torch.from_numpy(rgb).float().permute(2, 0, 1)  # (3, H, W)
 
 
 # ══════════════════════════════════════════════════════════════════════════

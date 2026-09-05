@@ -15,7 +15,7 @@ bounding box to denormalize the glyph back onto the baseline.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Sequence
 
 import numpy as np
 import torch
@@ -206,3 +206,67 @@ def normalize_bitmap(
         "advance": advance_px / size,
     }
     return image, geometry
+
+
+def place_glyph(
+    image: np.ndarray,
+    geometry: Sequence[float],
+    *,
+    ppm: int = 128,
+    ascender_em: float = 1.5,
+    descender_em: float = 0.5,
+    origin_x_em: float = 0.5,
+) -> tuple[np.ndarray, int, int, int]:
+    """Place a crop-to-ink glyph back onto a baseline canvas (inverse of
+    :func:`normalize_bitmap`).
+
+    Args:
+        image: ``(H, W)`` float32 array in [0, 1], ink = 0, white = 1 — a
+            crop-to-ink normalized square.
+        geometry: the five em-unit labels in canonical order
+            ``(scale_x, scale_y, left_sidebearing, baseline_offset, advance)``.
+        ppm: pixels per em (canvas resolution).
+        ascender_em / descender_em: canvas space above / below the baseline.
+        origin_x_em: X-origin offset in em from the left edge (room for
+            negative left sidebearings).
+
+    Returns:
+        ``(canvas, origin_x_px, baseline_y_px, advance_x_px)`` where ``canvas``
+        is a ``(H, W)`` float32 array in [0, 1] (ink = 0, white = 1) and the
+        three pixel positions locate the X origin, baseline, and advance width.
+    """
+    scale_x, scale_y, lsb, baseline_offset, advance = (float(v) for v in geometry)
+
+    # Un-square the normalized glyph back to its true ink size.
+    h_px = max(1, int(round(scale_y * ppm)))
+    w_px = max(1, int(round(scale_x * ppm)))
+    src = (
+        torch.from_numpy(np.ascontiguousarray(image, dtype=np.float32))
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )  # (1, 1, H, W)
+    glyph = F.interpolate(
+        src, size=(h_px, w_px), mode="bilinear", align_corners=False
+    )[0, 0].numpy()  # (h_px, w_px)
+
+    canvas_h = int(round((ascender_em + descender_em) * ppm))
+    # 2.5em right of the origin covers the label maxima (LSB 1.0 + scale_x 1.5)
+    # and advance (1.5em); 0.5em is reserved left of the origin for negative LSB.
+    canvas_w = int(round((origin_x_em + 2.5) * ppm))
+    origin_x = int(round(origin_x_em * ppm))
+    baseline_y = int(round(ascender_em * ppm))
+    advance_x = origin_x + int(round(advance * ppm))
+
+    canvas = np.ones((canvas_h, canvas_w), dtype=np.float32)
+    x0 = origin_x + int(round(lsb * ppm))
+    y0 = baseline_y - int(round(baseline_offset * ppm))
+
+    # Paste the glyph with clipping (blank or out-of-canvas glyphs are no-ops).
+    gy1 = glyph.shape[0]
+    gx1 = glyph.shape[1]
+    cy0, cy1 = max(0, y0), min(canvas_h, y0 + gy1)
+    cx0, cx1 = max(0, x0), min(canvas_w, x0 + gx1)
+    if cy1 > cy0 and cx1 > cx0:
+        canvas[cy0:cy1, cx0:cx1] = glyph[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
+
+    return canvas, origin_x, baseline_y, advance_x
