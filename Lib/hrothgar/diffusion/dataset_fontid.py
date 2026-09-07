@@ -175,6 +175,11 @@ class FontIdDatasetMaker:
                 else:
                     self.train_pairs.append(pair)
 
+        # Shuffle the held-out pairs once (fixed seed) so the fixed val loader
+        # (shuffle=False) yields a representative mix of codepoints/styles rather
+        # than a contiguous block of near-identical codepoints.
+        random.Random(self.split_seed).shuffle(self.val_pairs)
+
     def _loader(self, pairs: list[tuple[int, int]], shuffle: bool):
         dataset = _PairDataset(pairs, self.fonts, self.cp_list, self.image_size)
         return DataLoader(
@@ -192,4 +197,15 @@ class FontIdDatasetMaker:
         return self._loader(self.train_pairs, shuffle=True)
 
     def val_loader(self):
-        return self._loader(self.val_pairs, shuffle=True)
+        return self._loader(self.val_pairs, shuffle=False)
+
+    def random_val_batch(self, n: int) -> dict:
+        """A random (unseeded) batch of held-out pairs, for visualization only.
+
+        Unlike the fixed ``val_loader`` this varies from call to call, so the
+        visualization shows a variety of codepoints and styles over time rather
+        than the same slice every step.
+        """
+        pairs = random.sample(self.val_pairs, k=min(n, len(self.val_pairs)))
+        dataset = _PairDataset(pairs, self.fonts, self.cp_list, self.image_size)
+        return _collate_fn([dataset[i] for i in range(len(pairs))])

@@ -178,7 +178,7 @@ class FontIdTrainingLoop(TrainingLoop):
         self.model.train()
 
     def visualize(self):
-        batch = next(iter(self.val_loader))
+        batch = self.maker.random_val_batch(8)
         n = min(8, batch["images"].shape[0])
         codepoints = batch["codepoints"][:n].to(self.device)
         font_ids = batch["font_ids"][:n].to(self.device)
