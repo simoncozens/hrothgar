@@ -318,13 +318,15 @@ class FontIdDiffusion(nn.Module):
         if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
             return F.mse_loss(pred, noise)
 
-        # Min-SNR weighting: w(t) = min(SNR(t), gamma).  This shifts gradient
-        # budget from the coarse (high-noise) steps toward the fine-detail
-        # (low-noise) steps, which is where the terminal/serif detail lives.
+        # Min-SNR weighting for the noise (eps) prediction objective:
+        #   w(t) = min(SNR(t), gamma) / SNR(t) = min(gamma / SNR(t), 1)
+        # (raw min(SNR, gamma) is the signal/x0-prediction weight; the noise
+        # objective divides by SNR).  This downweights the high-SNR (low-noise)
+        # steps, whose noise-prediction gradient is ill-conditioned.
         loss = F.mse_loss(pred, noise, reduction="none")
         loss = loss.mean(dim=(1, 2, 3))  # (B,) per-sample MSE
         snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t])  # (B,)
-        weight = snr.clamp(max=self.min_snr_gamma)
+        weight = snr.clamp(max=self.min_snr_gamma) / snr
         return (loss * weight).mean()
 
     def forward(self, img, codepoint, font_meta, times=None):
