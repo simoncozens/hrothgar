@@ -11,8 +11,9 @@ and for the rest:
     ``left_sidebearing``, ``baseline_offset``, and ``advance``.
 
 The checkpoint must have been trained with the rupee in its vocabulary (e.g.
-``--extra-codepoints '₹'``); it also needs the ``.fonts.json`` and
-``.codepoints.json`` sidecars written by the training loop.
+``--extra-codepoints '₹'``); it also needs the ``.fonts.json``,
+``.codepoints.json`` and ``.font_meta.json`` sidecars written by the training
+loop.
 """
 
 from __future__ import annotations
@@ -77,6 +78,13 @@ def main() -> None:
     config = FontIdDiffusionConfig.from_sidecar(model_path)
     font_paths = _load_json(Path(str(model_path) + ".fonts.json"))
     codepoints = _load_json(Path(str(model_path) + ".codepoints.json"))
+    font_meta = _load_json(Path(str(model_path) + ".font_meta.json"))  # per-font [family, weight, style]
+
+    if len(font_meta) != len(font_paths):
+        raise SystemExit(
+            f"font_meta ({len(font_meta)}) and fonts ({len(font_paths)}) sidecars disagree; "
+            "checkpoint may predate the family/weight/style factorization."
+        )
 
     if RUPEE not in codepoints:
         raise SystemExit(
@@ -103,10 +111,10 @@ def main() -> None:
             continue
 
         cp = torch.tensor([rupee_idx], device=device, dtype=torch.long)
-        fid = torch.tensor([font_id], device=device, dtype=torch.long)
+        meta = torch.tensor([font_meta[font_id]], device=device, dtype=torch.long)  # (1, 3)
         with torch.no_grad():
-            image = model.sample(cp, fid)[0, 0].cpu().numpy()  # (H, W) in [0, 1]
-            geometry = model.predict_geometry(cp, fid)[0].cpu().tolist()  # 5 em units
+            image = model.sample(cp, meta)[0, 0].cpu().numpy()  # (H, W) in [0, 1]
+            geometry = model.predict_geometry(cp, meta)[0].cpu().tolist()  # 5 em units
 
         geom = dict(zip(GEOMETRY_NAMES, geometry))
         png_path = out_dir / f"{font_id:04d}_{Path(path_str).stem}.png"

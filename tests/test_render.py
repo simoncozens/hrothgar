@@ -2,6 +2,7 @@ import numpy as np
 import uharfbuzz as hb
 from pathlib import Path
 
+from hrothgar.glyph_rendering import geometry_tensor, normalize_bitmap, place_glyph
 from hrothgar.render import _paste_bitmap_onto_canvas, render_gid
 
 
@@ -91,3 +92,83 @@ def test_render_phrase_variable_font_axis_changes_output() -> None:
     assert heavy_ink > light_ink, (
         f"Heavy ({heavy_ink}) should have more ink than light ({light_ink})"
     )
+
+
+def test_normalize_bitmap_geometry_in_em_units() -> None:
+    # 4 rows x 3 cols coverage; ink occupies rows 1..3 and cols 1..2.
+    bitmap = np.zeros((4, 3), dtype=np.uint8)
+    bitmap[1:4, 1:3] = 255
+
+    image, geometry = normalize_bitmap(
+        bitmap, bitmap_left=2, bitmap_top=10, advance_px=7, size=10
+    )
+
+    assert image.shape == (1, 10, 10)
+    assert geometry["scale_x"] == (2 - 1 + 1) / 10  # 0.2
+    assert geometry["scale_y"] == (3 - 1 + 1) / 10  # 0.3
+    assert geometry["left_sidebearing"] == (2 + 1) / 10  # 0.3
+    assert geometry["baseline_offset"] == (10 - 1) / 10  # 0.9
+    assert geometry["advance"] == 7 / 10  # 0.7
+
+
+def test_normalize_bitmap_blank_glyph_preserves_advance() -> None:
+    image, geometry = normalize_bitmap(
+        np.zeros((0, 0), dtype=np.uint8),
+        bitmap_left=0,
+        bitmap_top=0,
+        advance_px=8,
+        size=10,
+    )
+
+    assert image.shape == (1, 10, 10)
+    assert float(image.min()) == 1.0 and float(image.max()) == 1.0
+    assert geometry["scale_x"] == 0.0
+    assert geometry["scale_y"] == 0.0
+    assert geometry["left_sidebearing"] == 0.0
+    assert geometry["baseline_offset"] == 0.0
+    assert geometry["advance"] == 0.8
+
+
+def test_geometry_tensor_packs_canonical_order() -> None:
+    import pytest
+
+    geometry = {
+        "advance": 0.7,
+        "scale_x": 0.2,
+        "baseline_offset": 0.9,
+        "left_sidebearing": 0.3,
+        "scale_y": 0.3,
+    }
+    packed = geometry_tensor(geometry)
+    assert packed.tolist() == pytest.approx([0.2, 0.3, 0.3, 0.9, 0.7])
+
+
+def test_place_glyph_denormalizes_onto_baseline() -> None:
+    # A fully-inked 32x32 square, geometry: 0.5em x 0.5em ink, no LSB, 0.5em
+    # ascent above baseline, 0.6em advance.  At 128 ppm the ink should occupy a
+    # 64x64 block starting at x=64 (origin) and y=128 (baseline - ascent).
+    image = np.zeros((32, 32), dtype=np.float32)
+    canvas, origin_x, baseline_y, advance_x = place_glyph(
+        image, [0.5, 0.5, 0.0, 0.5, 0.6]
+    )
+
+    assert canvas.shape == (256, 384)  # 2em tall, 3em wide
+    assert origin_x == 64
+    assert baseline_y == 192
+    assert advance_x == 64 + int(round(0.6 * 128))
+
+    # Ink is present exactly in the placed block; margins stay white.
+    assert canvas[128:192, 64:128].min() == 0.0
+    assert canvas[:128, :].max() == 1.0
+    assert canvas[192:, :].max() == 1.0
+    assert canvas[:, :64].max() == 1.0
+
+
+def test_place_glyph_blank_glyph_preserves_advance() -> None:
+    image = np.ones((32, 32), dtype=np.float32)
+    canvas, origin_x, baseline_y, advance_x = place_glyph(
+        image, [0.0, 0.0, 0.0, 0.0, 0.3]
+    )
+
+    assert canvas.max() == 1.0  # stays white
+    assert advance_x == origin_x + int(round(0.3 * 128))

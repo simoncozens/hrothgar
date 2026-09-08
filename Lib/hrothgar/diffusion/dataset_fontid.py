@@ -38,8 +38,21 @@ from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
 
+def _font_weight_style(font: GoogleFont) -> tuple[int, str]:
+    """Return a font file's ``(weight, style)`` from its family METADATA.pb.
+
+    The family ``METADATA.pb`` lists every font file with a ``weight`` (an int
+    like 400/700) and a ``style`` (``"normal"``/``"italic"``).  We match by
+    filename and fall back to ``(400, "normal")`` if the file isn't listed.
+    """
+    for entry in font.metadata.fonts:
+        if entry.filename == font.path.name:
+            return int(entry.weight), str(entry.style)
+    return 400, "normal"
+
+
 class _PairDataset(TorchDataset):
-    """Yields ``(image, cp_idx, font_id)`` for a fixed list of pairs."""
+    """Yields ``(image, cp_idx, font_id, font_meta)`` for a fixed list of pairs."""
 
     def __init__(
         self,
@@ -47,11 +60,13 @@ class _PairDataset(TorchDataset):
         fonts: Sequence[GoogleFont],
         cp_list: Sequence[int],
         image_size: int,
+        font_meta: Sequence[tuple[int, int, int]],
     ) -> None:
         self.pairs = pairs
         self.fonts = fonts
         self.cp_list = list(cp_list)
         self.image_size = image_size
+        self.font_meta = font_meta
 
     def __len__(self) -> int:
         return len(self.pairs)
@@ -67,6 +82,7 @@ class _PairDataset(TorchDataset):
             "geometry": geometry_tensor(geometry),  # (5,)
             "cp_idx": cp_idx,
             "font_id": font_id,
+            "font_meta": torch.tensor(self.font_meta[font_id], dtype=torch.long),  # (3,)
         }
 
 
@@ -76,6 +92,7 @@ def _collate_fn(batch: list[dict]) -> dict:
         "geometry": torch.stack([b["geometry"] for b in batch]),
         "codepoints": torch.tensor([b["cp_idx"] for b in batch], dtype=torch.long),
         "font_ids": torch.tensor([b["font_id"] for b in batch], dtype=torch.long),
+        "font_meta": torch.stack([b["font_meta"] for b in batch]),  # (B, 3)
     }
 
 
@@ -120,15 +137,37 @@ class FontIdDatasetMaker:
         self.cp_to_idx = {cp: i for i, cp in enumerate(self.character_set)}
         self.cp_list = list(self.character_set)
 
+        # Factorized style identity: a family slot (shared across the family's
+        # weights, hence collapse-proof) plus weight and style buckets.  Ordered
+        # deterministically so the family->id mapping is reproducible.
+        self.families = sorted({f.family for f in self.fonts})
+        self.family_to_id = {fam: i for i, fam in enumerate(self.families)}
+        self.num_weight_buckets = 10  # weight // 100 -> 100..900
+        self.num_style_buckets = 2  # upright, italic
+        # (family_id, weight_bucket, style_bucket) per font, parallel to self.fonts.
+        self.font_meta = [self._bucket_font(f) for f in self.fonts]
+
         self.num_fonts = len(self.fonts)
+        self.num_families = len(self.families)
         self.num_codepoints = len(self.character_set)
 
         self._build_pairs()
-        print(f"Fonts: {self.num_fonts}; codepoints: {self.num_codepoints}")
+        print(
+            f"Fonts: {self.num_fonts}; families: {self.num_families}; "
+            f"codepoints: {self.num_codepoints}"
+        )
         print(
             f"Pairs: {len(self.train_pairs)} train / "
             f"{len(self.val_pairs)} held-out"
         )
+
+    def _bucket_font(self, font: GoogleFont) -> tuple[int, int, int]:
+        """Map a font to its ``(family_id, weight_bucket, style_bucket)``."""
+        weight, style = _font_weight_style(font)
+        family_id = self.family_to_id[font.family]
+        weight_bucket = min(9, max(1, weight // 100))
+        style_bucket = 0 if style == "normal" else 1
+        return (family_id, weight_bucket, style_bucket)
 
     def _filter_fonts(self) -> None:
         needed = set(self.character_set)
@@ -181,7 +220,9 @@ class FontIdDatasetMaker:
         random.Random(self.split_seed).shuffle(self.val_pairs)
 
     def _loader(self, pairs: list[tuple[int, int]], shuffle: bool):
-        dataset = _PairDataset(pairs, self.fonts, self.cp_list, self.image_size)
+        dataset = _PairDataset(
+            pairs, self.fonts, self.cp_list, self.image_size, self.font_meta
+        )
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -207,5 +248,7 @@ class FontIdDatasetMaker:
         than the same slice every step.
         """
         pairs = random.sample(self.val_pairs, k=min(n, len(self.val_pairs)))
-        dataset = _PairDataset(pairs, self.fonts, self.cp_list, self.image_size)
+        dataset = _PairDataset(
+            pairs, self.fonts, self.cp_list, self.image_size, self.font_meta
+        )
         return _collate_fn([dataset[i] for i in range(len(pairs))])

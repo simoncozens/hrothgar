@@ -8,16 +8,17 @@ embeddings, both injected into the time embedding:
 * one-hot codepoint -> ``g``
 * one-hot font style -> ``f``
 
-There is no exemplar encoder and no cross-attention.  The font's style is
-learned during training from that font's other glyphs and compressed into the
-font embedding ``f``.  Because ``f`` is a discrete lookup (one distinct row per
-font), it cannot collapse to a "mean style" the way a continuous exemplar
-feature map can — this is the separability we were missing.
+There is no exemplar encoder and no cross-attention.  The font's style is a
+*discrete identity* that is factorized into a family lookup (shared by every
+weight of the family, and therefore collapse-proof) plus additive weight and
+style (upright/italic) offsets.  This ties a family's members together while
+keeping them distinct, and lets the model learn "bold is regular but heavier"
+across families rather than memorizing each weight independently.
 
 The key difference from Phase 1's ``(codepoint x ROND)`` single class is the
-**factorization**: codepoint and font are two separate embeddings, so the model
-learns "font -> style" and "codepoint -> content" as reusable directions and
-composes them, rather than memorizing each pair.
+**factorization**: codepoint and style are separate embeddings, so the model
+learns "style -> family + weight + italic" and "codepoint -> content" as
+reusable directions and composes them, rather than memorizing each pair.
 """
 
 from __future__ import annotations
@@ -75,7 +76,9 @@ class FontIdConditionalUnet(nn.Module):
         self,
         dim: int,
         num_codepoints: int,
-        num_fonts: int,
+        num_families: int,
+        num_weight_buckets: int = 10,
+        num_style_buckets: int = 2,
         dim_mults: tuple[int, ...] = (1, 2, 4, 8),
         channels: int = 1,
         attn_dim_head: int = 32,
@@ -104,8 +107,14 @@ class FontIdConditionalUnet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
-        self.font_emb = nn.Embedding(num_fonts, time_dim)
-        cond_dim = time_dim * 2  # codepoint + font, concatenated
+        # Style is factorized into a discrete family identity (collapse-proof,
+        # shared by every weight of the family) plus additive weight and style
+        # offsets.  The additive structure ties the family together while
+        # keeping the members distinct.
+        self.family_emb = nn.Embedding(num_families, time_dim)
+        self.weight_emb = nn.Embedding(num_weight_buckets, time_dim)
+        self.style_emb = nn.Embedding(num_style_buckets, time_dim)
+        cond_dim = time_dim * 2  # codepoint + style, concatenated
         # Per-(codepoint, font) geometry regression head: predicts the five
         # em-unit labels (scale_x, scale_y, left_sidebearing, baseline_offset,
         # advance) needed to place a generated glyph back on the baseline.
@@ -151,19 +160,27 @@ class FontIdConditionalUnet(nn.Module):
         self.final_res_block = resnet_block(dim * 2, dim)
         self.final_conv = nn.Conv2d(dim, channels, 1)
 
-    def _cond(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
-        """Concatenated codepoint + font conditioning embedding."""
-        return torch.cat([self.codepoint_emb(codepoint), self.font_emb(font_id)], dim=-1)
+    def _cond(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
+        """Concatenated codepoint + factorized style conditioning embedding.
 
-    def predict_geometry(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
+        ``font_meta`` is ``(B, 3)`` long: ``[family_id, weight_bucket, style_bucket]``.
+        """
+        f = (
+            self.family_emb(font_meta[:, 0])
+            + self.weight_emb(font_meta[:, 1])
+            + self.style_emb(font_meta[:, 2])
+        )
+        return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
+
+    def predict_geometry(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
-        raw = self.geometry_head(self._cond(codepoint, font_id))
+        raw = self.geometry_head(self._cond(codepoint, font_meta))
         return _decode_geometry(raw)
 
     def geometry_loss(
         self,
         codepoint: torch.Tensor,
-        font_id: torch.Tensor,
+        font_meta: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         """Per-value MSE in em units.
@@ -172,7 +189,7 @@ class FontIdConditionalUnet(nn.Module):
         batch of the squared error, averaged over the five labels — so each
         label contributes equally regardless of its em magnitude.
         """
-        pred = self.predict_geometry(codepoint, font_id)  # (B, 5) em units
+        pred = self.predict_geometry(codepoint, font_meta)  # (B, 5) em units
         return ((pred - gt_geometry) ** 2).mean()
 
     def forward(
@@ -180,7 +197,7 @@ class FontIdConditionalUnet(nn.Module):
         x: torch.Tensor,
         time: torch.Tensor,
         codepoint: torch.Tensor,
-        font_id: torch.Tensor,
+        font_meta: torch.Tensor,
         x_self_cond: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.self_condition:
@@ -191,7 +208,7 @@ class FontIdConditionalUnet(nn.Module):
         r = x.clone()
 
         t = self.time_mlp(time)
-        c = self._cond(codepoint, font_id)
+        c = self._cond(codepoint, font_meta)
 
         h = []
         for block1, block2, attn, downsample in self.downs:
@@ -281,7 +298,7 @@ class FontIdDiffusion(nn.Module):
             - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
 
-    def p_losses(self, x_start, t, codepoint, font_id, noise=None):
+    def p_losses(self, x_start, t, codepoint, font_meta, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
 
@@ -291,29 +308,29 @@ class FontIdDiffusion(nn.Module):
         x_self_cond = None
         if self.self_condition and random() < 0.5:
             with torch.no_grad():
-                first_pred = self.model(x, t, codepoint, font_id)
+                first_pred = self.model(x, t, codepoint, font_meta)
                 x_self_cond = self.predict_start_from_noise(x, t, first_pred).clamp(-1.0, 1.0).detach()
 
-        pred = self.model(x, t, codepoint, font_id, x_self_cond=x_self_cond)
+        pred = self.model(x, t, codepoint, font_meta, x_self_cond=x_self_cond)
         return F.mse_loss(pred, noise)
 
-    def forward(self, img, codepoint, font_id, times=None):
+    def forward(self, img, codepoint, font_meta, times=None):
         b = img.shape[0]
         img = normalize_to_neg_one_to_one(img)
         times = default(
             times,
             lambda: torch.randint(0, self.num_timesteps, (b,), device=img.device).long(),
         )
-        return self.p_losses(img, times, codepoint, font_id)
+        return self.p_losses(img, times, codepoint, font_meta)
 
     @torch.no_grad()
-    def sample(self, codepoint, font_id):
+    def sample(self, codepoint, font_meta):
         b = codepoint.shape[0]
         shape = (b, self.channels, self.image_size, self.image_size)
-        return self.ddim_sample(codepoint, font_id, shape)
+        return self.ddim_sample(codepoint, font_meta, shape)
 
     @torch.no_grad()
-    def ddim_sample(self, codepoint, font_id, shape):
+    def ddim_sample(self, codepoint, font_meta, shape):
         b = shape[0]
         device = self.device
         total = self.num_timesteps
@@ -329,7 +346,7 @@ class FontIdDiffusion(nn.Module):
         for time, time_next in time_pairs:
             time_cond = torch.full((b,), time, device=device, dtype=torch.long)
             pred_noise = self.model(
-                img, time_cond, codepoint, font_id, x_self_cond=x_start
+                img, time_cond, codepoint, font_meta, x_self_cond=x_start
             )
             x_start = self.predict_start_from_noise(img, time_cond, pred_noise)
             x_start = x_start.clamp(-1.0, 1.0)
@@ -353,14 +370,16 @@ class FontIdDiffusionModel(SaveLoadModel):
 
     def __init__(self, config: FontIdDiffusionConfig) -> None:
         super().__init__()
-        if config.num_codepoints <= 0 or config.num_fonts <= 0:
-            raise ValueError("FontIdDiffusionConfig requires num_codepoints and num_fonts.")
+        if config.num_codepoints <= 0 or config.num_families <= 0:
+            raise ValueError("FontIdDiffusionConfig requires num_codepoints and num_families.")
         self.config = config
 
         unet = FontIdConditionalUnet(
             dim=config.dim,
             num_codepoints=config.num_codepoints,
-            num_fonts=config.num_fonts,
+            num_families=config.num_families,
+            num_weight_buckets=config.num_weight_buckets,
+            num_style_buckets=config.num_style_buckets,
             dim_mults=config.dim_mults,
             channels=config.channels,
             attn_dim_head=config.attn_dim_head,
@@ -378,23 +397,23 @@ class FontIdDiffusionModel(SaveLoadModel):
         )
 
     def forward(
-        self, img: torch.Tensor, codepoint: torch.Tensor, font_id: torch.Tensor
+        self, img: torch.Tensor, codepoint: torch.Tensor, font_meta: torch.Tensor
     ) -> torch.Tensor:
-        return self.diffusion(img, codepoint, font_id)
+        return self.diffusion(img, codepoint, font_meta)
 
     @torch.no_grad()
-    def sample(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
-        return self.diffusion.sample(codepoint, font_id)
+    def sample(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
+        return self.diffusion.sample(codepoint, font_meta)
 
-    def predict_geometry(self, codepoint: torch.Tensor, font_id: torch.Tensor) -> torch.Tensor:
+    def predict_geometry(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
-        return self.diffusion.model.predict_geometry(codepoint, font_id)
+        return self.diffusion.model.predict_geometry(codepoint, font_meta)
 
     def geometry_loss(
-        self, codepoint: torch.Tensor, font_id: torch.Tensor, gt_geometry: torch.Tensor
+        self, codepoint: torch.Tensor, font_meta: torch.Tensor, gt_geometry: torch.Tensor
     ) -> torch.Tensor:
-        """Normalized MSE between predicted and target geometry labels."""
-        return self.diffusion.model.geometry_loss(codepoint, font_id, gt_geometry)
+        """Per-value MSE in em units between predicted and target geometry labels."""
+        return self.diffusion.model.geometry_loss(codepoint, font_meta, gt_geometry)
 
 
 def build_fontid_model(config: FontIdDiffusionConfig) -> FontIdDiffusionModel:

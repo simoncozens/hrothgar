@@ -51,7 +51,9 @@ class FontIdTrainingLoop(TrainingLoop):
         config = FontIdDiffusionConfig(
             image_size=train_args.image_size,
             num_codepoints=maker.num_codepoints,
-            num_fonts=maker.num_fonts,
+            num_families=maker.num_families,
+            num_weight_buckets=maker.num_weight_buckets,
+            num_style_buckets=maker.num_style_buckets,
             dim=train_args.dim,
             timesteps=train_args.timesteps,
             sampling_timesteps=train_args.sampling_timesteps,
@@ -67,6 +69,14 @@ class FontIdTrainingLoop(TrainingLoop):
         # Persist the codepoint ordering so inference can map a codepoint to its id.
         with Path(str(train_args.model_path) + ".codepoints.json").open("w") as f:
             json.dump(maker.cp_list, f, indent=2)
+            f.write("\n")
+        # Persist the family list and per-font (family, weight, style) so
+        # inference can reconstruct the factorized style conditioning.
+        with Path(str(train_args.model_path) + ".families.json").open("w") as f:
+            json.dump(maker.families, f, indent=2)
+            f.write("\n")
+        with Path(str(train_args.model_path) + ".font_meta.json").open("w") as f:
+            json.dump([list(m) for m in maker.font_meta], f, indent=2)
             f.write("\n")
 
         self.model = build_fontid_model(config).to(self.device)
@@ -119,12 +129,12 @@ class FontIdTrainingLoop(TrainingLoop):
         self._set_lr()
         images = batch["images"].to(self.device)
         codepoints = batch["codepoints"].to(self.device)
-        font_ids = batch["font_ids"].to(self.device)
+        font_meta = batch["font_meta"].to(self.device)
         geometry = batch["geometry"].to(self.device)
 
         with self._autocast_context():
-            diffusion_loss = self.model(images, codepoints, font_ids)
-            geometry_loss = self.model.geometry_loss(codepoints, font_ids, geometry)
+            diffusion_loss = self.model(images, codepoints, font_meta)
+            geometry_loss = self.model.geometry_loss(codepoints, font_meta, geometry)
             loss = diffusion_loss + self.geometry_weight * geometry_loss
         return loss, {
             "loss": loss.detach().float(),
@@ -142,13 +152,13 @@ class FontIdTrainingLoop(TrainingLoop):
             geo_mses, geo_per_value = [], []
             for batch in itertools.islice(self.val_loader, self.validation_batches):
                 codepoints = batch["codepoints"].to(self.device)
-                font_ids = batch["font_ids"].to(self.device)
+                font_meta = batch["font_meta"].to(self.device)
                 gts = batch["images"].to(self.device).float()
                 geometry = batch["geometry"].to(self.device).float()
 
                 with self._autocast_context():
-                    recs = self.model.sample(codepoints, font_ids)
-                    pred_geometry = self.model.predict_geometry(codepoints, font_ids)
+                    recs = self.model.sample(codepoints, font_meta)
+                    pred_geometry = self.model.predict_geometry(codepoints, font_meta)
                 # Metrics in fp32 (LPIPS/SSIM are precision-sensitive).
                 recs = recs.float().clamp(0.0, 1.0)
                 pred_geometry = pred_geometry.float()
@@ -186,13 +196,14 @@ class FontIdTrainingLoop(TrainingLoop):
         n = min(8, batch["images"].shape[0])
         codepoints = batch["codepoints"][:n].to(self.device)
         font_ids = batch["font_ids"][:n].to(self.device)
+        font_meta = batch["font_meta"][:n].to(self.device)
         gts = batch["images"][:n].to(self.device).float()
         geometry = batch["geometry"][:n]  # (n, 5) GT geometry (CPU)
 
         with torch.no_grad():
             with self._autocast_context():
-                recs = self.model.sample(codepoints, font_ids)
-                pred_geometry = self.model.predict_geometry(codepoints, font_ids)
+                recs = self.model.sample(codepoints, font_meta)
+                pred_geometry = self.model.predict_geometry(codepoints, font_meta)
         recs = recs.float().clamp(0.0, 1.0)
         pred_geometry = pred_geometry.float()
 
