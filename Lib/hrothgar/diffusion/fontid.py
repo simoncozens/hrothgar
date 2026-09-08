@@ -249,6 +249,7 @@ class FontIdDiffusion(nn.Module):
         beta_schedule: str = "cosine",
         ddim_sampling_eta: float = 0.0,
         self_condition: bool = False,
+        min_snr_gamma: float = 5.0,
     ) -> None:
         super().__init__()
         assert model.channels == model.out_dim
@@ -256,6 +257,7 @@ class FontIdDiffusion(nn.Module):
         self.channels = model.channels
         self.image_size = image_size
         self.self_condition = self_condition
+        self.min_snr_gamma = min_snr_gamma
 
         if beta_schedule == "linear":
             betas = linear_beta_schedule(timesteps)
@@ -312,7 +314,18 @@ class FontIdDiffusion(nn.Module):
                 x_self_cond = self.predict_start_from_noise(x, t, first_pred).clamp(-1.0, 1.0).detach()
 
         pred = self.model(x, t, codepoint, font_meta, x_self_cond=x_self_cond)
-        return F.mse_loss(pred, noise)
+
+        if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
+            return F.mse_loss(pred, noise)
+
+        # Min-SNR weighting: w(t) = min(SNR(t), gamma).  This shifts gradient
+        # budget from the coarse (high-noise) steps toward the fine-detail
+        # (low-noise) steps, which is where the terminal/serif detail lives.
+        loss = F.mse_loss(pred, noise, reduction="none")
+        loss = loss.mean(dim=(1, 2, 3))  # (B,) per-sample MSE
+        snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t])  # (B,)
+        weight = snr.clamp(max=self.min_snr_gamma)
+        return (loss * weight).mean()
 
     def forward(self, img, codepoint, font_meta, times=None):
         b = img.shape[0]
@@ -394,6 +407,7 @@ class FontIdDiffusionModel(SaveLoadModel):
             beta_schedule=config.beta_schedule,
             ddim_sampling_eta=config.ddim_sampling_eta,
             self_condition=config.self_condition,
+            min_snr_gamma=config.min_snr_gamma,
         )
 
     def forward(

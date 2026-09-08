@@ -214,6 +214,10 @@ class FontIdDiffusionConfig:
     sampling_timesteps: int | None = 50
     beta_schedule: str = "cosine"
     ddim_sampling_eta: float = 0.0
+    # Min-SNR loss weighting: rebalance the per-timestep denoising loss toward
+    # low-noise (fine-detail) steps with ``w(t) = min(SNR(t), gamma)``.  ``<= 0``
+    # disables it (uniform weighting).
+    min_snr_gamma: float = 5.0
     # Self-conditioning: condition the denoiser on its own predicted x0 from the
     # previous sampling step (and ~50% of the time during training).
     self_condition: bool = True

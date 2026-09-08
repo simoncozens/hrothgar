@@ -60,6 +60,7 @@ class FontIdTrainingLoop(TrainingLoop):
             learning_rate=train_args.learning_rate,
             warmup_steps=train_args.warmup_steps,
             geometry_loss_weight=train_args.geometry_weight,
+            min_snr_gamma=train_args.min_snr_gamma,
         )
         config.save_sidecar(train_args.model_path)
         # Persist the font ordering so inference can map a font back to its id.
@@ -315,6 +316,8 @@ if __name__ == "__main__":
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--sampling-timesteps", type=int, default=100)
+    parser.add_argument("--min-snr-gamma", type=float, default=5.0,
+                        help="Min-SNR loss weighting gamma (<= 0 disables, uniform)")
     parser.add_argument("--precision", type=str, choices=["fp32", "bf16"], default="bf16",
                         help="Training precision (bf16 = AMP, fp32 = no AMP)")
     parser.add_argument("--validation-every", type=int, default=1000)
