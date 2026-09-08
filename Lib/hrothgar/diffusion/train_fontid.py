@@ -64,6 +64,10 @@ class FontIdTrainingLoop(TrainingLoop):
         with Path(str(train_args.model_path) + ".fonts.json").open("w") as f:
             json.dump([str(font.path) for font in maker.fonts], f, indent=2)
             f.write("\n")
+        # Persist the codepoint ordering so inference can map a codepoint to its id.
+        with Path(str(train_args.model_path) + ".codepoints.json").open("w") as f:
+            json.dump(maker.cp_list, f, indent=2)
+            f.write("\n")
 
         self.model = build_fontid_model(config).to(self.device)
         self.geometry_weight = train_args.geometry_weight
