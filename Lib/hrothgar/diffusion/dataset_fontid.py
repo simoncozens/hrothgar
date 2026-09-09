@@ -30,7 +30,12 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import LATIN_KERNEL, _has_non_empty_outline, _hb_font_for_face
+from hrothgar.dataset import (
+    ClassBalancedBatchSampler,
+    LATIN_KERNEL,
+    _has_non_empty_outline,
+    _hb_font_for_face,
+)
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
 from hrothgar.glyph_rendering import geometry_tensor
 from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
@@ -60,7 +65,7 @@ class _PairDataset(TorchDataset):
         fonts: Sequence[GoogleFont],
         cp_list: Sequence[int],
         image_size: int,
-        font_meta: Sequence[tuple[int, int, int]],
+        font_meta: Sequence[tuple[int, float, int]],
     ) -> None:
         self.pairs = pairs
         self.fonts = fonts
@@ -82,7 +87,7 @@ class _PairDataset(TorchDataset):
             "geometry": geometry_tensor(geometry),  # (5,)
             "cp_idx": cp_idx,
             "font_id": font_id,
-            "font_meta": torch.tensor(self.font_meta[font_id], dtype=torch.long),  # (3,)
+            "font_meta": torch.tensor(self.font_meta[font_id], dtype=torch.float32),  # (3,)
         }
 
 
@@ -109,6 +114,9 @@ class FontIdDatasetMaker:
         extra_codepoints: Optional[Sequence[int]] = None,
         remove_codepoints: Optional[Sequence[int]] = None,
         oversample_codepoints: Optional[dict[int, int]] = None,
+        oversample_pairs: Optional[Sequence[tuple[str, int]]] = None,
+        oversample_pair_factor: int = 20,
+        class_balanced: bool = False,
         heldout_fraction: float = 0.25,
         min_train_fonts_per_codepoint: int = 20,
         split_seed: int = 1234,
@@ -125,6 +133,13 @@ class FontIdDatasetMaker:
         # trained (no held-out split) so rare glyphs like the rupee sign get
         # every available example, then their training pairs are duplicated.
         self.oversample_codepoints = dict(oversample_codepoints or {})
+        # Specific ``(font filename, codepoint)`` pairs to oversample (used to
+        # push interesting/rare styles onto an under-represented glyph like the
+        # rupee sign).  Stored as ``(basename, codepoint)``; resolved to
+        # ``(font_id, cp_idx)`` once the font/codepoint orderings exist.
+        self.oversample_pairs = list(oversample_pairs or [])
+        self.oversample_pair_factor = oversample_pair_factor
+        self.class_balanced = class_balanced
         self.heldout_fraction = heldout_fraction
         self.min_train_fonts_per_codepoint = min_train_fonts_per_codepoint
         self.split_seed = split_seed
@@ -136,16 +151,28 @@ class FontIdDatasetMaker:
         self.font_to_id = {str(f.path): i for i, f in enumerate(self.fonts)}
         self.cp_to_idx = {cp: i for i, cp in enumerate(self.character_set)}
         self.cp_list = list(self.character_set)
+        # Basename -> font id(s), so the oversample CSV (which lists files by
+        # basename like ``Agbalumo-Regular.ttf``) can be resolved to ids.
+        self.name_to_ids: dict[str, list[int]] = defaultdict(list)
+        for i, f in enumerate(self.fonts):
+            self.name_to_ids[f.path.name].append(i)
+        self.oversample_pair_ids: set[tuple[int, int]] = set()
+        for name, cp in self.oversample_pairs:
+            if cp not in self.cp_to_idx:
+                continue
+            cp_idx = self.cp_to_idx[cp]
+            for fid in self.name_to_ids.get(name, []):
+                self.oversample_pair_ids.add((fid, cp_idx))
 
         # Factorized style identity: a family slot (shared across the family's
-        # weights, hence collapse-proof) plus weight and style buckets.  Ordered
-        # deterministically so the family->id mapping is reproducible.
+        # weights, hence collapse-proof) plus a continuous weight scalar and a
+        # style (upright/italic) bucket.  Ordered deterministically so the
+        # family->id mapping is reproducible.
         self.families = sorted({f.family for f in self.fonts})
         self.family_to_id = {fam: i for i, fam in enumerate(self.families)}
-        self.num_weight_buckets = 10  # weight // 100 -> 100..900
         self.num_style_buckets = 2  # upright, italic
-        # (family_id, weight_bucket, style_bucket) per font, parallel to self.fonts.
-        self.font_meta = [self._bucket_font(f) for f in self.fonts]
+        # (family_id, weight, style_bucket) per font, parallel to self.fonts.
+        self.font_meta = [self._font_meta(f) for f in self.fonts]
 
         self.num_fonts = len(self.fonts)
         self.num_families = len(self.families)
@@ -161,13 +188,17 @@ class FontIdDatasetMaker:
             f"{len(self.val_pairs)} held-out"
         )
 
-    def _bucket_font(self, font: GoogleFont) -> tuple[int, int, int]:
-        """Map a font to its ``(family_id, weight_bucket, style_bucket)``."""
+    def _font_meta(self, font: GoogleFont) -> tuple[int, float, int]:
+        """Map a font to its ``(family_id, weight, style_bucket)``.
+
+        ``weight`` is normalized so regular (400) is 0, bold is positive, light
+        is negative — a continuous offset along the learned weight direction.
+        """
         weight, style = _font_weight_style(font)
         family_id = self.family_to_id[font.family]
-        weight_bucket = min(9, max(1, weight // 100))
+        wght = (weight - 400.0) / 400.0
         style_bucket = 0 if style == "normal" else 1
-        return (family_id, weight_bucket, style_bucket)
+        return (family_id, wght, style_bucket)
 
     def _filter_fonts(self) -> None:
         needed = set(self.character_set)
@@ -203,11 +234,23 @@ class FontIdDatasetMaker:
                     self.train_pairs.extend([(fid, cp_idx)] * factor)
                 continue
 
-            n = len(font_ids)
+            # Specific (font, codepoint) pairs the user wants oversampled: they
+            # are always trained (never held out) and duplicated so interesting/
+            # rare styles get enough examples on that glyph.
+            oversampled = [
+                fid for fid in font_ids if (fid, cp_idx) in self.oversample_pair_ids
+            ]
+            normal = [
+                fid for fid in font_ids if (fid, cp_idx) not in self.oversample_pair_ids
+            ]
+            for fid in oversampled:
+                self.train_pairs.extend([(fid, cp_idx)] * self.oversample_pair_factor)
+
+            n = len(normal)
             max_holdout = max(0, n - self.min_train_fonts_per_codepoint)
             n_holdout = min(int(self.heldout_fraction * n), max_holdout)
-            holdout = set(rng.sample(font_ids, n_holdout)) if n_holdout else set()
-            for fid in font_ids:
+            holdout = set(rng.sample(normal, n_holdout)) if n_holdout else set()
+            for fid in normal:
                 pair = (fid, cp_idx)
                 if fid in holdout:
                     self.val_pairs.append(pair)
@@ -234,7 +277,28 @@ class FontIdDatasetMaker:
             persistent_workers=NUM_WORKERS > 0,
         )
 
+    def _balanced_loader(self, pairs: list[tuple[int, int]]):
+        dataset = _PairDataset(
+            pairs, self.fonts, self.cp_list, self.image_size, self.font_meta
+        )
+        sampler = ClassBalancedBatchSampler(
+            pairs,
+            key=lambda pair: self.fonts[pair[0]].category(),
+            batch_size=self.batch_size,
+            drop_last=True,
+        )
+        return DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            collate_fn=_collate_fn,
+            num_workers=NUM_WORKERS,
+            pin_memory=True,
+            persistent_workers=NUM_WORKERS > 0,
+        )
+
     def train_loader(self):
+        if self.class_balanced:
+            return self._balanced_loader(self.train_pairs)
         return self._loader(self.train_pairs, shuffle=True)
 
     def val_loader(self):

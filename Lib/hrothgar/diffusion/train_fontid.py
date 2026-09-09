@@ -41,6 +41,9 @@ class FontIdTrainingLoop(TrainingLoop):
             extra_codepoints=train_args.extra_codepoints,
             remove_codepoints=train_args.remove_codepoints,
             oversample_codepoints=train_args.oversample_codepoints,
+            oversample_pairs=train_args.oversample_pairs,
+            oversample_pair_factor=train_args.oversample_pair_factor,
+            class_balanced=train_args.class_balanced,
             heldout_fraction=train_args.heldout_fraction,
             min_train_fonts_per_codepoint=train_args.min_train_fonts_per_codepoint,
             split_seed=train_args.split_seed,
@@ -52,7 +55,6 @@ class FontIdTrainingLoop(TrainingLoop):
             image_size=train_args.image_size,
             num_codepoints=maker.num_codepoints,
             num_families=maker.num_families,
-            num_weight_buckets=maker.num_weight_buckets,
             num_style_buckets=maker.num_style_buckets,
             dim=train_args.dim,
             timesteps=train_args.timesteps,
@@ -275,6 +277,32 @@ class FontIdTrainingLoop(TrainingLoop):
         return torch.from_numpy(rgb).float().permute(2, 0, 1)  # (3, H, W)
 
 
+def _parse_oversample_pairs(path: str) -> list[tuple[str, int]]:
+    """Parse an oversample CSV of ``font filename,character`` lines.
+
+    The file has no header.  Each line names a font file (basename, e.g.
+    ``Agbalumo-Regular.ttf``) and the single character to oversample in it.
+    Blank lines, lines without a comma, and entries whose character is empty
+    are skipped — this also drops the stray self-referential filename that can
+    appear in a hand-curated list.  Returns ``(basename, codepoint)`` tuples.
+    """
+    if not path:
+        return []
+    pairs: list[tuple[str, int]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or "," not in line:
+                continue
+            filename, char = line.split(",", 1)
+            filename = filename.strip()
+            char = char.strip()
+            if not filename or not char:
+                continue
+            pairs.append((filename, ord(char[0])))
+    return pairs
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # CLI entry point
 # ══════════════════════════════════════════════════════════════════════════
@@ -302,6 +330,12 @@ if __name__ == "__main__":
                         help="Codepoints to oversample in training (e.g. '₹')")
     parser.add_argument("--oversample-factor", type=int, default=20,
                         help="Duplication factor for --oversample-codepoints")
+    parser.add_argument("--oversample-pairs", type=str, default="",
+                        help="CSV of 'font filename,character' pairs to oversample (no header)")
+    parser.add_argument("--oversample-pair-factor", type=int, default=20,
+                        help="Duplication factor for --oversample-pairs")
+    parser.add_argument("--class-balanced", action="store_true",
+                        help="Class-balance training batches by font category")
     parser.add_argument("--heldout-fraction", type=float, default=0.25,
                         help="Fraction of fonts to hold out per codepoint")
     parser.add_argument("--min-train-fonts-per-codepoint", type=int, default=20,
@@ -343,6 +377,9 @@ if __name__ == "__main__":
     args.remove_codepoints = [ord(c) for c in args.remove_codepoints]
     oversample_cps = [ord(c) for c in args.oversample_codepoints]
     args.oversample_codepoints = {cp: args.oversample_factor for cp in oversample_cps}
+
+    # Parse the oversample-pairs CSV ('font filename,character' per line).
+    args.oversample_pairs = _parse_oversample_pairs(args.oversample_pairs)
 
     loop = FontIdTrainingLoop(args)
     loop.train()

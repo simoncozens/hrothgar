@@ -77,7 +77,6 @@ class FontIdConditionalUnet(nn.Module):
         dim: int,
         num_codepoints: int,
         num_families: int,
-        num_weight_buckets: int = 10,
         num_style_buckets: int = 2,
         dim_mults: tuple[int, ...] = (1, 2, 4, 8),
         channels: int = 1,
@@ -107,12 +106,13 @@ class FontIdConditionalUnet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
-        # Style is factorized into a discrete family identity (collapse-proof,
-        # shared by every weight of the family) plus additive weight and style
-        # offsets.  The additive structure ties the family together while
-        # keeping the members distinct.
+        # Style is a discrete family identity (collapse-proof, shared across a
+        # family's weights) plus an italic one-hot, plus a *continuous* weight
+        # modulation along a single learned direction.  The linear weight keeps
+        # the construction fixed (bold = regular + more along one direction)
+        # rather than letting weight change the skeleton.
         self.family_emb = nn.Embedding(num_families, time_dim)
-        self.weight_emb = nn.Embedding(num_weight_buckets, time_dim)
+        self.weight_direction = nn.Parameter(torch.randn(time_dim))
         self.style_emb = nn.Embedding(num_style_buckets, time_dim)
         cond_dim = time_dim * 2  # codepoint + style, concatenated
         # Per-(codepoint, font) geometry regression head: predicts the five
@@ -163,12 +163,17 @@ class FontIdConditionalUnet(nn.Module):
     def _cond(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
         """Concatenated codepoint + factorized style conditioning embedding.
 
-        ``font_meta`` is ``(B, 3)`` long: ``[family_id, weight_bucket, style_bucket]``.
+        ``font_meta`` is ``(B, 3)`` float32: ``[family_id, weight, style]`` where
+        ``weight`` is the normalized scalar (regular = 0) and ``family_id`` /
+        ``style`` are integer indices.
         """
+        family_id = font_meta[:, 0].long()
+        weight = font_meta[:, 1]
+        style = font_meta[:, 2].long()
         f = (
-            self.family_emb(font_meta[:, 0])
-            + self.weight_emb(font_meta[:, 1])
-            + self.style_emb(font_meta[:, 2])
+            self.family_emb(family_id)
+            + weight[:, None] * self.weight_direction[None, :]
+            + self.style_emb(style)
         )
         return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
 
@@ -393,7 +398,6 @@ class FontIdDiffusionModel(SaveLoadModel):
             dim=config.dim,
             num_codepoints=config.num_codepoints,
             num_families=config.num_families,
-            num_weight_buckets=config.num_weight_buckets,
             num_style_buckets=config.num_style_buckets,
             dim_mults=config.dim_mults,
             channels=config.channels,

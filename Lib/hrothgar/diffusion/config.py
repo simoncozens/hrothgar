@@ -198,9 +198,8 @@ class FontIdDiffusionConfig:
     # Vocabulary sizes (data-derived; set before building the model).
     num_codepoints: int = 0
     num_families: int = 0
-    # Number of buckets in the factorized style embedding.  Weight is binned by
-    # ``weight // 100`` (100..900); style is upright vs italic.
-    num_weight_buckets: int = 10
+    # Style is upright vs italic (a one-hot).  Weight is a continuous scalar
+    # applied along a single learned direction, not a discrete bucket.
     num_style_buckets: int = 2
 
     # Denoiser UNet.
