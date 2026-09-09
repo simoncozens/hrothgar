@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from hrothgar.googlefonts import Font
 from hrothgar.style_embedding.config import FontStyleEmbedderConfig

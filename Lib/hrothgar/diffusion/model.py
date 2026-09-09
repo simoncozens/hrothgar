@@ -20,12 +20,11 @@ and this facade stay put.
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
-
 from denoising_diffusion_pytorch.classifier_free_guidance import (
     GaussianDiffusion,
     Unet,
 )
+from torch import nn
 
 from hrothgar.diffusion.config import DiffusionConfig
 

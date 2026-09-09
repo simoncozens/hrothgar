@@ -1,6 +1,6 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 
 class EagleLoss(nn.Module):
@@ -28,7 +28,7 @@ class EagleLoss(nn.Module):
     """
 
     def __init__(self, patch_size, cpu=False, cutoff=0.5):
-        super(EagleLoss, self).__init__()
+        super().__init__()
         self.patch_size = patch_size
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() and not cpu else "cpu"

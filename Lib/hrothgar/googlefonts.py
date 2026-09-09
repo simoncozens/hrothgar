@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import itertools
 from functools import cached_property
 from pathlib import Path
-from typing import Dict, List, Optional, Self, Set, Union
+from typing import Optional, Self, Union
 
 import numpy as np
 import uharfbuzz as hb
@@ -20,7 +22,7 @@ class Font:
     path: Path
 
     def render(
-        self, char: int, size: int = 64, axis_position: Optional[List[float]] = None
+        self, char: int, size: int = 64, axis_position: Optional[list[float]] = None
     ) -> np.ndarray:
         """Render a single glyph as a (3, size, size) float32 array."""
         try:
@@ -30,7 +32,7 @@ class Font:
             return np.ones((3, size, size), dtype=np.float32)
 
     def render_gid(
-        self, gid: int, size: int = 64, axis_position: Optional[List[float]] = None
+        self, gid: int, size: int = 64, axis_position: Optional[list[float]] = None
     ) -> np.ndarray:
         """Render a single glyph by GID as a (3, size, size) float32 array."""
         try:
@@ -40,7 +42,7 @@ class Font:
             return np.ones((3, size, size), dtype=np.float32)
 
     @cached_property
-    def codepoints(self) -> Set[int]:
+    def codepoints(self) -> set[int]:
         """Unicode codepoints present in this font."""
         return set(self.hb_face.unicodes)
 
@@ -52,7 +54,7 @@ class Font:
         """Empty description — no metadata available for standalone fonts."""
         return ""
 
-    def tags(self) -> Dict[str, float]:
+    def tags(self) -> dict[str, float]:
         """Empty tags — no metadata available for standalone fonts."""
         return {}
 
@@ -60,7 +62,7 @@ class Font:
         """Coarse style classification used for bucketed training metrics."""
         return "UNKNOWN"
 
-    def sample_axis_positions(self, splits: int = 5) -> List[List[float]]:
+    def sample_axis_positions(self, splits: int = 5) -> list[list[float]]:
         """Sample axis positions for this font. If the font has no variable axes, returns a list of lists, with each internal list being the user-space location on the axes ordered by their order in the fvar table."""
         if "fvar" not in self.hb_face.table_tags:
             return [[]]
@@ -77,7 +79,7 @@ class Font:
         instances = [[instance[ix] for ix in tags] for instance in instances]
         return [[]] + instances
 
-    def random_axis_position(self) -> List[float]:
+    def random_axis_position(self) -> list[float]:
         """Return a random axis position for this font. If the font has no variable axes, returns an empty list."""
         if "fvar" not in self.hb_face.table_tags:
             return []
@@ -88,7 +90,7 @@ class Font:
         ]
         return axes
 
-    def vertical_metrics(self) -> Dict[str, float]:
+    def vertical_metrics(self) -> dict[str, float]:
         """Return the vertical metrics for this font."""
         hbfont = hb.Font(self.hb_face)
         extents = hbfont.get_font_extents("ltr")
@@ -120,7 +122,7 @@ class GoogleFonts:
     def __init__(
         self,
         repo: str | Path,
-        having: Optional[Set[int]] = None,
+        having: Optional[set[int]] = None,
         max_fonts: Optional[int] = None,
     ):
         """Load fonts from ``repo`` (``ofl/*/*.ttf``), newest first by path.
@@ -161,7 +163,7 @@ class GoogleFonts:
                 self.tags[family] = self.tags.get(family, {})
                 self.tags[family][tag] = float(value)
 
-    def should_skip(self, font: "GoogleFont") -> bool:
+    def should_skip(self, font: GoogleFont) -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
         # Ban all small-caps fonts, they mess everything up
@@ -200,7 +202,7 @@ class GoogleFont(Font):
         self.hb_face = hb.Face(hb.Blob.from_file_path(self.path))
         self.gf = gf
 
-    def tags(self) -> Dict[str, float]:
+    def tags(self) -> dict[str, float]:
         """Returns the tags for this font, as a dictionary of tag name to value. The values are centiles from 0 to 100."""
         return self.gf.tags.get(self.family, {}) if self.gf else {}
 
@@ -314,14 +316,14 @@ class StandaloneFont(Font):
     def __init__(
         self,
         path: Union[str, Path],
-        reference: Optional["StandaloneFont | GoogleFont"] = None,
+        reference: Optional[StandaloneFont | GoogleFont] = None,
     ) -> None:
         self.path = Path(path)
         self.hb_face = hb.Face(hb.Blob.from_file_path(str(self.path)))
         self.family = self.path.stem
         self._reference = reference
 
-    def reference_font(self) -> Optional["StandaloneFont | GoogleFont"]:
+    def reference_font(self) -> Optional[StandaloneFont | GoogleFont]:
         """Return the reference (content) font, or None if not set."""
         return self._reference
 
@@ -371,7 +373,7 @@ def centile_to_text(score: int) -> str:
         return "very"
 
 
-def compute_display_score(tags: Dict[str, float]) -> float:
+def compute_display_score(tags: dict[str, float]) -> float:
     """Derive a display-ness score (0-100) from a font's tag composition.
 
     Display fonts are characterized by distinctive visual features like ornaments,

@@ -26,11 +26,7 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
-from torch import einsum
-
 from denoising_diffusion_pytorch.classifier_free_guidance import (
     Attention,
     Downsample,
@@ -41,15 +37,15 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
     Upsample,
     cosine_beta_schedule,
     default,
-    exists,
     extract,
     linear_beta_schedule,
     normalize_to_neg_one_to_one,
     unnormalize_to_zero_to_one,
 )
+from einops import rearrange
+from torch import einsum, nn
 
 from hrothgar.diffusion.config import ExemplarDiffusionConfig
-
 
 # ---------------------------------------------------------------------------
 # Style encoder

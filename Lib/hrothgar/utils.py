@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import datetime
 import random
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -24,7 +26,7 @@ def torch_setup() -> torch.device:
     return device
 
 
-def progress_values(loss_info: Dict[str, torch.Tensor]):
+def progress_values(loss_info: dict[str, torch.Tensor]):
     """Convert scalar loss tensors to pkbar's expected ``[(name, value), ...]`` format."""
     return [(key, float(value.detach().cpu())) for key, value in loss_info.items()]
 
@@ -196,7 +198,7 @@ class TrainingLoop:
     def validation(self):
         pass
 
-    def train_step(self, batch) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    def train_step(self, batch) -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Perform a single training step on a batch of data. Must be implemented by subclass.
 
         Returns:

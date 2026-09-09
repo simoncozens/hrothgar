@@ -1,4 +1,6 @@
-from collections.abc import Iterator, Iterable
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
 from typing import Generic, TypeVar, overload
 
 from torch import nn
@@ -17,11 +19,11 @@ class TypedModuleList(Generic[T], nn.ModuleList):
     def __iter__(self) -> Iterator[T]:
         return super().__iter__()  # type: ignore[no-any-return]
 
-    def append(self, module: T) -> "TypedModuleList[T]":  # type: ignore[override]
+    def append(self, module: T) -> TypedModuleList[T]:  # type: ignore[override]
         return super().append(module)  # type: ignore[return-value]
 
     @overload
-    def __getitem__(self, idx: slice) -> "TypedModuleList[T]": ...
+    def __getitem__(self, idx: slice) -> TypedModuleList[T]: ...
 
     @overload
     def __getitem__(self, idx: int) -> T: ...

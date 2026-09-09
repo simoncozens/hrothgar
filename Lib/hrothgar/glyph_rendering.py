@@ -44,7 +44,7 @@ GEOMETRY_NAMES = tuple(name for name, _, _ in GEOMETRY_SPEC)
 
 
 def render_glyph(
-    font: "Font",
+    font: Font,
     codepoint: int,
     size: int,
     axis_position: Optional[list[float]] = None,
@@ -117,7 +117,7 @@ def crop_to_ink(rendering: torch.Tensor, size: int) -> torch.Tensor:
 
 
 def render_normalized(
-    font: "Font",
+    font: Font,
     codepoint: int,
     size: int,
     axis_position: Optional[list[float]] = None,

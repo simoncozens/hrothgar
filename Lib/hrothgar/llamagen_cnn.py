@@ -4,10 +4,9 @@ from __future__ import annotations
 #   LlamaGen: https://github.com/FoundationVision/LlamaGen/tree/main/tokenizer/tokenizer_image/vq_model.py
 #   taming-transformers: https://github.com/CompVis/taming-transformers
 #   maskgit: https://github.com/google-research/maskgit
-
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 
 class ConvBlock(nn.Module):
@@ -510,7 +509,7 @@ def compute_entropy_loss(affinity, loss_type="softmax", temperature=0.01):
     if loss_type == "softmax":
         target_probs = probs
     else:
-        raise ValueError("Entropy loss {} not supported".format(loss_type))
+        raise ValueError(f"Entropy loss {loss_type} not supported")
     avg_probs = torch.mean(target_probs, dim=0)
     avg_entropy = -torch.sum(avg_probs * torch.log(avg_probs + 1e-5))
     sample_entropy = -torch.mean(torch.sum(target_probs * log_probs, dim=-1))

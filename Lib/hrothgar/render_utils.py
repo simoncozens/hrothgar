@@ -13,9 +13,8 @@ from typing import Optional, Sequence
 import torch
 import uharfbuzz as hb
 
-from hrothgar.glyph_rendering import crop_to_ink
+from hrothgar.glyph_rendering import crop_to_ink, normalize_bitmap
 from hrothgar.glyph_rendering import render_glyph as _render_glyph_rgb
-from hrothgar.glyph_rendering import normalize_bitmap
 from hrothgar.render import render_gid_raw
 
 

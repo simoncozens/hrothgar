@@ -18,10 +18,9 @@ from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
-from hrothgar.googlefonts import GoogleFont, ALL_CATEGORIES
+from hrothgar.googlefonts import ALL_CATEGORIES, GoogleFont
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
 from hrothgar.style_embedding.render_utils import render_glyph
-
 
 # Canonical style-category and theme tags used for tag-weighted
 # multi-positive contrastive examples.  These capture the major stylistic
@@ -162,7 +161,7 @@ class FontStyleDatasetMaker(DatasetMaker):
                 else:
                     print("  → Cache invalid (NaN or zero vector); re-encoding.")
 
-        from transformers import AutoTokenizer, AutoModel
+        from transformers import AutoModel, AutoTokenizer
 
         print(f"Encoding text descriptions with {self._text_encoder_name} …")
         tokenizer = AutoTokenizer.from_pretrained(self._text_encoder_name)

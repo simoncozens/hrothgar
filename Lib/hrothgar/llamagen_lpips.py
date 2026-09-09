@@ -1,15 +1,17 @@
 """Stripped version of https://github.com/richzhang/PerceptualSimilarity/tree/master/models"""
+from __future__ import annotations
 
-import os, hashlib
-import requests
-from tqdm import tqdm
-
-import torch
-import torch.nn as nn
-from torchvision import models
-from torchvision.models import VGG16_Weights
+import hashlib
+import os
 from collections import namedtuple
 from typing import Optional, cast
+
+import requests
+import torch
+from torch import nn
+from torchvision import models
+from torchvision.models import VGG16_Weights
+from tqdm import tqdm
 
 URL_MAP = {"vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"}
 
@@ -40,7 +42,7 @@ def get_ckpt_path(name, root, check=False):
     assert name in URL_MAP
     path = os.path.join(root, CKPT_MAP[name])
     if not os.path.exists(path) or (check and not md5_hash(path) == MD5_MAP[name]):
-        print("Downloading {} model from {} to {}".format(name, URL_MAP[name], path))
+        print(f"Downloading {name} model from {URL_MAP[name]} to {path}")
         download(URL_MAP[name], path)
         md5 = md5_hash(path)
         assert md5 == MD5_MAP[name], md5
@@ -70,7 +72,7 @@ class LPIPS(nn.Module):
         self.load_state_dict(
             torch.load(ckpt, map_location=torch.device("cpu")), strict=False
         )
-        print("loaded pretrained LPIPS loss from {}".format(ckpt))
+        print(f"loaded pretrained LPIPS loss from {ckpt}")
 
     @classmethod
     def from_pretrained(cls, name="vgg_lpips"):
@@ -109,7 +111,7 @@ class LPIPS(nn.Module):
 
 class ScalingLayer(nn.Module):
     def __init__(self):
-        super(ScalingLayer, self).__init__()
+        super().__init__()
         self.register_buffer(
             "shift", torch.Tensor([-0.030, -0.088, -0.188])[None, :, None, None]
         )
@@ -125,7 +127,7 @@ class NetLinLayer(nn.Module):
     """A single linear layer which does a 1x1 conv"""
 
     def __init__(self, chn_in, chn_out=1, use_dropout=False):
-        super(NetLinLayer, self).__init__()
+        super().__init__()
         layers = (
             [
                 nn.Dropout(),
@@ -146,7 +148,7 @@ class vgg16(torch.nn.Module):
         pretrained=True,
         weights: Optional[VGG16_Weights] = None,
     ):
-        super(vgg16, self).__init__()
+        super().__init__()
         # Keep pretrained for compatibility but prefer explicit weights.
         if weights is None:
             weights = VGG16_Weights.IMAGENET1K_V1 if pretrained else None

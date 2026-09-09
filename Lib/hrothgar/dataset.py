@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import math
 import random
 from collections import defaultdict
-from typing import Callable, Generic, Optional, Sequence, Set, TypeVar
+from typing import Callable, Generic, Optional, Sequence, TypeVar
 
 import torch
 import uharfbuzz as hb
@@ -9,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset_constants import CAPS_ONLY, LATIN_CORE, LATIN_KERNEL, LGC_ALL
+from hrothgar.dataset_constants import LATIN_CORE, LATIN_KERNEL, CAPS_ONLY
 from hrothgar.googlefonts import GoogleFonts
 
 _T = TypeVar("_T")
@@ -25,7 +27,7 @@ def _has_non_empty_outline(extents) -> bool:
 
 def _hb_font_for_face(face):
     """Construct a HarfBuzz Font object for a face."""
-    return getattr(hb, "Font")(face)
+    return hb.Font(face)
 
 
 class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
@@ -118,8 +120,8 @@ class DatasetMaker:
         self,
         repo_url: str,
         batch_size: int,
-        having: Optional[Set[int]] = None,
-        target_codepoints: Optional[Set[int]] = None,
+        having: Optional[set[int]] = None,
+        target_codepoints: Optional[set[int]] = None,
         canary_size: Optional[int] = None,
         image_size: int = 128,
         split_seed: int = 1234,
@@ -129,7 +131,7 @@ class DatasetMaker:
         if character_set is None:
             character_set = LATIN_CORE
         self._character_set: list[int] = sorted(set(character_set))
-        having_filter: Optional[Set[int]] = None
+        having_filter: Optional[set[int]] = None
         if having is not None:
             having_filter = set(having)
 
@@ -212,12 +214,12 @@ class DatasetMaker:
     def test_set(self):
         return Dataset(self.test_fonts, codepoint_filter_fn=self.test_codepoint_filter)
 
-    def train_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+    def train_codepoint_filter(self, font_codepoints: set[int]) -> set[int]:
         if self.target_codepoints is not None:
             return set(font_codepoints) & self.target_codepoints
         return set(font_codepoints) - set(self.test_codepoints)
 
-    def test_codepoint_filter(self, font_codepoints: Set[int]) -> Set[int]:
+    def test_codepoint_filter(self, font_codepoints: set[int]) -> set[int]:
         if self.target_codepoints is not None:
             return set(font_codepoints) & self.target_codepoints
         return set(font_codepoints) & set(self.test_codepoints)
@@ -247,7 +249,7 @@ class DatasetMaker:
 
 
 class Dataset(TorchDataset):
-    def __init__(self, fonts, codepoint_filter_fn: Callable[[Set[int]], Set[int]]):
+    def __init__(self, fonts, codepoint_filter_fn: Callable[[set[int]], set[int]]):
         self.fonts = fonts
         self.codepoint_filter_fn = codepoint_filter_fn
         self.order = []

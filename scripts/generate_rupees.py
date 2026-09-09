@@ -24,7 +24,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.glyph_rendering import GEOMETRY_NAMES

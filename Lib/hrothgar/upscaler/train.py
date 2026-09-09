@@ -10,10 +10,10 @@ import torch.nn.functional as F
 import torchvision
 import tqdm
 
+from glyphloss import glyph_reconstruction_loss
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import TrainingLoop
-from glyphloss import glyph_reconstruction_loss
 
 
 def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:

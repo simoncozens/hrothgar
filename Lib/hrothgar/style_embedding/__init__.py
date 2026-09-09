@@ -13,26 +13,26 @@ from hrothgar.style_embedding.config import (
     FontStyleEmbedderConfig,
     FontStyleEmbeddingLossWeights,
 )
-from hrothgar.style_embedding.model import FontStyleEmbedder
 from hrothgar.style_embedding.dataset import (
     FontStyleDatasetMaker,
 )
 from hrothgar.style_embedding.losses import (
     category_loss,
+    compute_losses,
     contrastive_loss,
     tag_prediction_loss,
-    compute_losses,
 )
+from hrothgar.style_embedding.model import FontStyleEmbedder
 from hrothgar.style_embedding.train import FontStyleEmbeddingTrainingLoop
 
 __all__ = [
+    "FontStyleDatasetMaker",
     "FontStyleEmbedder",
     "FontStyleEmbedderConfig",
     "FontStyleEmbeddingLossWeights",
     "FontStyleEmbeddingTrainingLoop",
-    "FontStyleDatasetMaker",
     "category_loss",
+    "compute_losses",
     "contrastive_loss",
     "tag_prediction_loss",
-    "compute_losses",
 ]

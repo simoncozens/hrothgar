@@ -26,9 +26,7 @@ from __future__ import annotations
 from random import random
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-
 from denoising_diffusion_pytorch.classifier_free_guidance import (
     Attention,
     Downsample,
@@ -45,6 +43,7 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
     normalize_to_neg_one_to_one,
     unnormalize_to_zero_to_one,
 )
+from torch import nn
 
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.glyph_rendering import GEOMETRY_SPEC

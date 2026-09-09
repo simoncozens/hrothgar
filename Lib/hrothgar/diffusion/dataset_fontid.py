@@ -31,13 +31,13 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset import (
-    ClassBalancedBatchSampler,
     LATIN_KERNEL,
+    ClassBalancedBatchSampler,
     _has_non_empty_outline,
     _hb_font_for_face,
 )
-from hrothgar.googlefonts import GoogleFont, GoogleFonts
 from hrothgar.glyph_rendering import geometry_tensor
+from hrothgar.googlefonts import GoogleFont, GoogleFonts
 from hrothgar.render_utils import render_glyph_with_geometry
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))

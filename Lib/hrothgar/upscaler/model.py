@@ -13,13 +13,11 @@ The model is intentionally lightweight and uses two forms of conditioning:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-import json
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from hrothgar.utils import SaveLoadModel
 
@@ -62,9 +60,10 @@ class UpscalerConfig:
 
     def save_sidecar(self, model_path):
         """Save config as a sidecar JSON alongside the model weights."""
-        from pathlib import Path as _Path
         import json as _json
         from dataclasses import asdict as _asdict
+        from pathlib import Path as _Path
+
         from hrothgar.utils import git_short_sha
 
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
@@ -77,8 +76,8 @@ class UpscalerConfig:
     @classmethod
     def from_sidecar(cls, model_path):
         """Load config from a sidecar JSON alongside the model weights."""
-        from pathlib import Path as _Path
         import json as _json
+        from pathlib import Path as _Path
 
         config_path = _Path(model_path).with_suffix(".conf.json")
         if not config_path.exists():

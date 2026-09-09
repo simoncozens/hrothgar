@@ -11,4 +11,4 @@ except ImportError:
 
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 
-__all__ = ["UpscalerDatasetMaker", "UpscalerConfig", "UpscalerModel"]
+__all__ = ["UpscalerConfig", "UpscalerDatasetMaker", "UpscalerModel"]

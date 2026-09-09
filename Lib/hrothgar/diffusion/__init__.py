@@ -26,14 +26,7 @@ from hrothgar.diffusion.dataset import (
     build_rond_dataset,
     materialize,
 )
-from hrothgar.diffusion.losses import (
-    AxisHead,
-    attention_health,
-    diag_off,
-    mean_abs_diff,
-    save_montage,
-)
-from hrothgar.diffusion.model import DiffusionGlyphModel, build_diffusion_model
+from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.exemplar import (
     ExemplarDiffusionModel,
     build_exemplar_model,
@@ -42,31 +35,38 @@ from hrothgar.diffusion.fontid import (
     FontIdDiffusionModel,
     build_fontid_model,
 )
-from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
+from hrothgar.diffusion.losses import (
+    AxisHead,
+    attention_health,
+    diag_off,
+    mean_abs_diff,
+    save_montage,
+)
+from hrothgar.diffusion.model import DiffusionGlyphModel, build_diffusion_model
 from hrothgar.diffusion.train import DiffusionTrainer
 
 __all__ = [
-    "DiffusionConfig",
-    "DiffusionLossWeights",
-    "ExemplarDiffusionConfig",
-    "FontIdDiffusionConfig",
-    "DiffusionGlyphModel",
-    "build_diffusion_model",
-    "DiffusionTrainer",
-    "ExemplarDiffusionModel",
-    "build_exemplar_model",
-    "FontIdDiffusionModel",
-    "build_fontid_model",
-    "FontIdDatasetMaker",
-    "ClassConditionalGlyphDataset",
-    "RONDVocab",
-    "build_rond_dataset",
-    "build_exemplar_rond_data",
-    "build_fontid_rond_data",
-    "materialize",
     "AxisHead",
+    "ClassConditionalGlyphDataset",
+    "DiffusionConfig",
+    "DiffusionGlyphModel",
+    "DiffusionLossWeights",
+    "DiffusionTrainer",
+    "ExemplarDiffusionConfig",
+    "ExemplarDiffusionModel",
+    "FontIdDatasetMaker",
+    "FontIdDiffusionConfig",
+    "FontIdDiffusionModel",
+    "RONDVocab",
     "attention_health",
+    "build_diffusion_model",
+    "build_exemplar_model",
+    "build_exemplar_rond_data",
+    "build_fontid_model",
+    "build_fontid_rond_data",
+    "build_rond_dataset",
     "diag_off",
+    "materialize",
     "mean_abs_diff",
     "save_montage",
 ]

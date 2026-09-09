@@ -6,7 +6,6 @@ Separated from ``hrothgar.ar.dataset`` so that inference-only code
 
 from __future__ import annotations
 
-import math
 import random
 from typing import Optional, Sequence
 
@@ -106,8 +105,8 @@ def _sample_style_codepoints(
 
 
 __all__ = [
-    "_has_non_empty_glyph",
     "_font_has_codepoint",
+    "_has_non_empty_glyph",
     "_is_blank_rendering",
     "_sample_style_codepoints",
 ]

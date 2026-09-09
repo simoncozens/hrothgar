@@ -25,4 +25,4 @@ LGC_ALL = [x for x in LGC_ALL if not (0x0300 <= x <= 0x036F)]
 
 CAPS_ONLY = [ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$₹"]
 
-__all__ = ["LATIN_CORE", "LATIN_KERNEL", "LGC_ALL", "CAPS_ONLY"]
+__all__ = ["CAPS_ONLY", "LATIN_CORE", "LATIN_KERNEL", "LGC_ALL"]

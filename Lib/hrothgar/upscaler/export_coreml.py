@@ -20,13 +20,12 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import struct
 import subprocess
 from pathlib import Path
 from typing import Optional
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 try:
     import coremltools as ct  # type: ignore[import-untyped]

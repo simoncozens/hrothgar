@@ -73,8 +73,8 @@ class FontStyleEmbedderConfig:
     def save_sidecar(self, model_path):
         """Save config as a sidecar JSON alongside the model weights."""
         import json
-        from pathlib import Path as _Path
         from dataclasses import asdict
+        from pathlib import Path as _Path
 
         from hrothgar.utils import git_short_sha
 
@@ -88,8 +88,8 @@ class FontStyleEmbedderConfig:
     @classmethod
     def from_sidecar(cls, model_path):
         """Load config from a sidecar JSON alongside the model weights."""
-        import json
         import dataclasses
+        import json
         from pathlib import Path as _Path
 
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))

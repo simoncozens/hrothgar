@@ -108,8 +108,8 @@ def main() -> None:
     if not args.font.exists():
         raise FileNotFoundError(f"Font not found: {args.font}")
 
-    from hrothgar.upscaler.model import UpscalerConfig
     from hrothgar.upscaler.inference_coreml import UpscalerInference
+    from hrothgar.upscaler.model import UpscalerConfig
 
     # Read config from sidecar.
     sidecar_path = args.model_dir / "upscaler_config.conf.json"

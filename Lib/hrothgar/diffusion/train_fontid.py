@@ -203,10 +203,9 @@ class FontIdTrainingLoop(TrainingLoop):
         gts = batch["images"][:n].to(self.device).float()
         geometry = batch["geometry"][:n]  # (n, 5) GT geometry (CPU)
 
-        with torch.no_grad():
-            with self._autocast_context():
-                recs = self.model.sample(codepoints, font_meta)
-                pred_geometry = self.model.predict_geometry(codepoints, font_meta)
+        with torch.no_grad(), self._autocast_context():
+            recs = self.model.sample(codepoints, font_meta)
+            pred_geometry = self.model.predict_geometry(codepoints, font_meta)
         recs = recs.float().clamp(0.0, 1.0)
         pred_geometry = pred_geometry.float()
 
@@ -314,7 +313,6 @@ def _parse_oversample_pairs(path: str) -> list[tuple[str, int]]:
 if __name__ == "__main__":
     import argparse
 
-    from hrothgar.dataset import LATIN_KERNEL
 
     parser = argparse.ArgumentParser(
         description="Train factorized font-ID diffusion model"

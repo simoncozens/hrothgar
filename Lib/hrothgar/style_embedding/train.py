@@ -65,9 +65,7 @@ def _filter_tags_by_prefix(tag_names: list[str], prefixes: str) -> list[str]:
     for name in tag_names:
         # Extract the category from the path: /Expressive/Happy → Expressive
         parts = name.strip("/").split("/")
-        if len(parts) >= 2 and parts[0] in keep:
-            result.append(name)
-        elif len(parts) == 1 and parts[0] in keep:
+        if len(parts) >= 2 and parts[0] in keep or len(parts) == 1 and parts[0] in keep:
             result.append(name)
     return result
 
@@ -428,7 +426,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 is_acc = key.startswith("tag_acc_")
                 tag_name = key[len("tag_acc_" if is_acc else "tag_mse_") :]
                 summary_lines.append((float(avg), tag_name, "acc" if is_acc else "mse"))
-            reverse = any("tag_acc_" in k for k in val_tag_metrics.keys())
+            reverse = any("tag_acc_" in k for k in val_tag_metrics)
             sorted_tags = sorted(summary_lines, key=lambda x: x[0], reverse=reverse)
             lines = [
                 f"Per-tag {'accuracy' if reverse else 'MSE'} (step {self.global_step})\n"
@@ -477,11 +475,10 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         }
         font_names = val_batch.get("family", [f"font_{i}" for i in range(B)])
 
-        with torch.no_grad():
-            with self._autocast_context():
-                _emb, _proj, predicted_tags, category_logits = self.model(
-                    images_v1, glyph_mask=glyph_mask_v1
-                )
+        with torch.no_grad(), self._autocast_context():
+            _emb, _proj, predicted_tags, category_logits = self.model(
+                images_v1, glyph_mask=glyph_mask_v1
+            )
 
         # Also log the glyphs so we can see what the model sees.
         if images_v1.shape[0] > 0:
