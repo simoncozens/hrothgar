@@ -88,13 +88,11 @@ class UpscalerDatasetMaker(DatasetMaker):
             )
         if not (0.0 <= blur_sigma_jitter <= 1.0):
             raise ValueError(
-                "blur_sigma_jitter must be in [0, 1] "
-                f"(got {blur_sigma_jitter})"
+                f"blur_sigma_jitter must be in [0, 1] (got {blur_sigma_jitter})"
             )
         if not (0.0 <= mix_spatial_noise <= 1.0):
             raise ValueError(
-                "mix_spatial_noise must be in [0, 1] "
-                f"(got {mix_spatial_noise})"
+                f"mix_spatial_noise must be in [0, 1] (got {mix_spatial_noise})"
             )
         if harris_window < 3 or harris_window % 2 == 0:
             raise ValueError(
@@ -285,10 +283,7 @@ class UpscalerDatasetMaker(DatasetMaker):
         # uniformly in [base*(1-jitter), base*(1+jitter)].  This forces
         # the model to learn a general sharpening capability rather than
         # memorising a specific inverse filter.
-        jitter = (
-            (torch.rand(1, device=device) * 2.0 - 1.0)
-            * self.blur_sigma_jitter
-        )
+        jitter = (torch.rand(1, device=device) * 2.0 - 1.0) * self.blur_sigma_jitter
         eff_terminal = max(self.terminal_blur_sigma * (1.0 + jitter.item()), 0.1)
         eff_stem = max(self.stem_blur_sigma * (1.0 + jitter.item()), 0.1)
 
@@ -302,9 +297,8 @@ class UpscalerDatasetMaker(DatasetMaker):
         # ── Mix with original ──────────────────────────────────────────
         # Per-sample random mix strength
         blur_mix = torch.rand((B, 1, 1, 1), dtype=dtype, device=device)
-        blur_mix = (
-            self.blur_mix_min
-            + blur_mix * (self.blur_mix_max - self.blur_mix_min)
+        blur_mix = self.blur_mix_min + blur_mix * (
+            self.blur_mix_max - self.blur_mix_min
         )
 
         # Per-pixel spatial noise on mix weight so the blur pattern

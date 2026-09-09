@@ -133,28 +133,54 @@ class FontIdConditionalUnet(nn.Module):
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
             self.downs.append(
-                nn.ModuleList([
-                    resnet_block(dim_in, dim_in),
-                    resnet_block(dim_in, dim_in),
-                    Residual(PreNorm(dim_in, LinearAttention(dim_in, heads=attn_heads, dim_head=attn_dim_head))),
-                    Downsample(dim_in, dim_out) if not is_last else nn.Conv2d(dim_in, dim_out, 3, padding=1),
-                ])
+                nn.ModuleList(
+                    [
+                        resnet_block(dim_in, dim_in),
+                        resnet_block(dim_in, dim_in),
+                        Residual(
+                            PreNorm(
+                                dim_in,
+                                LinearAttention(
+                                    dim_in, heads=attn_heads, dim_head=attn_dim_head
+                                ),
+                            )
+                        ),
+                        Downsample(dim_in, dim_out)
+                        if not is_last
+                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                    ]
+                )
             )
 
         mid_dim = dims[-1]
         self.mid_block1 = resnet_block(mid_dim, mid_dim)
-        self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim, heads=attn_heads, dim_head=attn_dim_head)))
+        self.mid_attn = Residual(
+            PreNorm(
+                mid_dim, Attention(mid_dim, heads=attn_heads, dim_head=attn_dim_head)
+            )
+        )
         self.mid_block2 = resnet_block(mid_dim, mid_dim)
 
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out)):
             is_last = ind == (len(in_out) - 1)
             self.ups.append(
-                nn.ModuleList([
-                    resnet_block(dim_out + dim_in, dim_out),
-                    resnet_block(dim_out + dim_in, dim_out),
-                    Residual(PreNorm(dim_out, LinearAttention(dim_out, heads=attn_heads, dim_head=attn_dim_head))),
-                    Upsample(dim_out, dim_in) if not is_last else nn.Conv2d(dim_out, dim_in, 3, padding=1),
-                ])
+                nn.ModuleList(
+                    [
+                        resnet_block(dim_out + dim_in, dim_out),
+                        resnet_block(dim_out + dim_in, dim_out),
+                        Residual(
+                            PreNorm(
+                                dim_out,
+                                LinearAttention(
+                                    dim_out, heads=attn_heads, dim_head=attn_dim_head
+                                ),
+                            )
+                        ),
+                        Upsample(dim_out, dim_in)
+                        if not is_last
+                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                    ]
+                )
             )
 
         self.final_res_block = resnet_block(dim * 2, dim)
@@ -177,7 +203,9 @@ class FontIdConditionalUnet(nn.Module):
         )
         return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
 
-    def predict_geometry(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
+    def predict_geometry(
+        self, codepoint: torch.Tensor, font_meta: torch.Tensor
+    ) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
         raw = self.geometry_head(self._cond(codepoint, font_meta))
         return _decode_geometry(raw)
@@ -279,14 +307,20 @@ class FontIdDiffusion(nn.Module):
         self.sampling_timesteps = default(sampling_timesteps, timesteps)
         self.ddim_sampling_eta = ddim_sampling_eta
 
-        register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
+        register_buffer = lambda name, val: self.register_buffer(
+            name, val.to(torch.float32)
+        )
         register_buffer("betas", betas)
         register_buffer("alphas_cumprod", alphas_cumprod)
         register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
         register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
+        register_buffer(
+            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
+        )
         register_buffer("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
-        register_buffer("sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1))
+        register_buffer(
+            "sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1)
+        )
 
     @property
     def device(self):
@@ -316,7 +350,11 @@ class FontIdDiffusion(nn.Module):
         if self.self_condition and random() < 0.5:
             with torch.no_grad():
                 first_pred = self.model(x, t, codepoint, font_meta)
-                x_self_cond = self.predict_start_from_noise(x, t, first_pred).clamp(-1.0, 1.0).detach()
+                x_self_cond = (
+                    self.predict_start_from_noise(x, t, first_pred)
+                    .clamp(-1.0, 1.0)
+                    .detach()
+                )
 
         pred = self.model(x, t, codepoint, font_meta, x_self_cond=x_self_cond)
 
@@ -339,7 +377,9 @@ class FontIdDiffusion(nn.Module):
         img = normalize_to_neg_one_to_one(img)
         times = default(
             times,
-            lambda: torch.randint(0, self.num_timesteps, (b,), device=img.device).long(),
+            lambda: torch.randint(
+                0, self.num_timesteps, (b,), device=img.device
+            ).long(),
         )
         return self.p_losses(img, times, codepoint, font_meta)
 
@@ -377,8 +417,10 @@ class FontIdDiffusion(nn.Module):
 
             alpha = self.alphas_cumprod[time]
             alpha_next = self.alphas_cumprod[time_next]
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
+            sigma = (
+                eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            )
+            c = (1 - alpha_next - sigma**2).sqrt()
             noise = torch.randn_like(img)
             img = x_start * alpha_next.sqrt() + c * pred_noise + sigma * noise
 
@@ -391,7 +433,9 @@ class FontIdDiffusionModel(SaveLoadModel):
     def __init__(self, config: FontIdDiffusionConfig) -> None:
         super().__init__()
         if config.num_codepoints <= 0 or config.num_families <= 0:
-            raise ValueError("FontIdDiffusionConfig requires num_codepoints and num_families.")
+            raise ValueError(
+                "FontIdDiffusionConfig requires num_codepoints and num_families."
+            )
         self.config = config
 
         unet = FontIdConditionalUnet(
@@ -425,12 +469,17 @@ class FontIdDiffusionModel(SaveLoadModel):
     def sample(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
         return self.diffusion.sample(codepoint, font_meta)
 
-    def predict_geometry(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
+    def predict_geometry(
+        self, codepoint: torch.Tensor, font_meta: torch.Tensor
+    ) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
         return self.diffusion.model.predict_geometry(codepoint, font_meta)
 
     def geometry_loss(
-        self, codepoint: torch.Tensor, font_meta: torch.Tensor, gt_geometry: torch.Tensor
+        self,
+        codepoint: torch.Tensor,
+        font_meta: torch.Tensor,
+        gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         """Per-value MSE in em units between predicted and target geometry labels."""
         return self.diffusion.model.geometry_loss(codepoint, font_meta, gt_geometry)

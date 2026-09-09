@@ -12,6 +12,7 @@ from hrothgar.render import render_gid
 
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
 
+
 class Font:
     """A font, whether standalone or from the Google Fonts repository. This is an abstract base class that defines the interface for fonts, and provides some common functionality. The concrete implementations are GoogleFont and StandaloneFont."""
 

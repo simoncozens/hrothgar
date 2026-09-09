@@ -111,9 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _render_style_references(
-    font: StandaloneFont, count: int, size: int
-) -> np.ndarray:
+def _render_style_references(font: StandaloneFont, count: int, size: int) -> np.ndarray:
     """Render *count* glyphs from *font* to use as style references.
 
     Uses a fixed set of common Latin characters.  Characters not present in

@@ -24,8 +24,8 @@ from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.glyph_rendering import GEOMETRY_NAMES, place_glyph
-from hrothgar.gtok.llamagen_lpips import LPIPS
-from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
+from hrothgar.llamagen_lpips import LPIPS
+from hrothgar.render_utils import render_glyph_with_geometry
 from hrothgar.utils import TrainingLoop
 
 
@@ -222,9 +222,7 @@ class FontIdTrainingLoop(TrainingLoop):
                 (set(font.codepoints) & set(self.maker.character_set)) - {target_cp}
             )
             ref_cp = rng.choice(avail) if avail else target_cp
-            ref_img, _ = render_glyph_with_geometry(
-                font, ref_cp, self.maker.image_size
-            )
+            ref_img, _ = render_glyph_with_geometry(font, ref_cp, self.maker.image_size)
             refs.append(ref_img.unsqueeze(0))
             text_lines.append(
                 f"{font.family} | target {chr(target_cp)!r} U+{target_cp:04X} "
@@ -238,7 +236,9 @@ class FontIdTrainingLoop(TrainingLoop):
             torchvision.utils.make_grid(grid, nrow=n),
             self.global_step,
         )
-        self.writer.add_text("Validation/pairs", "\n".join(text_lines), self.global_step)
+        self.writer.add_text(
+            "Validation/pairs", "\n".join(text_lines), self.global_step
+        )
 
         self._geometry_montage(gts, recs, geometry, pred_geometry, n)
 
@@ -251,7 +251,11 @@ class FontIdTrainingLoop(TrainingLoop):
         """
         gts_np = gts.cpu().numpy()[:, 0]  # (n, H, W)
         recs_np = recs.cpu().numpy()[:, 0]
-        gt_geo = geometry.numpy() if isinstance(geometry, torch.Tensor) else np.asarray(geometry)
+        gt_geo = (
+            geometry.numpy()
+            if isinstance(geometry, torch.Tensor)
+            else np.asarray(geometry)
+        )
         pred_geo = pred_geometry.cpu().numpy()
 
         cells = []
@@ -312,54 +316,122 @@ if __name__ == "__main__":
 
     from hrothgar.dataset import LATIN_KERNEL
 
-    parser = argparse.ArgumentParser(description="Train factorized font-ID diffusion model")
-    parser.add_argument("--dataset-path", type=str, default=os.environ.get("GOOGLE_FONTS_REPO"),
-                        help="Path to the Google Fonts repository")
+    parser = argparse.ArgumentParser(
+        description="Train factorized font-ID diffusion model"
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=str,
+        default=os.environ.get("GOOGLE_FONTS_REPO"),
+        help="Path to the Google Fonts repository",
+    )
     parser.add_argument("--tag", type=str, help="Tag for the training run")
-    parser.add_argument("--allow-dirty", action="store_true",
-                        help="Allow training with uncommitted changes")
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow training with uncommitted changes",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--image-size", type=int, default=128)
-    parser.add_argument("--character-set", type=str, default="LATIN_KERNEL",
-                        help="Name of a character set in hrothgar.dataset (default LATIN_KERNEL)")
-    parser.add_argument("--extra-codepoints", type=str, default="",
-                        help="Extra codepoints to add to the vocabulary (a string of chars, e.g. '₹')")
-    parser.add_argument("--remove-codepoints", type=str, default="",
-                        help="Codepoints to remove from the vocabulary (e.g. 'ga' for bimodal g/a)")
-    parser.add_argument("--oversample-codepoints", type=str, default="",
-                        help="Codepoints to oversample in training (e.g. '₹')")
-    parser.add_argument("--oversample-factor", type=int, default=20,
-                        help="Duplication factor for --oversample-codepoints")
-    parser.add_argument("--oversample-pairs", type=str, default="",
-                        help="CSV of 'font filename,character' pairs to oversample (no header)")
-    parser.add_argument("--oversample-pair-factor", type=int, default=20,
-                        help="Duplication factor for --oversample-pairs")
-    parser.add_argument("--class-balanced", action="store_true",
-                        help="Class-balance training batches by font category")
-    parser.add_argument("--heldout-fraction", type=float, default=0.25,
-                        help="Fraction of fonts to hold out per codepoint")
-    parser.add_argument("--min-train-fonts-per-codepoint", type=int, default=20,
-                        help="Minimum training fonts kept per codepoint")
+    parser.add_argument(
+        "--character-set",
+        type=str,
+        default="LATIN_KERNEL",
+        help="Name of a character set in hrothgar.dataset (default LATIN_KERNEL)",
+    )
+    parser.add_argument(
+        "--extra-codepoints",
+        type=str,
+        default="",
+        help="Extra codepoints to add to the vocabulary (a string of chars, e.g. '₹')",
+    )
+    parser.add_argument(
+        "--remove-codepoints",
+        type=str,
+        default="",
+        help="Codepoints to remove from the vocabulary (e.g. 'ga' for bimodal g/a)",
+    )
+    parser.add_argument(
+        "--oversample-codepoints",
+        type=str,
+        default="",
+        help="Codepoints to oversample in training (e.g. '₹')",
+    )
+    parser.add_argument(
+        "--oversample-factor",
+        type=int,
+        default=20,
+        help="Duplication factor for --oversample-codepoints",
+    )
+    parser.add_argument(
+        "--oversample-pairs",
+        type=str,
+        default="",
+        help="CSV of 'font filename,character' pairs to oversample (no header)",
+    )
+    parser.add_argument(
+        "--oversample-pair-factor",
+        type=int,
+        default=20,
+        help="Duplication factor for --oversample-pairs",
+    )
+    parser.add_argument(
+        "--class-balanced",
+        action="store_true",
+        help="Class-balance training batches by font category",
+    )
+    parser.add_argument(
+        "--heldout-fraction",
+        type=float,
+        default=0.25,
+        help="Fraction of fonts to hold out per codepoint",
+    )
+    parser.add_argument(
+        "--min-train-fonts-per-codepoint",
+        type=int,
+        default=20,
+        help="Minimum training fonts kept per codepoint",
+    )
     parser.add_argument("--split-seed", type=int, default=1234)
     parser.add_argument("--target-steps", type=int, default=600_000)
     parser.add_argument("--learning-rate", type=float, default=3.24e-5)
-    parser.add_argument("--warmup-steps", type=int, default=2000,
-                        help="Linear LR warmup steps (then hold constant at --learning-rate)")
-    parser.add_argument("--geometry-weight", type=float, default=1.0,
-                        help="Weight of the geometry regression objective (em-unit labels)")
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Linear LR warmup steps (then hold constant at --learning-rate)",
+    )
+    parser.add_argument(
+        "--geometry-weight",
+        type=float,
+        default=1.0,
+        help="Weight of the geometry regression objective (em-unit labels)",
+    )
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--sampling-timesteps", type=int, default=100)
-    parser.add_argument("--min-snr-gamma", type=float, default=5.0,
-                        help="Min-SNR loss weighting gamma (<= 0 disables, uniform)")
-    parser.add_argument("--precision", type=str, choices=["fp32", "bf16"], default="bf16",
-                        help="Training precision (bf16 = AMP, fp32 = no AMP)")
+    parser.add_argument(
+        "--min-snr-gamma",
+        type=float,
+        default=5.0,
+        help="Min-SNR loss weighting gamma (<= 0 disables, uniform)",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        choices=["fp32", "bf16"],
+        default="bf16",
+        help="Training precision (bf16 = AMP, fp32 = no AMP)",
+    )
     parser.add_argument("--validation-every", type=int, default=1000)
     parser.add_argument("--validation-batches", type=int, default=20)
-    parser.add_argument("--model-path", type=str,
-                        default="models/fontid_diffusion.pth")
-    parser.add_argument("--limit-dataset-size", type=int, default=None,
-                        help="Limit to this many fonts for a canary run")
+    parser.add_argument("--model-path", type=str, default="models/fontid_diffusion.pth")
+    parser.add_argument(
+        "--limit-dataset-size",
+        type=int,
+        default=None,
+        help="Limit to this many fonts for a canary run",
+    )
 
     args = parser.parse_args()
     if not args.dataset_path:

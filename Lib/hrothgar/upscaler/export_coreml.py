@@ -60,10 +60,10 @@ class _StyleEncoderExport(nn.Module):
     def forward(self, references: torch.Tensor) -> torch.Tensor:
         # references: (K, 3, 512, 512)
         # backbone → AdaptiveAvgPool2d ensures (K, 256, 1, 1)
-        features = self.backbone(references)           # (K, 256, 1, 1)
-        features = features.reshape(self.K, 256)       # (K, 256)
-        pooled = features.mean(dim=0, keepdim=True)    # (1, 256)
-        return self.projection(pooled).squeeze(0)      # (128,)
+        features = self.backbone(references)  # (K, 256, 1, 1)
+        features = features.reshape(self.K, 256)  # (K, 256)
+        pooled = features.mean(dim=0, keepdim=True)  # (1, 256)
+        return self.projection(pooled).squeeze(0)  # (128,)
 
 
 class _UpscalerBodyExport(nn.Module):
@@ -104,7 +104,9 @@ class _UpscalerBodyExport(nn.Module):
 
         # Style FiLM (after residual body, before upsampling)
         gamma, beta = torch.chunk(style_gamma_beta, chunks=2, dim=-1)
-        x = x * (1.0 + gamma.unsqueeze(-1).unsqueeze(-1)) + beta.unsqueeze(-1).unsqueeze(-1)
+        x = x * (1.0 + gamma.unsqueeze(-1).unsqueeze(-1)) + beta.unsqueeze(
+            -1
+        ).unsqueeze(-1)
 
         # Upsample → sigmoid
         x = self.upsampler(x)
@@ -138,7 +140,9 @@ def _convert(
         ct.TensorType(shape=inp.shape, name=name)
         for inp, name in zip(example_inputs, input_names)
     ]
-    ct_precision = ct.precision.FLOAT16 if precision == "float16" else ct.precision.FLOAT32
+    ct_precision = (
+        ct.precision.FLOAT16 if precision == "float16" else ct.precision.FLOAT32
+    )
 
     mlmodel = ct.convert(
         traced,
@@ -158,8 +162,11 @@ def _compile(mlpackage_path: Path) -> Optional[Path]:
     try:
         subprocess.run(
             [
-                "xcrun", "coremlcompiler", "compile",
-                str(mlpackage_path), str(mlpackage_path.parent),
+                "xcrun",
+                "coremlcompiler",
+                "compile",
+                str(mlpackage_path),
+                str(mlpackage_path.parent),
             ],
             check=True,
             capture_output=True,
@@ -205,15 +212,30 @@ def _extract_style_fallback(model: nn.Module, output_dir: Path) -> None:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Export upscaler to Core ML.")
-    p.add_argument("--model-path", type=Path, required=True,
-                   help="Path to trained upscaler .pth file.")
-    p.add_argument("--output-dir", type=Path, default=Path("models/coreml"),
-                   help="Output directory for Core ML models.")
+    p.add_argument(
+        "--model-path",
+        type=Path,
+        required=True,
+        help="Path to trained upscaler .pth file.",
+    )
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("models/coreml"),
+        help="Output directory for Core ML models.",
+    )
     p.add_argument("--precision", choices=("float32", "float16"), default="float16")
-    p.add_argument("--no-compile", action="store_true",
-                   help="Skip coremlcompiler compilation step.")
-    p.add_argument("--style-reference-count", type=int, default=None,
-                   help="Override K (default: use training value).")
+    p.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Skip coremlcompiler compilation step.",
+    )
+    p.add_argument(
+        "--style-reference-count",
+        type=int,
+        default=None,
+        help="Override K (default: use training value).",
+    )
     return p.parse_args()
 
 
@@ -236,8 +258,10 @@ def main() -> None:
     model.load(str(args.model_path), device=device)
     model.eval()
     print(f"Loaded upscaler from {args.model_path}")
-    print(f"  low_res={config.low_res_size}  high_res={config.high_res_size}  "
-          f"K={config.style_reference_count}")
+    print(
+        f"  low_res={config.low_res_size}  high_res={config.high_res_size}  "
+        f"K={config.style_reference_count}"
+    )
     config.save_sidecar(args.output_dir / "upscaler_config.pth")
 
     K = config.style_reference_count
@@ -248,7 +272,11 @@ def main() -> None:
         se = _StyleEncoderExport(model.style_encoder, K).to(device)
         _convert(
             se,
-            (torch.randn(K, 3, config.high_res_size, config.high_res_size, device=device),),
+            (
+                torch.randn(
+                    K, 3, config.high_res_size, config.high_res_size, device=device
+                ),
+            ),
             input_names=["style_references"],
             output_name="style_gamma_beta",
             output_path=args.output_dir / "style_encoder.mlpackage",

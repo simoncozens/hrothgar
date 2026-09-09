@@ -46,7 +46,10 @@ class RONDVocab:
         return len(self.codepoints) * len(self.rond_values)
 
     def encode(self, codepoint: int, rond_value: int) -> int:
-        return self.cp_to_idx[codepoint] * len(self.rond_values) + self.rond_to_idx[rond_value]
+        return (
+            self.cp_to_idx[codepoint] * len(self.rond_values)
+            + self.rond_to_idx[rond_value]
+        )
 
     def decode(self, class_id: int) -> tuple[int, int]:
         """Return ``(codepoint, rond_value)``."""
@@ -107,7 +110,9 @@ def build_rond_dataset(
     return ClassConditionalGlyphDataset(samples, image_size), vocab
 
 
-def materialize(dataset: ClassConditionalGlyphDataset) -> tuple[torch.Tensor, torch.Tensor]:
+def materialize(
+    dataset: ClassConditionalGlyphDataset,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Render the whole dataset into ``(images, class_ids)`` tensors.
 
     ``images`` is ``(N, C, H, W)`` in ``[0, 1]``; ``class_ids`` is ``(N,)`` long.
@@ -138,8 +143,6 @@ def build_exemplar_rond_data(
     * ``target_image`` ``(T, 1, H, W)``
     * ``cp_to_idx`` mapping codepoint -> embedding index
     """
-    from hrothgar.style_extraction.render_utils import render_glyph
-
     sorted_glyphs = sorted(glyphs)
     cp_to_idx = {cp: i for i, cp in enumerate(sorted_glyphs)}
 
@@ -175,8 +178,6 @@ def build_fontid_rond_data(
     * ``font_ids`` ``(T,)`` long (index into ``render_fns``)
     * ``cp_to_idx`` mapping codepoint -> embedding index
     """
-    from hrothgar.style_extraction.render_utils import render_glyph
-
     sorted_glyphs = sorted(glyphs)
     cp_to_idx = {cp: i for i, cp in enumerate(sorted_glyphs)}
 

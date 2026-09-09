@@ -41,7 +41,7 @@ def curvature_mask(target: torch.Tensor, mag_thresh: float = 0.05) -> torch.Tens
     gy = target[:, :, :, 2:] - target[:, :, :, :-2]  # (B,C,H,W-2)
     gx = F.pad(gx, (0, 0, 1, 1))
     gy = F.pad(gy, (1, 1, 0, 0))
-    mag = (gx ** 2 + gy ** 2).sqrt() + 1e-6
+    mag = (gx**2 + gy**2).sqrt() + 1e-6
     nx, ny = gx / mag, gy / mag
 
     # Divergence of the unit normal field = curvature of the level sets.

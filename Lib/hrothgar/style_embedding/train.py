@@ -111,14 +111,10 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             family_positive_weight=family_positive_weight,
         )
         if getattr(train_args, "input_glyphs", None):
-            config.input_codepoints = [
-                ord(c) for c in train_args.input_glyphs
-            ]
+            config.input_codepoints = [ord(c) for c in train_args.input_glyphs]
         model = FontStyleEmbedder(config).to(self.device)
         config.save_sidecar(train_args.model_path)
-        print(
-            f"Trainable parameters: {sum(p.numel() for p in model.parameters()):,}"
-        )
+        print(f"Trainable parameters: {sum(p.numel() for p in model.parameters()):,}")
 
         # ── Data ────────────────────────────────────────────────────────
         maker = FontStyleDatasetMaker(
@@ -244,7 +240,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         images = batch["images"].to(self.device)
         glyph_mask = batch["glyph_mask"].to(self.device)
         target_tags = {k: v.to(self.device) for k, v in batch["tags"].items()}
-        tag_masks = {k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()}
+        tag_masks = {
+            k: v.to(self.device) for k, v in batch.get("tag_masks", {}).items()
+        }
         family = batch.get("family", None)
         font_ids = batch.get("font_ids", None)
         category = batch.get("category")
@@ -260,7 +258,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         tag_masks_2x = {k: torch.cat([v, v], dim=0) for k, v in tag_masks.items()}  # type: ignore[arg-type]
         family_2x = family + family if family else None
         font_ids_2x = font_ids + font_ids if font_ids else None
-        category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
+        category_2x = (
+            torch.cat([category, category], dim=0).to(self.device)
+            if category is not None
+            else None
+        )
 
         with self._autocast_context():
             _embedding, projection, predicted_tags, category_logits = self.model(
@@ -312,8 +314,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 images = val_batch["images"].to(self.device)
                 glyph_mask = val_batch["glyph_mask"].to(self.device)
                 target_tags = {
-                    k: v.to(self.device)
-                    for k, v in val_batch["tags"].items()
+                    k: v.to(self.device) for k, v in val_batch["tags"].items()
                 }
                 tag_masks = {
                     k: v.to(self.device)
@@ -340,7 +341,11 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 }
                 family_2x = family + family if family else None
                 font_ids_2x = font_ids + font_ids if font_ids else None
-                category_2x = torch.cat([category, category], dim=0).to(self.device) if category is not None else None
+                category_2x = (
+                    torch.cat([category, category], dim=0).to(self.device)
+                    if category is not None
+                    else None
+                )
 
                 with self._autocast_context():
                     _emb, projection, predicted_tags, category_logits = self.model(
@@ -376,9 +381,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 # cosine similarity (no temperature) so it is comparable
                 # across runs with different loss hyper-parameters.
                 B = projection.shape[0] // 2
-                v1 = projection[:B]   # (B, D)
-                v2 = projection[B:]   # (B, D)
-                sim = torch.matmul(v1, v2.T)   # (B, B) cosine similarity
+                v1 = projection[:B]  # (B, D)
+                v2 = projection[B:]  # (B, D)
+                sim = torch.matmul(v1, v2.T)  # (B, B) cosine similarity
                 # Rank view-2 items by similarity (descending).
                 ranks = sim.argsort(dim=-1, descending=True)  # (B, B)
                 # For query i, correct match is at column i.
@@ -421,16 +426,20 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 avg = torch.mean(torch.stack(val_tag_metrics[key]))
                 self.write_scalar(f"Validation/{key}", avg)
                 is_acc = key.startswith("tag_acc_")
-                tag_name = key[len("tag_acc_" if is_acc else "tag_mse_"):]
+                tag_name = key[len("tag_acc_" if is_acc else "tag_mse_") :]
                 summary_lines.append((float(avg), tag_name, "acc" if is_acc else "mse"))
             reverse = any("tag_acc_" in k for k in val_tag_metrics.keys())
             sorted_tags = sorted(summary_lines, key=lambda x: x[0], reverse=reverse)
-            lines = [f"Per-tag {'accuracy' if reverse else 'MSE'} (step {self.global_step})\n"]
+            lines = [
+                f"Per-tag {'accuracy' if reverse else 'MSE'} (step {self.global_step})\n"
+            ]
             lines.append(f"{'Best':>6} {'':40} | {'Worst':>6}\n")
             lines.append("-" * 100 + "\n")
             for (v1, n1, _), (v2, n2, _) in zip(sorted_tags[:15], sorted_tags[-15:]):
                 lines.append(f"{n1:<45} {v1:6.3f} | {n2:<45} {v2:6.3f}\n")
-            self.writer.add_text("Validation/per_tag_metrics", "".join(lines), self.global_step)
+            self.writer.add_text(
+                "Validation/per_tag_metrics", "".join(lines), self.global_step
+            )
 
         # Checkpoint on retrieval accuracy — temperature-independent so
         # comparable across runs with different hyper-parameters.
@@ -452,6 +461,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
     def visualize(self):
         """Render tag prediction comparison charts for a few validation fonts."""
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
@@ -462,7 +472,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         images_v1 = images[:B]
         glyph_mask_v1 = glyph_mask[:B]
         target_tags = {k: v.to(self.device) for k, v in val_batch["tags"].items()}
-        tag_masks = {k: v.to(self.device) for k, v in val_batch.get("tag_masks", {}).items()}
+        tag_masks = {
+            k: v.to(self.device) for k, v in val_batch.get("tag_masks", {}).items()
+        }
         font_names = val_batch.get("family", [f"font_{i}" for i in range(B)])
 
         with torch.no_grad():
@@ -480,7 +492,6 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 "Validation/glyph_sample", strip.clamp(0, 1), self.global_step
             )
 
-
         tag_names = self.model.config.tag_names
         if not tag_names or predicted_tags is None:
             return
@@ -490,7 +501,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         n_tags = len(tag_names)
 
         fig, axes = plt.subplots(
-            n_fonts, 1,
+            n_fonts,
+            1,
             figsize=(max(8, n_tags * 0.4), 3 * n_fonts),
             squeeze=False,
         )
@@ -534,9 +546,15 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             ax.set_ylim(0, max(1, nc - 1))
             ax.set_xticks(x)
             ax.set_xticklabels(
-                [n.replace("/Expressive/", "").replace("/Sans/", "").replace("/Serif/", "")
-                 for n in tag_names],
-                rotation=45, ha="right", fontsize=6,
+                [
+                    n.replace("/Expressive/", "")
+                    .replace("/Sans/", "")
+                    .replace("/Serif/", "")
+                    for n in tag_names
+                ],
+                rotation=45,
+                ha="right",
+                fontsize=6,
             )
             if font_i == 0:
                 ax.legend(fontsize=7, loc="upper right")
@@ -552,7 +570,10 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
         # Convert HWC → CHW for TensorBoard.
         img_tensor = torch.from_numpy(img).permute(2, 0, 1)
-        self.writer.add_image("Validation/tag_predictions", img_tensor, self.global_step)
+        self.writer.add_image(
+            "Validation/tag_predictions", img_tensor, self.global_step
+        )
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -561,77 +582,161 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train font style embedder")
-    p.add_argument("--dataset-path", type=Path, required=True,
-                   help="Path to Google Fonts checkout")
-    p.add_argument("--model-path", type=str, required=True,
-                   help="Path to save model checkpoint")
+    p.add_argument(
+        "--dataset-path", type=Path, required=True, help="Path to Google Fonts checkout"
+    )
+    p.add_argument(
+        "--model-path", type=str, required=True, help="Path to save model checkpoint"
+    )
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--num-epochs", type=int, default=50)
-    p.add_argument("--target-steps", type=int, default=None,
-                   help="Maximum training steps (None = run all epochs)")
-    p.add_argument("--validation-every", type=int, default=1000,
-                   help="Run validation every N training steps")
-    p.add_argument("--validation-batches", type=int, default=10,
-                   help="Number of test batches per validation run")
+    p.add_argument(
+        "--target-steps",
+        type=int,
+        default=None,
+        help="Maximum training steps (None = run all epochs)",
+    )
+    p.add_argument(
+        "--validation-every",
+        type=int,
+        default=1000,
+        help="Run validation every N training steps",
+    )
+    p.add_argument(
+        "--validation-batches",
+        type=int,
+        default=10,
+        help="Number of test batches per validation run",
+    )
     p.add_argument("--contrastive-temperature", type=float, default=0.07)
-    p.add_argument("--glyph-size", type=int, default=64,
-                   help="Rendered glyph size (square).")
-    p.add_argument("--input-glyphs", type=str, default=None,
-                   help="Override the glyph set (e.g. 'aAbB012&?').")
-    p.add_argument("--encoder-downsample", type=int, default=4,
-                   choices=[2, 4, 8],
-                   help="Spatial downsample ratio of the per-glyph encoder.")
-    p.add_argument("--coarse-grid-size", type=int, default=8,
-                   help="Coarse spatial grid side for glyph pooling (replaces Gram).")
-    p.add_argument("--spatial-channels", type=int, default=32,
-                   help="Channel count after the 1x1 projection before coarse pooling.")
-    p.add_argument("--glyph-sample-size", type=int, default=32,
-                   help="Number of glyphs sampled per font per step "
-                        "(split into two disjoint views for contrastive learning).")
-    p.add_argument("--tags", type=str, default=None,
-                   help="Comma-separated tag names to predict, or 'all'")
-    p.add_argument("--tag-filter", type=str, default=None,
-                   help="When --tags=all, only keep tags under these prefixes "
-                        "(e.g. 'Expressive,Sans,Serif').  Filters /Quality/* "
-                        "and other unlearnable-from-glyphs tags.")
-    p.add_argument("--tag-num-classes", type=int, default=0,
-                   help="Quantize tag targets into N classes (0=regression, "
-                        "2=binary, 4=quartiles)")
-    p.add_argument("--tag-dropout", type=float, default=0.3,
-                   help="Dropout rate in tag prediction heads")
-    p.add_argument("--use-category-head", action="store_true",
-                   help="Add a 6-way broad category classification head "
-                        "(Serif/Sans/Handwriting/Script/Monospace/Display)")
-    p.add_argument("--text-encoder", type=str, default=None,
-                   help="HuggingFace model for frozen text conditioning "
-                        "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
-                        "Enables multi-positive contrastive loss.")
-    p.add_argument("--family-positive-weight", type=float, default=0.3,
-                   help="Soft positive weight for same-family, different-font "
-                        "pairs in the multi-positive contrastive loss.  0.0 "
-                        "disables the family-level soft positive; higher values "
-                        "pull same-family fonts closer together.")
-    p.add_argument("--no-class-balance", action="store_true",
-                   help="Disable class-balanced batch sampling.  Without this, "
-                        "each batch is guaranteed to contain fonts from all 6 "
-                        "categories, creating only trivially-easy negatives.  "
-                        "Disabling it allows harder within-category contrasts "
-                        "(e.g. Garamond vs Caslon) at the cost of potential "
-                        "category imbalance.")
-    p.add_argument("--tag-positive-weight", type=float, default=1.0,
-                   help="Weight of tag-based soft positives in contrastive loss "
-                        "(0.0 = pure visual, 1.0 = full tag signal).  "
-                        "Use small values (e.g. 0.1) for gentle style nudges "
-                        "on top of a converged visual model.")
-    p.add_argument("--tag", type=str, default=None,
-                   help="Optional human-readable tag for the TensorBoard run")
-    p.add_argument("--precision", type=str, default="fp32",
-                   choices=["fp32", "fp16", "bf16"],
-                   help="Training precision")
-    p.add_argument("--limit-dataset-size", type=int, default=None,
-                   help="Limit number of fonts for debugging")
-    p.add_argument("--allow-dirty", action="store_true",
-                   help="Allow training from a dirty git checkout")
+    p.add_argument(
+        "--glyph-size", type=int, default=64, help="Rendered glyph size (square)."
+    )
+    p.add_argument(
+        "--input-glyphs",
+        type=str,
+        default=None,
+        help="Override the glyph set (e.g. 'aAbB012&?').",
+    )
+    p.add_argument(
+        "--encoder-downsample",
+        type=int,
+        default=4,
+        choices=[2, 4, 8],
+        help="Spatial downsample ratio of the per-glyph encoder.",
+    )
+    p.add_argument(
+        "--coarse-grid-size",
+        type=int,
+        default=8,
+        help="Coarse spatial grid side for glyph pooling (replaces Gram).",
+    )
+    p.add_argument(
+        "--spatial-channels",
+        type=int,
+        default=32,
+        help="Channel count after the 1x1 projection before coarse pooling.",
+    )
+    p.add_argument(
+        "--glyph-sample-size",
+        type=int,
+        default=32,
+        help="Number of glyphs sampled per font per step "
+        "(split into two disjoint views for contrastive learning).",
+    )
+    p.add_argument(
+        "--tags",
+        type=str,
+        default=None,
+        help="Comma-separated tag names to predict, or 'all'",
+    )
+    p.add_argument(
+        "--tag-filter",
+        type=str,
+        default=None,
+        help="When --tags=all, only keep tags under these prefixes "
+        "(e.g. 'Expressive,Sans,Serif').  Filters /Quality/* "
+        "and other unlearnable-from-glyphs tags.",
+    )
+    p.add_argument(
+        "--tag-num-classes",
+        type=int,
+        default=0,
+        help="Quantize tag targets into N classes (0=regression, "
+        "2=binary, 4=quartiles)",
+    )
+    p.add_argument(
+        "--tag-dropout",
+        type=float,
+        default=0.3,
+        help="Dropout rate in tag prediction heads",
+    )
+    p.add_argument(
+        "--use-category-head",
+        action="store_true",
+        help="Add a 6-way broad category classification head "
+        "(Serif/Sans/Handwriting/Script/Monospace/Display)",
+    )
+    p.add_argument(
+        "--text-encoder",
+        type=str,
+        default=None,
+        help="HuggingFace model for frozen text conditioning "
+        "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
+        "Enables multi-positive contrastive loss.",
+    )
+    p.add_argument(
+        "--family-positive-weight",
+        type=float,
+        default=0.3,
+        help="Soft positive weight for same-family, different-font "
+        "pairs in the multi-positive contrastive loss.  0.0 "
+        "disables the family-level soft positive; higher values "
+        "pull same-family fonts closer together.",
+    )
+    p.add_argument(
+        "--no-class-balance",
+        action="store_true",
+        help="Disable class-balanced batch sampling.  Without this, "
+        "each batch is guaranteed to contain fonts from all 6 "
+        "categories, creating only trivially-easy negatives.  "
+        "Disabling it allows harder within-category contrasts "
+        "(e.g. Garamond vs Caslon) at the cost of potential "
+        "category imbalance.",
+    )
+    p.add_argument(
+        "--tag-positive-weight",
+        type=float,
+        default=1.0,
+        help="Weight of tag-based soft positives in contrastive loss "
+        "(0.0 = pure visual, 1.0 = full tag signal).  "
+        "Use small values (e.g. 0.1) for gentle style nudges "
+        "on top of a converged visual model.",
+    )
+    p.add_argument(
+        "--tag",
+        type=str,
+        default=None,
+        help="Optional human-readable tag for the TensorBoard run",
+    )
+    p.add_argument(
+        "--precision",
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16", "bf16"],
+        help="Training precision",
+    )
+    p.add_argument(
+        "--limit-dataset-size",
+        type=int,
+        default=None,
+        help="Limit number of fonts for debugging",
+    )
+    p.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow training from a dirty git checkout",
+    )
     return p.parse_args()
 
 

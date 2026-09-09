@@ -55,6 +55,7 @@ from hrothgar.diffusion.config import ExemplarDiffusionConfig
 # Style encoder
 # ---------------------------------------------------------------------------
 
+
 class StyleEncoder(nn.Module):
     """Encode a set of evidence glyphs into a coarse spatial style feature map.
 
@@ -75,7 +76,7 @@ class StyleEncoder(nn.Module):
         self.context_dim = context_dim
         self.out_res = out_res
         num_downs = int(round(math.log2(image_size / out_res)))
-        if image_size / out_res != 2 ** num_downs:
+        if image_size / out_res != 2**num_downs:
             raise ValueError("image_size must be a power-of-2 multiple of out_res")
 
         layers: list[nn.Module] = [
@@ -106,6 +107,7 @@ class StyleEncoder(nn.Module):
 # Cross attention
 # ---------------------------------------------------------------------------
 
+
 class CrossAttention(nn.Module):
     """Multi-head cross-attention from UNet tokens to style tokens."""
 
@@ -113,7 +115,7 @@ class CrossAttention(nn.Module):
         self, query_dim: int, context_dim: int, heads: int = 4, dim_head: int = 32
     ) -> None:
         super().__init__()
-        self.scale = dim_head ** -0.5
+        self.scale = dim_head**-0.5
         self.heads = heads
         inner_dim = dim_head * heads
         self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
@@ -172,6 +174,7 @@ class _IdentityCross(nn.Module):
 # Denoiser UNet
 # ---------------------------------------------------------------------------
 
+
 class ExemplarConditionalUnet(nn.Module):
     """Denoiser UNet conditioned on a style context map and a codepoint.
 
@@ -218,31 +221,66 @@ class ExemplarConditionalUnet(nn.Module):
         self.downs = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
-            res = image_size // (2 ** ind)
+            res = image_size // (2**ind)
             has_attn = res in attn_res
             cross = (
-                CrossAttentionBlock(dim_in, context_dim, heads=attn_heads, dim_head=attn_dim_head)
-                if has_attn else _IdentityCross()
+                CrossAttentionBlock(
+                    dim_in, context_dim, heads=attn_heads, dim_head=attn_dim_head
+                )
+                if has_attn
+                else _IdentityCross()
             )
             if has_attn:
                 self._cross_blocks.append(cross)
             self.downs.append(
-                nn.ModuleList([
-                    ResnetBlock(dim_in, dim_in, time_emb_dim=time_dim, classes_emb_dim=time_dim),
-                    ResnetBlock(dim_in, dim_in, time_emb_dim=time_dim, classes_emb_dim=time_dim),
-                    Residual(PreNorm(dim_in, Attention(dim_in, heads=attn_heads, dim_head=attn_dim_head)))
-                    if has_attn else nn.Identity(),
-                    cross,
-                    Downsample(dim_in, dim_out) if not is_last else nn.Conv2d(dim_in, dim_out, 3, padding=1),
-                ])
+                nn.ModuleList(
+                    [
+                        ResnetBlock(
+                            dim_in,
+                            dim_in,
+                            time_emb_dim=time_dim,
+                            classes_emb_dim=time_dim,
+                        ),
+                        ResnetBlock(
+                            dim_in,
+                            dim_in,
+                            time_emb_dim=time_dim,
+                            classes_emb_dim=time_dim,
+                        ),
+                        Residual(
+                            PreNorm(
+                                dim_in,
+                                Attention(
+                                    dim_in, heads=attn_heads, dim_head=attn_dim_head
+                                ),
+                            )
+                        )
+                        if has_attn
+                        else nn.Identity(),
+                        cross,
+                        Downsample(dim_in, dim_out)
+                        if not is_last
+                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                    ]
+                )
             )
 
         mid_dim = dims[-1]
-        self.mid_block1 = ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim)
-        self.mid_attn = Residual(PreNorm(mid_dim, Attention(mid_dim, heads=attn_heads, dim_head=attn_dim_head)))
-        self.mid_cross = CrossAttentionBlock(mid_dim, context_dim, heads=attn_heads, dim_head=attn_dim_head)
+        self.mid_block1 = ResnetBlock(
+            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+        )
+        self.mid_attn = Residual(
+            PreNorm(
+                mid_dim, Attention(mid_dim, heads=attn_heads, dim_head=attn_dim_head)
+            )
+        )
+        self.mid_cross = CrossAttentionBlock(
+            mid_dim, context_dim, heads=attn_heads, dim_head=attn_dim_head
+        )
         self._cross_blocks.append(self.mid_cross)
-        self.mid_block2 = ResnetBlock(mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim)
+        self.mid_block2 = ResnetBlock(
+            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+        )
 
         self.ups = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(reversed(in_out)):
@@ -250,23 +288,50 @@ class ExemplarConditionalUnet(nn.Module):
             res = image_size // (2 ** (num_resolutions - 1 - ind))
             has_attn = res in attn_res
             cross = (
-                CrossAttentionBlock(dim_out, context_dim, heads=attn_heads, dim_head=attn_dim_head)
-                if has_attn else _IdentityCross()
+                CrossAttentionBlock(
+                    dim_out, context_dim, heads=attn_heads, dim_head=attn_dim_head
+                )
+                if has_attn
+                else _IdentityCross()
             )
             if has_attn:
                 self._cross_blocks.append(cross)
             self.ups.append(
-                nn.ModuleList([
-                    ResnetBlock(dim_out + dim_in, dim_out, time_emb_dim=time_dim, classes_emb_dim=time_dim),
-                    ResnetBlock(dim_out + dim_in, dim_out, time_emb_dim=time_dim, classes_emb_dim=time_dim),
-                    Residual(PreNorm(dim_out, Attention(dim_out, heads=attn_heads, dim_head=attn_dim_head)))
-                    if has_attn else nn.Identity(),
-                    cross,
-                    Upsample(dim_out, dim_in) if not is_last else nn.Conv2d(dim_out, dim_in, 3, padding=1),
-                ])
+                nn.ModuleList(
+                    [
+                        ResnetBlock(
+                            dim_out + dim_in,
+                            dim_out,
+                            time_emb_dim=time_dim,
+                            classes_emb_dim=time_dim,
+                        ),
+                        ResnetBlock(
+                            dim_out + dim_in,
+                            dim_out,
+                            time_emb_dim=time_dim,
+                            classes_emb_dim=time_dim,
+                        ),
+                        Residual(
+                            PreNorm(
+                                dim_out,
+                                Attention(
+                                    dim_out, heads=attn_heads, dim_head=attn_dim_head
+                                ),
+                            )
+                        )
+                        if has_attn
+                        else nn.Identity(),
+                        cross,
+                        Upsample(dim_out, dim_in)
+                        if not is_last
+                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                    ]
+                )
             )
 
-        self.final_res_block = ResnetBlock(dim * 2, dim, time_emb_dim=time_dim, classes_emb_dim=time_dim)
+        self.final_res_block = ResnetBlock(
+            dim * 2, dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+        )
         self.final_conv = nn.Conv2d(dim, channels, 1)
 
     def attention_weights(self) -> list[torch.Tensor]:
@@ -324,6 +389,7 @@ class ExemplarConditionalUnet(nn.Module):
 # Diffusion process (training + DDIM sampling), conditioning-agnostic
 # ---------------------------------------------------------------------------
 
+
 class ExemplarDiffusion(nn.Module):
     """Standard DDPM/DDIM process threading ``(context, codepoint)`` to the UNet."""
 
@@ -358,14 +424,20 @@ class ExemplarDiffusion(nn.Module):
         self.sampling_timesteps = default(sampling_timesteps, timesteps)
         self.ddim_sampling_eta = ddim_sampling_eta
 
-        register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
+        register_buffer = lambda name, val: self.register_buffer(
+            name, val.to(torch.float32)
+        )
         register_buffer("betas", betas)
         register_buffer("alphas_cumprod", alphas_cumprod)
         register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
         register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
-        register_buffer("sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod))
+        register_buffer(
+            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
+        )
         register_buffer("sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod))
-        register_buffer("sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1))
+        register_buffer(
+            "sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1)
+        )
 
     @property
     def device(self):
@@ -395,7 +467,9 @@ class ExemplarDiffusion(nn.Module):
         img = normalize_to_neg_one_to_one(img)
         times = default(
             times,
-            lambda: torch.randint(0, self.num_timesteps, (b,), device=img.device).long(),
+            lambda: torch.randint(
+                0, self.num_timesteps, (b,), device=img.device
+            ).long(),
         )
         return self.p_losses(img, times, context, codepoint)
 
@@ -430,8 +504,10 @@ class ExemplarDiffusion(nn.Module):
 
             alpha = self.alphas_cumprod[time]
             alpha_next = self.alphas_cumprod[time_next]
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
+            sigma = (
+                eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            )
+            c = (1 - alpha_next - sigma**2).sqrt()
             noise = torch.randn_like(img)
             img = x_start * alpha_next.sqrt() + c * pred_noise + sigma * noise
 
@@ -441,6 +517,7 @@ class ExemplarDiffusion(nn.Module):
 # ---------------------------------------------------------------------------
 # Facade
 # ---------------------------------------------------------------------------
+
 
 class ExemplarDiffusionModel(nn.Module):
     """StyleEncoder + ExemplarDiffusion facade for training/sampling."""

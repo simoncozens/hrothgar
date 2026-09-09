@@ -83,13 +83,13 @@ def multipos_contrastive_loss(
     # if tag_vectors is not None:
     #     _check(tag_vectors, "tag_vectors (input)")
 
-    N = 2 * B          # image anchors
+    N = 2 * B  # image anchors
     has_text = text_embeddings is not None
-    M = N + (B if has_text else 0)   # total candidates
+    M = N + (B if has_text else 0)  # total candidates
     device = projections.device
 
     # Image-image similarities.
-    sim_img = torch.matmul(projections, projections.T) / temperature   # (2B, 2B)
+    sim_img = torch.matmul(projections, projections.T) / temperature  # (2B, 2B)
     # _check(sim_img, "sim_img after matmul")
 
     if has_text:
@@ -115,15 +115,16 @@ def multipos_contrastive_loss(
     # 3. Image-image soft positives from tag vectors (when available).
     if tag_vectors is not None:
         # Normalize tag vectors and compute cosine similarity.
-        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)   # (B, T)
-        tag_sim = torch.matmul(tag_norm, tag_norm.T)               # (B, B)
+        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)  # (B, T)
+        tag_sim = torch.matmul(tag_norm, tag_norm.T)  # (B, B)
         # Threshold: zero out very weak similarities.
-        tag_sim = torch.where(tag_sim > tag_threshold, tag_sim,
-                              torch.zeros_like(tag_sim))
+        tag_sim = torch.where(
+            tag_sim > tag_threshold, tag_sim, torch.zeros_like(tag_sim)
+        )
         # Duplicate to (2B, 2B) for the two views.
-        top = torch.cat([tag_sim, tag_sim], dim=1)   # (B, 2B)
-        bot = torch.cat([tag_sim, tag_sim], dim=1)   # (B, 2B)
-        img_pos = torch.cat([top, bot], dim=0)        # (2B, 2B)
+        top = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
+        bot = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
+        img_pos = torch.cat([top, bot], dim=0)  # (2B, 2B)
         # Exclude self and the other-view positive.
         img_pos.fill_diagonal_(0.0)
         for i in range(N):
@@ -153,12 +154,12 @@ def multipos_contrastive_loss(
     # _check(sim, "sim after masking self")
 
     # ---- SupCon-format loss: weighted mean over positives --------------
-    log_prob = sim.log_softmax(dim=1)                         # (2B, M)
+    log_prob = sim.log_softmax(dim=1)  # (2B, M)
     # _check(log_prob, "log_prob after log_softmax")
     # Zero out non-positive positions so 0 * -inf is safe, then
     # weighted-sum by pos_mask values and normalise by total weight.
     log_prob = log_prob.masked_fill(pos_mask == 0, 0.0)
-    n_pos = pos_mask.sum(dim=1).clamp(min=1)                  # (2B,)
+    n_pos = pos_mask.sum(dim=1).clamp(min=1)  # (2B,)
     loss_per_row = -(pos_mask * log_prob).sum(dim=1) / n_pos  # (2B,)
     return loss_per_row.mean()
 
@@ -208,10 +209,7 @@ def contrastive_loss(
                 if i == j:
                     continue
                 # Don't mask the positive pairs.
-                is_positive = (
-                    (i < B and j == i + B)
-                    or (i >= B and j == i - B)
-                )
+                is_positive = (i < B and j == i + B) or (i >= B and j == i - B)
                 if not is_positive and fams[i] == fams[j]:
                     mask[i, j] = True
 
@@ -315,7 +313,8 @@ def compute_losses(
     tag_loss = torch.tensor(0.0, device=device)
     if predicted_tags is not None and target_tags:
         tag_loss = tag_prediction_loss(
-            predicted_tags, target_tags,
+            predicted_tags,
+            target_tags,
             masks=tag_masks or {},
         )
 
@@ -325,11 +324,7 @@ def compute_losses(
     if category_logits is not None and category_targets is not None:
         cat_loss, cat_accuracy = category_loss(category_logits, category_targets)
 
-    total = (
-        weight * contr
-        + weights.tag_prediction * tag_loss
-        + cat_loss
-    )
+    total = weight * contr + weights.tag_prediction * tag_loss + cat_loss
 
     loss_info: dict[str, torch.Tensor] = {
         "contrastive": contr.detach(),
@@ -338,18 +333,26 @@ def compute_losses(
     }
     if predicted_tags is not None and target_tags:
         loss_info["tag_prediction"] = tag_loss.detach()
-        loss_info["tag_prediction_weighted"] = (weights.tag_prediction * tag_loss).detach()
+        loss_info["tag_prediction_weighted"] = (
+            weights.tag_prediction * tag_loss
+        ).detach()
         # Per-tag accuracy or MSE for diagnostics.
         for name, pred in predicted_tags.items():
             if name not in target_tags:
                 continue
-            m = (tag_masks or {}).get(name, torch.ones(pred.shape[0], dtype=torch.bool, device=device))
+            m = (tag_masks or {}).get(
+                name, torch.ones(pred.shape[0], dtype=torch.bool, device=device)
+            )
             if not m.any():
                 continue
             safe_name = name.replace("/", "_").strip("_")
             if pred.ndim == 2:
                 # Classification: per-tag accuracy.
-                correct = (pred[m].argmax(dim=-1) == target_tags[name][m].long()).float().mean()
+                correct = (
+                    (pred[m].argmax(dim=-1) == target_tags[name][m].long())
+                    .float()
+                    .mean()
+                )
                 loss_info[f"tag_acc_{safe_name}"] = correct.detach()
             else:
                 # Regression: per-tag MSE.

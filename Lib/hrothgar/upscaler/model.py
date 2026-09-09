@@ -53,8 +53,7 @@ class UpscalerConfig:
             )
         if self.style_embedding_dim <= 0:
             raise ValueError(
-                f"style_embedding_dim must be positive "
-                f"(got {self.style_embedding_dim})"
+                f"style_embedding_dim must be positive (got {self.style_embedding_dim})"
             )
 
     @property
@@ -67,30 +66,33 @@ class UpscalerConfig:
         import json as _json
         from dataclasses import asdict as _asdict
         from hrothgar.utils import git_short_sha
-        config_path = _Path(str(model_path).replace('.pth', '.conf.json'))
+
+        config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
         data = _asdict(self)
-        data['git_sha'] = git_short_sha()
-        with config_path.open('w', encoding='utf-8') as f:
+        data["git_sha"] = git_short_sha()
+        with config_path.open("w", encoding="utf-8") as f:
             _json.dump(data, f, indent=2, sort_keys=True)
-        print(f'Saved upscaler config to {config_path}')
+        print(f"Saved upscaler config to {config_path}")
 
     @classmethod
     def from_sidecar(cls, model_path):
         """Load config from a sidecar JSON alongside the model weights."""
         from pathlib import Path as _Path
         import json as _json
-        config_path = _Path(model_path).with_suffix('.conf.json')
+
+        config_path = _Path(model_path).with_suffix(".conf.json")
         if not config_path.exists():
-            config_path = _Path(str(model_path).replace('.pth', '.conf.json'))
+            config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
         if not config_path.exists():
             raise FileNotFoundError(
-                f'Upscaler config sidecar not found: {config_path}\n'
-                'Run upscaler training first so the .conf.json is written '
-                'alongside the .pth.'
+                f"Upscaler config sidecar not found: {config_path}\n"
+                "Run upscaler training first so the .conf.json is written "
+                "alongside the .pth."
             )
-        with config_path.open('r', encoding='utf-8') as f:
+        with config_path.open("r", encoding="utf-8") as f:
             data = _json.load(f)
         import dataclasses as _dc
+
         known = {f.name for f in _dc.fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -171,11 +173,11 @@ class GlyphStyleEncoder(nn.Module):
         """
         B, K, C, H, W = references.shape
         refs_flat = references.reshape(B * K, C, H, W)
-        features = self.backbone(refs_flat)        # (B*K, 256, 1, 1)
+        features = self.backbone(refs_flat)  # (B*K, 256, 1, 1)
         features = features.squeeze(-1).squeeze(-1)  # (B*K, 256)
         features = features.view(B, K, 256)
-        pooled = features.mean(dim=1)               # (B, 256)
-        return self.projection(pooled)              # (B, base_channels * 2)
+        pooled = features.mean(dim=1)  # (B, 256)
+        return self.projection(pooled)  # (B, base_channels * 2)
 
 
 class UpscalerModel(SaveLoadModel):
@@ -207,8 +209,7 @@ class UpscalerModel(SaveLoadModel):
         num_upsample_stages = config.upscale_factor.bit_length() - 1
         if 2**num_upsample_stages != config.upscale_factor:
             raise ValueError(
-                "upscale_factor must be a power of two "
-                f"(got {config.upscale_factor})"
+                f"upscale_factor must be a power of two (got {config.upscale_factor})"
             )
         self.upsampler = nn.Sequential(
             *[

@@ -50,7 +50,9 @@ def mean_abs_diff(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a - b).abs().mean().item())
 
 
-def attention_health(attn: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def attention_health(
+    attn: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return ``(q_var, entropy, effective_tokens)`` for cross-attention weights.
 
     ``attn`` is ``(B, heads, nq, K)`` post-softmax.  ``q_var`` is the variance
@@ -63,7 +65,7 @@ def attention_health(attn: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, to
 
     k = attn.shape[-1]
     ent = -(attn * (attn + 1e-12).log()).sum(dim=-1) / math.log(k)
-    eff = 1.0 / (attn ** 2).sum(dim=-1)
+    eff = 1.0 / (attn**2).sum(dim=-1)
     q_var = attn.var(dim=2).mean()
     return q_var, ent.mean(), eff.mean()
 
@@ -74,9 +76,12 @@ class AxisHead(nn.Module):
     def __init__(self, channels: int = 1) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(channels, 16, 3, stride=2, padding=1), nn.SiLU(),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1), nn.SiLU(),
-            nn.Conv2d(32, 32, 3, stride=2, padding=1), nn.SiLU(),
+            nn.Conv2d(channels, 16, 3, stride=2, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(16, 32, 3, stride=2, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(32, 32, 3, stride=2, padding=1),
+            nn.SiLU(),
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(32, 1),
@@ -95,6 +100,7 @@ def save_montage(
 ) -> None:
     """Save a GT / recon / |GT-recon| montage across an axis sweep."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

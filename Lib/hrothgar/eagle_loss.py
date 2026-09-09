@@ -97,9 +97,10 @@ class EagleLoss(nn.Module):
         return gx, gy
 
     def calculate_patch_loss(self, output_gradient, target_gradient):
-        output_gradient, target_gradient = output_gradient.to(
-            self.device
-        ), target_gradient.to(self.device)
+        output_gradient, target_gradient = (
+            output_gradient.to(self.device),
+            target_gradient.to(self.device),
+        )
         batch_size = output_gradient.size(0)
         num_channels = output_gradient.size(1)
         patch_size_squared = self.patch_size * self.patch_size

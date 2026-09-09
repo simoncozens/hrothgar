@@ -9,10 +9,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.googlefonts import GoogleFonts
-
 from hrothgar.dataset_constants import CAPS_ONLY, LATIN_CORE, LATIN_KERNEL, LGC_ALL
-
+from hrothgar.googlefonts import GoogleFonts
 
 _T = TypeVar("_T")
 

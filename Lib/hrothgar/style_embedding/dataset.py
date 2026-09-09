@@ -109,7 +109,11 @@ class FontStyleDatasetMaker(DatasetMaker):
         self._text_encoder_name = text_encoder_name
         self._text_embedding_dim = text_embedding_dim
         self._text_embeddings: dict[str, torch.Tensor] = {}
-        self._input_codepoints = list(input_codepoints) if input_codepoints is not None else list(DEFAULT_INPUT_CODEPOINTS)
+        self._input_codepoints = (
+            list(input_codepoints)
+            if input_codepoints is not None
+            else list(DEFAULT_INPUT_CODEPOINTS)
+        )
         self._glyph_size = glyph_size
         self._glyph_sample_size = glyph_sample_size
 
@@ -132,9 +136,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         """Remove fonts that don't have every glyph in the input set."""
         needed = set(self._input_codepoints)
         self.googlefonts.fonts = [
-            font
-            for font in self.googlefonts.fonts
-            if needed <= font.codepoints
+            font for font in self.googlefonts.fonts if needed <= font.codepoints
         ]
 
     def _precompute_text_embeddings(self) -> None:
@@ -179,8 +181,10 @@ class FontStyleDatasetMaker(DatasetMaker):
                 continue
             with torch.no_grad():
                 tok = tokenizer(
-                    desc, return_tensors="pt",
-                    truncation=True, max_length=512,
+                    desc,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=512,
                     padding=True,
                 )
                 out = model(**tok)

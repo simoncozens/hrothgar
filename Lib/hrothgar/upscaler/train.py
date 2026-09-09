@@ -37,7 +37,7 @@ def compute_upscaler_loss(
     loss = bce + glyphloss_weight * glyphloss
     return loss, {
         "bce": bce,
-        "glyphloss":glyphloss,
+        "glyphloss": glyphloss,
         "loss": loss,
     }
 
@@ -99,9 +99,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         style_references = batch.get("style_references")
         if style_references is not None:
             style_references = style_references.to(self.device)
-        predictions = self.model(
-            low_res, style_references=style_references
-        )
+        predictions = self.model(low_res, style_references=style_references)
         return compute_upscaler_loss(
             predictions,
             high_res,

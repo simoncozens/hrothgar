@@ -6,12 +6,7 @@ from dataclasses import dataclass, field
 
 # Fixed glyph set rendered as the embedder input.  This is the Latin core
 # (upper/lower/digits) plus two punctuation marks chosen to be style-revealing.
-DEFAULT_INPUT_CHARS = (
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "0123456789"
-    "&?"
-)
+DEFAULT_INPUT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789&?"
 DEFAULT_INPUT_CODEPOINTS = [ord(c) for c in DEFAULT_INPUT_CHARS]
 
 
@@ -82,6 +77,7 @@ class FontStyleEmbedderConfig:
         from dataclasses import asdict
 
         from hrothgar.utils import git_short_sha
+
         config_path = _Path(str(model_path).replace(".pth", ".conf.json"))
         data = asdict(self)
         data["git_sha"] = git_short_sha()

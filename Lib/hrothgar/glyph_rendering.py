@@ -64,16 +64,19 @@ def ink_bbox(rendering: torch.Tensor, size: int) -> torch.Tensor:
     if not ink.any():
         return torch.zeros(4, dtype=torch.float32, device=rendering.device)
     ys, xs = ink.nonzero(as_tuple=True)
-    return torch.tensor(
-        [
-            xs.min().float(),
-            ys.min().float(),
-            xs.max().float(),
-            ys.max().float(),
-        ],
-        dtype=torch.float32,
-        device=rendering.device,
-    ) / size
+    return (
+        torch.tensor(
+            [
+                xs.min().float(),
+                ys.min().float(),
+                xs.max().float(),
+                ys.max().float(),
+            ],
+            dtype=torch.float32,
+            device=rendering.device,
+        )
+        / size
+    )
 
 
 def bbox_size(rendering: torch.Tensor, size: int) -> torch.Tensor:
@@ -94,9 +97,7 @@ def crop_to_ink(rendering: torch.Tensor, size: int) -> torch.Tensor:
         square of ``size``.
     """
     if rendering.ndim != 3:
-        raise ValueError(
-            f"crop_to_ink expects (C, H, W), got {tuple(rendering.shape)}"
-        )
+        raise ValueError(f"crop_to_ink expects (C, H, W), got {tuple(rendering.shape)}")
 
     channels = rendering.shape[0]
     ink = rendering[0] < _INK_THRESHOLD
@@ -245,9 +246,9 @@ def place_glyph(
         .unsqueeze(0)
         .unsqueeze(0)
     )  # (1, 1, H, W)
-    glyph = F.interpolate(
-        src, size=(h_px, w_px), mode="bilinear", align_corners=False
-    )[0, 0].numpy()  # (h_px, w_px)
+    glyph = F.interpolate(src, size=(h_px, w_px), mode="bilinear", align_corners=False)[
+        0, 0
+    ].numpy()  # (h_px, w_px)
 
     canvas_h = int(round((ascender_em + descender_em) * ppm))
     # 2.5em right of the origin covers the label maxima (LSB 1.0 + scale_x 1.5)

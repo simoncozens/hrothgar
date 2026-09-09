@@ -82,7 +82,10 @@ class UpscalerInference:
             raise FileNotFoundError(f"Model not found: {base}.mlmodelc or .mlpackage")
 
         self._style_model: Optional[ct.models.MLModel] = None
-        if style_base.with_suffix(".mlmodelc").exists() or style_base.with_suffix(".mlpackage").exists():
+        if (
+            style_base.with_suffix(".mlmodelc").exists()
+            or style_base.with_suffix(".mlpackage").exists()
+        ):
             self._style_model = _load_model(_find(style_base))
 
         self._body_model = _load_model(_find(body_base))
@@ -114,8 +117,9 @@ class UpscalerInference:
         """
         # Style gamma_beta.
         if style_references is not None and self._style_model is not None:
-            result = _predict(self._style_model,
-                style_references=style_references.astype(np.float32))
+            result = _predict(
+                self._style_model, style_references=style_references.astype(np.float32)
+            )
             style_gb = result["style_gamma_beta"]
         else:
             style_gb = self._fallback_style_gb
@@ -123,7 +127,8 @@ class UpscalerInference:
         low_res_b = low_res[np.newaxis, ...].astype(np.float32)
         style_gb_b = style_gb[np.newaxis, ...].astype(np.float32)
 
-        result = _predict(self._body_model,
+        result = _predict(
+            self._body_model,
             low_res=low_res_b,
             style_gamma_beta=style_gb_b,
         )

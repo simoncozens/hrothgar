@@ -38,7 +38,7 @@ from hrothgar.dataset import (
 )
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
 from hrothgar.glyph_rendering import geometry_tensor
-from hrothgar.style_extraction.render_utils import render_glyph_with_geometry
+from hrothgar.render_utils import render_glyph_with_geometry
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
@@ -87,7 +87,9 @@ class _PairDataset(TorchDataset):
             "geometry": geometry_tensor(geometry),  # (5,)
             "cp_idx": cp_idx,
             "font_id": font_id,
-            "font_meta": torch.tensor(self.font_meta[font_id], dtype=torch.float32),  # (3,)
+            "font_meta": torch.tensor(
+                self.font_meta[font_id], dtype=torch.float32
+            ),  # (3,)
         }
 
 
@@ -183,10 +185,7 @@ class FontIdDatasetMaker:
             f"Fonts: {self.num_fonts}; families: {self.num_families}; "
             f"codepoints: {self.num_codepoints}"
         )
-        print(
-            f"Pairs: {len(self.train_pairs)} train / "
-            f"{len(self.val_pairs)} held-out"
-        )
+        print(f"Pairs: {len(self.train_pairs)} train / {len(self.val_pairs)} held-out")
 
     def _font_meta(self, font: GoogleFont) -> tuple[int, float, int]:
         """Map a font to its ``(family_id, weight, style_bucket)``.

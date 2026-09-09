@@ -94,13 +94,15 @@ class DiffusionGlyphModel(nn.Module):
         diff_loss = self.diffusion(images, classes=classes)
 
         aux = torch.zeros((), device=images.device)
-        if apply_aux and self.glyphloss_fn is not None and self.config.glyphloss_weight > 0:
+        if (
+            apply_aux
+            and self.glyphloss_fn is not None
+            and self.config.glyphloss_weight > 0
+        ):
             samples = self.sample_with_grad(
                 classes, steps=self.config.glyphloss_sample_steps
             )
-            aux = self.glyphloss_fn(
-                samples.clamp(0.0, 1.0), images.clamp(0.0, 1.0)
-            )
+            aux = self.glyphloss_fn(samples.clamp(0.0, 1.0), images.clamp(0.0, 1.0))
             total = diff_loss + self.config.glyphloss_weight * aux
         else:
             total = diff_loss
@@ -167,8 +169,10 @@ class DiffusionGlyphModel(nn.Module):
 
             alpha = diffusion.alphas_cumprod[time]
             alpha_next = diffusion.alphas_cumprod[time_next]
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
+            sigma = (
+                eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            )
+            c = (1 - alpha_next - sigma**2).sqrt()
             noise = torch.randn_like(img)
             img = x_start * alpha_next.sqrt() + c * pred_noise + sigma * noise
 

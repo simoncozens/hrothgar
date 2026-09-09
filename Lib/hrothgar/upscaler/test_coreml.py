@@ -40,9 +40,7 @@ def _render_glyph(font_path: str, char: str, size: int) -> np.ndarray:
     return raw
 
 
-def _render_style_references(
-    font_path: str, count: int, size: int
-) -> np.ndarray:
+def _render_style_references(font_path: str, count: int, size: int) -> np.ndarray:
     """Render *count* style reference glyphs as (count, 3, size, size)."""
     reference_chars = "ABEGNRSTabdeghknpqy023456789"
     refs: list[np.ndarray] = []
@@ -69,8 +67,7 @@ def _find_sidecar(model_dir: Path) -> Path:
         if str(name).endswith(".conf.json"):
             return name
     raise FileNotFoundError(
-        f"No .conf.json sidecar found in {model_dir}. "
-        "Run export_coreml.py first."
+        f"No .conf.json sidecar found in {model_dir}. Run export_coreml.py first."
     )
 
 
@@ -79,20 +76,27 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("font", type=Path, help="Path to a font file.")
     p.add_argument("--char", type=str, required=True, help="Character to upscale.")
     p.add_argument(
-        "--model-dir", type=Path, default=Path("models/coreml"),
+        "--model-dir",
+        type=Path,
+        default=Path("models/coreml"),
         help="Directory with exported Core ML models and config sidecar.",
     )
     p.add_argument(
-        "--style-reference-count", type=int, default=None,
+        "--style-reference-count",
+        type=int,
+        default=None,
         help="Override the number of reference glyphs (default: from config).",
     )
     p.add_argument(
-        "--output-dir", type=Path, default=Path("outputs/coreml_test"),
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/coreml_test"),
         help="Output directory for images.",
     )
     p.add_argument("--no-show", action="store_true", help="Skip matplotlib preview.")
     p.add_argument(
-        "--disable-style", action="store_true",
+        "--disable-style",
+        action="store_true",
         help="Skip style conditioning (uses fallback).",
     )
     return p
@@ -112,7 +116,11 @@ def main() -> None:
     config = UpscalerConfig.from_sidecar(sidecar_path)
     low_sz = config.low_res_size
     high_sz = config.high_res_size
-    K = args.style_reference_count if args.style_reference_count is not None else config.style_reference_count
+    K = (
+        args.style_reference_count
+        if args.style_reference_count is not None
+        else config.style_reference_count
+    )
     print(f"Upscaler config: {low_sz}->{high_sz}, K={K}")
 
     print(f"Font: {args.font.name}")
@@ -126,9 +134,7 @@ def main() -> None:
 
     style_refs: Optional[np.ndarray] = None
     if not args.disable_style:
-        style_refs = _render_style_references(
-            str(args.font), count=K, size=high_sz
-        )
+        style_refs = _render_style_references(str(args.font), count=K, size=high_sz)
         print(f"Rendered {style_refs.shape[0]} style references.")
     else:
         print("Style conditioning DISABLED (using fallback).")

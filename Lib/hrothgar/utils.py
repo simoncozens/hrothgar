@@ -86,7 +86,7 @@ class SaveLoadModel(torch.nn.Module):
         """Save the model to the given path."""
         torch.save(self.state_dict(), path)
 
-    def load(self, path: str, device: torch.device, strict: bool=True):
+    def load(self, path: str, device: torch.device, strict: bool = True):
         """Load the model from the given path."""
         state_dict = torch.load(path, map_location=device)
         self.load_state_dict(state_dict, strict=strict)

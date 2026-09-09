@@ -38,7 +38,6 @@ def render_input_set(
     dimension.
     """
     glyphs = [
-        render_glyph(font, cp, size, axis_position=axis_position)
-        for cp in codepoints
+        render_glyph(font, cp, size, axis_position=axis_position) for cp in codepoints
     ]
     return torch.stack(glyphs).unsqueeze(1)  # (G, 1, size, size)

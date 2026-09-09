@@ -103,9 +103,7 @@ class RawGlyph:
 
 
 @lru_cache(maxsize=128)
-def _face_for_path(
-    font_path: str, axis_position: Optional[tuple]
-) -> "freetype.Face":
+def _face_for_path(font_path: str, axis_position: Optional[tuple]) -> "freetype.Face":
     """Return a cached FreeType face, configured with the requested axis
     position (``None`` = default instance)."""
     face = freetype.Face(font_path)

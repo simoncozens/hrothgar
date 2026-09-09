@@ -150,15 +150,17 @@ class FontStyleEmbedder(SaveLoadModel):
         # Tag prediction heads.
         self.tag_heads: Optional[nn.ModuleDict] = None
         if config.tag_names:
-            self.tag_heads = nn.ModuleDict({
-                name: TagPredictionHead(
-                    config.encoder_feature_dim,
-                    config.tag_hidden_dim,
-                    num_classes=config.tag_num_classes,
-                    dropout=config.tag_dropout,
-                )
-                for name in config.tag_names
-            })
+            self.tag_heads = nn.ModuleDict(
+                {
+                    name: TagPredictionHead(
+                        config.encoder_feature_dim,
+                        config.tag_hidden_dim,
+                        num_classes=config.tag_num_classes,
+                        dropout=config.tag_dropout,
+                    )
+                    for name in config.tag_names
+                }
+            )
 
         # Broad category head.
         self.category_head: Optional[CategoryPredictionHead] = None
@@ -282,10 +284,7 @@ class FontStyleEmbedder(SaveLoadModel):
 
         tags: Optional[dict[str, torch.Tensor]] = None
         if self.tag_heads is not None:
-            tags = {
-                name: head(embedding)
-                for name, head in self.tag_heads.items()
-            }
+            tags = {name: head(embedding) for name, head in self.tag_heads.items()}
 
         category_logits: Optional[torch.Tensor] = None
         if self.category_head is not None:

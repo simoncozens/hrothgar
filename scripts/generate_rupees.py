@@ -111,7 +111,7 @@ def main() -> None:
             continue
 
         cp = torch.tensor([rupee_idx], device=device, dtype=torch.long)
-        meta = torch.tensor([font_meta[font_id]], device=device, dtype=torch.long)  # (1, 3)
+        meta = torch.tensor([font_meta[font_id]], device=device, dtype=torch.float32)  # (1, 3)
         with torch.no_grad():
             image = model.sample(cp, meta)[0, 0].cpu().numpy()  # (H, W) in [0, 1]
             geometry = model.predict_geometry(cp, meta)[0].cpu().tolist()  # 5 em units
