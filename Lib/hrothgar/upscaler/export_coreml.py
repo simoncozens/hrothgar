@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import torch
 from torch import nn
@@ -155,7 +154,7 @@ def _convert(
     print(f"  ✓ {output_path}")
 
 
-def _compile(mlpackage_path: Path) -> Optional[Path]:
+def _compile(mlpackage_path: Path) -> Path | None:
     """Compile ``.mlpackage`` → ``.mlmodelc`` using xcrun."""
     mlmodelc_path = mlpackage_path.with_suffix(".mlmodelc")
     try:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -159,7 +158,7 @@ def main() -> None:
         style_reference_count=args.style_reference_count,
     )
 
-    style_tensor: Optional[torch.Tensor] = None
+    style_tensor: torch.Tensor | None = None
     if not args.disable_style_conditioning:
         style_refs = _render_style_references(
             font, count=args.style_reference_count, size=512

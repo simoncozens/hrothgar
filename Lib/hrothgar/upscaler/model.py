@@ -14,7 +14,6 @@ The model is intentionally lightweight and uses two forms of conditioning:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from torch import nn
@@ -219,8 +218,8 @@ class UpscalerModel(SaveLoadModel):
         self.output_head = nn.Conv2d(config.base_channels, 3, 3, 1, 1)
 
         # --- Style conditioning ---
-        self.style_encoder: Optional[GlyphStyleEncoder] = None
-        self._no_style_embedding: Optional[nn.Parameter] = None
+        self.style_encoder: GlyphStyleEncoder | None = None
+        self._no_style_embedding: nn.Parameter | None = None
         self._init_style_conditioning()
 
     # ------------------------------------------------------------------
@@ -240,8 +239,8 @@ class UpscalerModel(SaveLoadModel):
         )
 
     def _style_conditioning_vector(
-        self, style_references: Optional[torch.Tensor]
-    ) -> Optional[torch.Tensor]:
+        self, style_references: torch.Tensor | None
+    ) -> torch.Tensor | None:
         """Produce the FiLM (γ, β) tensor from style references.
 
         Falls back to the learned no-style embedding when references are absent.
@@ -255,7 +254,7 @@ class UpscalerModel(SaveLoadModel):
         return self.style_encoder(style_references)
 
     def _style_encoder_fallback(
-        self, _refs: Optional[torch.Tensor] = None
+        self, _refs: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Return FiLM parameters from the learned no-style embedding."""
         assert self.style_encoder is not None
@@ -266,7 +265,7 @@ class UpscalerModel(SaveLoadModel):
     def _apply_style_conditioning(
         self,
         x: torch.Tensor,
-        style_references: Optional[torch.Tensor],
+        style_references: torch.Tensor | None,
     ) -> torch.Tensor:
         gamma_beta = self._style_conditioning_vector(style_references)
         if gamma_beta is None:
@@ -287,7 +286,7 @@ class UpscalerModel(SaveLoadModel):
     def forward(
         self,
         low_res: torch.Tensor,
-        style_references: Optional[torch.Tensor] = None,
+        style_references: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Upscale a low-resolution glyph raster.
 

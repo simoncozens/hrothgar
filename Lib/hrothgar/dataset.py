@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
-from typing import Callable, Generic, Optional, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import Callable, Generic, TypeVar
 
 import torch
 import uharfbuzz as hb
@@ -11,7 +12,11 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset_constants import LATIN_CORE, LATIN_KERNEL, CAPS_ONLY
+from hrothgar.dataset_constants import (  # noqa: F401
+    CAPS_ONLY,  # pyright: ignore[reportUnusedImport]
+    LATIN_CORE,
+    LATIN_KERNEL,  # pyright: ignore[reportUnusedImport]
+)
 from hrothgar.googlefonts import GoogleFonts
 
 _T = TypeVar("_T")
@@ -120,18 +125,18 @@ class DatasetMaker:
         self,
         repo_url: str,
         batch_size: int,
-        having: Optional[set[int]] = None,
-        target_codepoints: Optional[set[int]] = None,
-        canary_size: Optional[int] = None,
+        having: set[int] | None = None,
+        target_codepoints: set[int] | None = None,
+        canary_size: int | None = None,
         image_size: int = 128,
         split_seed: int = 1234,
-        character_set: Optional[Sequence[int]] = None,
+        character_set: Sequence[int] | None = None,
     ):
         self.target_codepoints = set(target_codepoints) if target_codepoints else None
         if character_set is None:
             character_set = LATIN_CORE
         self._character_set: list[int] = sorted(set(character_set))
-        having_filter: Optional[set[int]] = None
+        having_filter: set[int] | None = None
         if having is not None:
             having_filter = set(having)
 

@@ -7,7 +7,7 @@ Separated from ``hrothgar.ar.dataset`` so that inference-only code
 from __future__ import annotations
 
 import random
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import uharfbuzz as hb
 
@@ -43,7 +43,7 @@ def _sample_style_codepoints(
     font,
     target_char: int,
     style_glyph_count: int,
-    common_style_codepoints: Optional[Sequence[int]],
+    common_style_codepoints: Sequence[int] | None,
 ) -> list[int]:
     """Select style codepoints for one target item.
 

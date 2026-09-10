@@ -8,7 +8,7 @@ path is shared across AR, GTok, and the style embedder.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import torch
 
@@ -19,7 +19,7 @@ def render_glyph(
     font,
     codepoint: int,
     size: int,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Render a single glyph to a ``(size, size)`` greyscale tensor in [0, 1]."""
     return _render_glyph_rgb(font, codepoint, size, axis_position=axis_position)[0]
@@ -29,7 +29,7 @@ def render_input_set(
     font,
     codepoints: Sequence[int],
     size: int,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Render the full input glyph set as ``(G, 1, size, size)`` greyscale.
 

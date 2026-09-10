@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections import namedtuple
-from typing import Optional, cast
+from typing import cast
 
 import requests
 import torch
@@ -146,7 +146,7 @@ class vgg16(torch.nn.Module):
         self,
         requires_grad=False,
         pretrained=True,
-        weights: Optional[VGG16_Weights] = None,
+        weights: VGG16_Weights | None = None,
     ):
         super().__init__()
         # Keep pretrained for compatibility but prefer explicit weights.

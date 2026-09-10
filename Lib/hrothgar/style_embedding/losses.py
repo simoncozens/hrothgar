@@ -6,7 +6,6 @@ All loss-computation functions return ``(total_loss, loss_info)`` where
 
 from __future__ import annotations
 
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -18,9 +17,9 @@ def multipos_contrastive_loss(
     projections: torch.Tensor,
     family_labels: list[str],
     *,
-    font_ids: Optional[list[str]] = None,
-    text_embeddings: Optional[torch.Tensor] = None,
-    tag_vectors: Optional[torch.Tensor] = None,
+    font_ids: list[str] | None = None,
+    text_embeddings: torch.Tensor | None = None,
+    tag_vectors: torch.Tensor | None = None,
     temperature: float = 0.07,
     family_positive_weight: float = 0.3,
     tag_threshold: float = 0.1,
@@ -167,7 +166,7 @@ def multipos_contrastive_loss(
 def contrastive_loss(
     projections: torch.Tensor,
     temperature: float = 0.07,
-    family_labels: Optional[list[str]] = None,
+    family_labels: list[str] | None = None,
 ) -> torch.Tensor:
     """NT-Xent contrastive loss with same-family negative masking.
 
@@ -274,18 +273,18 @@ def category_loss(
 
 def compute_losses(
     projections: torch.Tensor,
-    predicted_tags: Optional[dict[str, torch.Tensor]],
+    predicted_tags: dict[str, torch.Tensor] | None,
     target_tags: dict[str, torch.Tensor],
     *,
     weights: FontStyleEmbeddingLossWeights,
     temperature: float = 0.07,
-    tag_masks: Optional[dict[str, torch.Tensor]] = None,
-    family_labels: Optional[list[str]] = None,
-    font_ids: Optional[list[str]] = None,
-    category_logits: Optional[torch.Tensor] = None,
-    category_targets: Optional[torch.Tensor] = None,
-    text_embeddings: Optional[torch.Tensor] = None,
-    tag_vectors: Optional[torch.Tensor] = None,
+    tag_masks: dict[str, torch.Tensor] | None = None,
+    family_labels: list[str] | None = None,
+    font_ids: list[str] | None = None,
+    category_logits: torch.Tensor | None = None,
+    category_targets: torch.Tensor | None = None,
+    text_embeddings: torch.Tensor | None = None,
+    tag_vectors: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute combined loss and per-term breakdown.
 

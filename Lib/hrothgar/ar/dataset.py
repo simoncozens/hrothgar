@@ -9,7 +9,7 @@ to the ink bounding box during collation.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import torch
 import uharfbuzz as hb
@@ -34,7 +34,7 @@ class _OversampledTargetDataset(Dataset):
         fonts,
         *,
         codepoint_filter_fn,
-        oversampled_codepoints: Optional[set[int]] = None,
+        oversampled_codepoints: set[int] | None = None,
         oversample_factor: int = 1,
     ):
         super().__init__(fonts, codepoint_filter_fn=codepoint_filter_fn)
@@ -63,12 +63,12 @@ class ARPhase1DatasetMaker(DatasetMaker):
         repo_url: str,
         batch_size: int,
         *,
-        having: Optional[set[int]] = None,
-        target_codepoints: Optional[Sequence[int]] = None,
-        canary_size: Optional[int] = None,
+        having: set[int] | None = None,
+        target_codepoints: Sequence[int] | None = None,
+        canary_size: int | None = None,
         image_size: int = 128,
         style_glyph_count: int = 8,
-        common_style_codepoints: Optional[Sequence[int]] = None,
+        common_style_codepoints: Sequence[int] | None = None,
         class_balanced: bool = False,
         split_seed: int = 1234,
         target_codepoint_oversample_factor: int = 8,

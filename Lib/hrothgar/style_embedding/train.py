@@ -12,7 +12,6 @@ import io
 import itertools
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -78,7 +77,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
 
     def post_init(self, train_args) -> None:
         # ── Config & model ──────────────────────────────────────────────
-        tag_names: Optional[list[str]] = None
+        tag_names: list[str] | None = None
         if train_args.tags:
             if train_args.tags.lower() == "all":
                 tag_names = _collect_all_tags(train_args.dataset_path)

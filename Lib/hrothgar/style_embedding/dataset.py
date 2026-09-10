@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import torch
 import torch.nn.functional as F
@@ -95,14 +95,14 @@ class FontStyleDatasetMaker(DatasetMaker):
         batch_size: int,
         *,
         glyph_size: int = 64,
-        input_codepoints: Optional[Sequence[int]] = None,
+        input_codepoints: Sequence[int] | None = None,
         glyph_sample_size: int = 32,
         split_seed: int = 1234,
-        canary_size: Optional[int] = None,
-        tag_names: Optional[list[str]] = None,
+        canary_size: int | None = None,
+        tag_names: list[str] | None = None,
         tag_num_classes: int = 0,
         class_balanced: bool = True,
-        text_encoder_name: Optional[str] = None,
+        text_encoder_name: str | None = None,
         text_embedding_dim: int = 384,
     ):
         self._text_encoder_name = text_encoder_name

@@ -17,7 +17,6 @@ Usage::
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 
@@ -67,7 +66,7 @@ class UpscalerInference:
         model_dir: Directory containing the exported Core ML model files.
     """
 
-    def __init__(self, model_dir: Union[str, Path]) -> None:
+    def __init__(self, model_dir: str | Path) -> None:
         model_dir = Path(model_dir)
 
         style_base = model_dir / "style_encoder"
@@ -81,7 +80,7 @@ class UpscalerInference:
                     return candidate
             raise FileNotFoundError(f"Model not found: {base}.mlmodelc or .mlpackage")
 
-        self._style_model: Optional[ct.models.MLModel] = None
+        self._style_model: ct.models.MLModel | None = None
         if (
             style_base.with_suffix(".mlmodelc").exists()
             or style_base.with_suffix(".mlpackage").exists()
@@ -102,7 +101,7 @@ class UpscalerInference:
     def upscale(
         self,
         low_res: np.ndarray,
-        style_references: Optional[np.ndarray] = None,
+        style_references: np.ndarray | None = None,
     ) -> np.ndarray:
         """Upscale a low-resolution glyph raster.
 

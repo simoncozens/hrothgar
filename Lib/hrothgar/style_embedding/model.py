@@ -8,7 +8,6 @@ contrastive, tag-prediction, and category heads.
 
 from __future__ import annotations
 
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -148,7 +147,7 @@ class FontStyleEmbedder(SaveLoadModel):
         )
 
         # Tag prediction heads.
-        self.tag_heads: Optional[nn.ModuleDict] = None
+        self.tag_heads: nn.ModuleDict | None = None
         if config.tag_names:
             self.tag_heads = nn.ModuleDict(
                 {
@@ -163,7 +162,7 @@ class FontStyleEmbedder(SaveLoadModel):
             )
 
         # Broad category head.
-        self.category_head: Optional[CategoryPredictionHead] = None
+        self.category_head: CategoryPredictionHead | None = None
         if config.use_category_head:
             self.category_head = CategoryPredictionHead(
                 config.encoder_feature_dim,
@@ -173,7 +172,7 @@ class FontStyleEmbedder(SaveLoadModel):
 
         # Optional text projection — maps frozen text embeddings into the
         # same space as image projections for multi-positive contrastive loss.
-        self.text_projection: Optional[nn.Linear] = None
+        self.text_projection: nn.Linear | None = None
         if config.text_encoder_name:
             self.text_projection = nn.Linear(
                 config.text_embedding_dim, config.projection_dim
@@ -182,7 +181,7 @@ class FontStyleEmbedder(SaveLoadModel):
     def encode(
         self,
         images: torch.Tensor,
-        glyph_mask: Optional[torch.Tensor] = None,
+        glyph_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Encode glyph sets into the summary style embedding.
 
@@ -218,8 +217,8 @@ class FontStyleEmbedder(SaveLoadModel):
     def compute_embedding(
         self,
         font: Font,
-        device: Optional[torch.device] = None,
-        axis_position: Optional[list[float]] = None,
+        device: torch.device | None = None,
+        axis_position: list[float] | None = None,
     ) -> torch.Tensor:
         """Render a font's full input set and return its style embedding.
 
@@ -268,12 +267,12 @@ class FontStyleEmbedder(SaveLoadModel):
     def forward(
         self,
         images: torch.Tensor,
-        glyph_mask: Optional[torch.Tensor] = None,
+        glyph_mask: torch.Tensor | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
-        Optional[dict[str, torch.Tensor]],
-        Optional[torch.Tensor],
+        dict[str, torch.Tensor] | None,
+        torch.Tensor | None,
     ]:
         """Full forward pass.
 
@@ -282,11 +281,11 @@ class FontStyleEmbedder(SaveLoadModel):
         embedding = self.encode(images, glyph_mask)
         projection = F.normalize(self.projection(embedding), p=2, dim=-1)
 
-        tags: Optional[dict[str, torch.Tensor]] = None
+        tags: dict[str, torch.Tensor] | None = None
         if self.tag_heads is not None:
             tags = {name: head(embedding) for name, head in self.tag_heads.items()}
 
-        category_logits: Optional[torch.Tensor] = None
+        category_logits: torch.Tensor | None = None
         if self.category_head is not None:
             category_logits = self.category_head(embedding)
 

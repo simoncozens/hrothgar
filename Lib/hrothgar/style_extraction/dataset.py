@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import random
 from pathlib import Path
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import torch
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
@@ -71,10 +71,10 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         batch_size: int,
         *,
         image_size: int = 128,
-        character_set: Optional[Sequence[int]] = None,
+        character_set: Sequence[int] | None = None,
         num_evidence_glyphs: int = 32,
         split_seed: int = 1234,
-        canary_size: Optional[int] = None,
+        canary_size: int | None = None,
         class_balanced: bool = True,
     ):
         # Set before super().__init__: the base class calls filter_fonts(),
@@ -95,7 +95,7 @@ class StyleExtractionDatasetMaker(DatasetMaker):
         self._cp_to_idx = {cp: i for i, cp in enumerate(self._character_set)}
 
         # Populated on first train_loader() call in canary mode.
-        self._canary_loader: Optional[_PrecomputedBatches] = None
+        self._canary_loader: _PrecomputedBatches | None = None
 
     def filter_fonts(self) -> None:
         """Keep only fonts with enough glyphs to split evidence from target."""

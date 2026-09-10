@@ -11,7 +11,8 @@ import ctypes
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 import freetype
 import numpy as np
@@ -103,7 +104,7 @@ class RawGlyph:
 
 
 @lru_cache(maxsize=128)
-def _face_for_path(font_path: str, axis_position: Optional[tuple]) -> freetype.Face:
+def _face_for_path(font_path: str, axis_position: tuple | None) -> freetype.Face:
     """Return a cached FreeType face, configured with the requested axis
     position (``None`` = default instance)."""
     face = freetype.Face(font_path)
@@ -125,7 +126,7 @@ def render_gid(
     gid: int,
     size: int,
     trim_to_rsb: bool = False,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> np.ndarray:
     """Render a glyph by GID into a square image.
 
@@ -190,7 +191,7 @@ def render_gid_raw(
     font_path: str | Path,
     gid: int,
     size: int,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> RawGlyph:
     """Render a glyph to its raw FreeType bitmap without pasting onto a canvas.
 
@@ -232,7 +233,7 @@ def render_phrase(
     font_path: str | Path,
     phrase: str,
     size: int = 48,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
     width: int = 768,
     height: int = 128,
 ) -> np.ndarray:

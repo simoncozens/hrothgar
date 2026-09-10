@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -132,7 +131,7 @@ def main() -> None:
     low_arr = _render_glyph(str(args.font), char, size=low_sz)
     native_arr = _render_glyph(str(args.font), char, size=high_sz)
 
-    style_refs: Optional[np.ndarray] = None
+    style_refs: np.ndarray | None = None
     if not args.disable_style:
         style_refs = _render_style_references(str(args.font), count=K, size=high_sz)
         print(f"Rendered {style_refs.shape[0]} style references.")

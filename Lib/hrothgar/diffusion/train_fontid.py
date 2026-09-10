@@ -41,13 +41,17 @@ class FontIdTrainingLoop(TrainingLoop):
             extra_codepoints=train_args.extra_codepoints,
             remove_codepoints=train_args.remove_codepoints,
             oversample_codepoints=train_args.oversample_codepoints,
-            oversample_pairs=train_args.oversample_pairs,
-            oversample_pair_factor=train_args.oversample_pair_factor,
-            class_balanced=train_args.class_balanced,
+            subset_n=train_args.subset_n,
+            strata=train_args.subset_strata,
+            max_per_unit=train_args.max_per_unit,
+            avg_instances=train_args.avg_instances,
+            target_frac=train_args.target_frac,
+            prefer_multi_target=train_args.prefer_multi_target,
+            replacement=train_args.replacement,
+            subset_seed=train_args.subset_seed,
             heldout_fraction=train_args.heldout_fraction,
             min_train_fonts_per_codepoint=train_args.min_train_fonts_per_codepoint,
             split_seed=train_args.split_seed,
-            canary_size=train_args.limit_dataset_size,
         )
         self.maker = maker
 
@@ -65,21 +69,15 @@ class FontIdTrainingLoop(TrainingLoop):
             min_snr_gamma=train_args.min_snr_gamma,
         )
         config.save_sidecar(train_args.model_path)
-        # Persist the font ordering so inference can map a font back to its id.
-        with Path(str(train_args.model_path) + ".fonts.json").open("w") as f:
-            json.dump([str(font.path) for font in maker.fonts], f, indent=2)
-            f.write("\n")
         # Persist the codepoint ordering so inference can map a codepoint to its id.
         with Path(str(train_args.model_path) + ".codepoints.json").open("w") as f:
             json.dump(maker.cp_list, f, indent=2)
             f.write("\n")
-        # Persist the family list and per-font (family, weight, style) so
-        # inference can reconstruct the factorized style conditioning.
-        with Path(str(train_args.model_path) + ".families.json").open("w") as f:
-            json.dump(maker.families, f, indent=2)
-            f.write("\n")
-        with Path(str(train_args.model_path) + ".font_meta.json").open("w") as f:
-            json.dump([list(m) for m in maker.font_meta], f, indent=2)
+        # Persist per-instance identity and factorized conditioning
+        # (family id, weight, style) so inference can reconstruct the exact
+        # training-time conditioning for every font file / variable location.
+        with Path(str(train_args.model_path) + ".instances.json").open("w") as f:
+            json.dump(maker.instance_sidecar(), f, indent=2)
             f.write("\n")
 
         self.model = build_fontid_model(config).to(self.device)
@@ -198,7 +196,7 @@ class FontIdTrainingLoop(TrainingLoop):
         batch = self.maker.random_val_batch(8)
         n = min(8, batch["images"].shape[0])
         codepoints = batch["codepoints"][:n].to(self.device)
-        font_ids = batch["font_ids"][:n].to(self.device)
+        instance_ids = batch["instance_ids"][:n].to(self.device)
         font_meta = batch["font_meta"][:n].to(self.device)
         gts = batch["images"][:n].to(self.device).float()
         geometry = batch["geometry"][:n]  # (n, 5) GT geometry (CPU)
@@ -209,22 +207,23 @@ class FontIdTrainingLoop(TrainingLoop):
         recs = recs.float().clamp(0.0, 1.0)
         pred_geometry = pred_geometry.float()
 
-        # A second codepoint from each font, as a style reference for the eye,
-        # plus the (family, codepoint) identity of each row for debugging.
+        # A second codepoint from each instance, as a style reference for the
+        # eye, plus the (family, weight, style) identity of each row.
         rng = random.Random(self.maker.split_seed)
         refs, text_lines = [], []
         for i in range(n):
-            fid = font_ids[i].item()
+            inst = self.maker.instances[instance_ids[i].item()]
             target_cp = self.maker.cp_list[codepoints[i].item()]
-            font = self.maker.fonts[fid]
-            avail = sorted(
-                (set(font.codepoints) & set(self.maker.character_set)) - {target_cp}
-            )
+            avail = sorted(set(inst.codepoints) - {target_cp})
             ref_cp = rng.choice(avail) if avail else target_cp
-            ref_img, _ = render_glyph_with_geometry(font, ref_cp, self.maker.image_size)
+            ref_img, _ = render_glyph_with_geometry(
+                inst.font, ref_cp, self.maker.image_size,
+                axis_position=inst.axis_position,
+            )
             refs.append(ref_img.unsqueeze(0))
             text_lines.append(
-                f"{font.family} | target {chr(target_cp)!r} U+{target_cp:04X} "
+                f"{inst.family} [{inst.style} {inst.weight}] "
+                f"| target {chr(target_cp)!r} U+{target_cp:04X} "
                 f"| ref {chr(ref_cp)!r} U+{ref_cp:04X}"
             )
         refs = torch.stack(refs).to(self.device)
@@ -280,30 +279,20 @@ class FontIdTrainingLoop(TrainingLoop):
         return torch.from_numpy(rgb).float().permute(2, 0, 1)  # (3, H, W)
 
 
-def _parse_oversample_pairs(path: str) -> list[tuple[str, int]]:
-    """Parse an oversample CSV of ``font filename,character`` lines.
+def _parse_strata(spec: str) -> dict[str, float]:
+    """Parse a ``'sans:0.25,serif:0.25,...'`` stratum-fraction spec.
 
-    The file has no header.  Each line names a font file (basename, e.g.
-    ``Agbalumo-Regular.ttf``) and the single character to oversample in it.
-    Blank lines, lines without a comma, and entries whose character is empty
-    are skipped — this also drops the stray self-referential filename that can
-    appear in a hand-curated list.  Returns ``(basename, codepoint)`` tuples.
+    An empty spec returns an empty dict, which lets
+    :data:`~hrothgar.diffusion.dataset_fontid.DEFAULT_STRATA` apply.
     """
-    if not path:
-        return []
-    pairs: list[tuple[str, int]] = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or "," not in line:
-                continue
-            filename, char = line.split(",", 1)
-            filename = filename.strip()
-            char = char.strip()
-            if not filename or not char:
-                continue
-            pairs.append((filename, ord(char[0])))
-    return pairs
+    out: dict[str, float] = {}
+    for part in (spec or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        name, frac = part.split(":")
+        out[name.strip()] = float(frac)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -362,22 +351,49 @@ if __name__ == "__main__":
         help="Duplication factor for --oversample-codepoints",
     )
     parser.add_argument(
-        "--oversample-pairs",
+        "--subset-n",
+        type=int,
+        default=200,
+        help="Number of stratified training instances (<=0 = full library)",
+    )
+    parser.add_argument(
+        "--subset-strata",
         type=str,
         default="",
-        help="CSV of 'font filename,character' pairs to oversample (no header)",
+        help="Stratum fractions, e.g. "
+             "'sans:0.25,serif:0.25,display:0.2,script:0.2,handwriting:0.1'",
     )
     parser.add_argument(
-        "--oversample-pair-factor",
+        "--max-per-unit",
         type=int,
-        default=20,
-        help="Duplication factor for --oversample-pairs",
+        default=3,
+        help="Max instances per (family, style) sampling unit",
     )
     parser.add_argument(
-        "--class-balanced",
-        action="store_true",
-        help="Class-balance training batches by font category",
+        "--avg-instances",
+        type=float,
+        default=1.6,
+        help="Target instances per selected (family, style) unit",
     )
+    parser.add_argument(
+        "--target-frac",
+        type=float,
+        default=0.7,
+        help="Fraction of selected families that must contain ₹",
+    )
+    parser.add_argument(
+        "--no-prefer-multi-target",
+        dest="prefer_multi_target",
+        action="store_false",
+        help="Do not prefer families that can supply multiple contrasting ₹ instances",
+    )
+    parser.add_argument(
+        "--no-replacement",
+        dest="replacement",
+        action="store_false",
+        help="Cap the subset at distinct capacity instead of oversampling to fill quotas",
+    )
+    parser.add_argument("--subset-seed", type=int, default=1234)
     parser.add_argument(
         "--heldout-fraction",
         type=float,
@@ -424,12 +440,6 @@ if __name__ == "__main__":
     parser.add_argument("--validation-every", type=int, default=1000)
     parser.add_argument("--validation-batches", type=int, default=20)
     parser.add_argument("--model-path", type=str, default="models/fontid_diffusion.pth")
-    parser.add_argument(
-        "--limit-dataset-size",
-        type=int,
-        default=None,
-        help="Limit to this many fonts for a canary run",
-    )
 
     args = parser.parse_args()
     if not args.dataset_path:
@@ -448,8 +458,8 @@ if __name__ == "__main__":
     oversample_cps = [ord(c) for c in args.oversample_codepoints]
     args.oversample_codepoints = {cp: args.oversample_factor for cp in oversample_cps}
 
-    # Parse the oversample-pairs CSV ('font filename,character' per line).
-    args.oversample_pairs = _parse_oversample_pairs(args.oversample_pairs)
+    # Parse the optional stratum-fraction spec.
+    args.subset_strata = _parse_strata(args.subset_strata)
 
     loop = FontIdTrainingLoop(args)
     loop.train()

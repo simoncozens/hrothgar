@@ -8,7 +8,7 @@ separately (as in GTok / AR).
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import torch
 import uharfbuzz as hb
@@ -22,7 +22,7 @@ def render_glyph(
     font,
     codepoint: int,
     size: int,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Render + crop-to-ink a glyph as a ``(size, size)`` greyscale tensor in [0, 1]."""
     rendering = _render_glyph_rgb(font, codepoint, size, axis_position=axis_position)
@@ -33,7 +33,7 @@ def render_glyph_with_geometry(
     font,
     codepoint: int,
     size: int,
-    axis_position: Optional[Sequence[float]] = None,
+    axis_position: Sequence[float] | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Render + crop-to-ink a glyph, also returning its geometry labels.
 

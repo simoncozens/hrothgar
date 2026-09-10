@@ -4,7 +4,6 @@ import datetime
 import random
 import subprocess
 from pathlib import Path
-from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -31,7 +30,7 @@ def progress_values(loss_info: dict[str, torch.Tensor]):
     return [(key, float(value.detach().cpu())) for key, value in loss_info.items()]
 
 
-def git_short_sha() -> Optional[str]:
+def git_short_sha() -> str | None:
     """Return the short git commit SHA of the hrothgar checkout, or ``None``.
 
     Used to stamp model sidecar JSON files so a checkpoint can be traced back
@@ -97,7 +96,7 @@ class SaveLoadModel(torch.nn.Module):
 class TrainingLoop:
     """A little mini Keras"""
 
-    target_steps: Optional[int] = None  # Set in post_init based on canary mode
+    target_steps: int | None = None  # Set in post_init based on canary mode
     num_epochs: int
     model_path: str
     validation_metric: float
@@ -198,7 +197,7 @@ class TrainingLoop:
     def validation(self):
         pass
 
-    def train_step(self, batch) -> Tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def train_step(self, batch) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Perform a single training step on a batch of data. Must be implemented by subclass.
 
         Returns:

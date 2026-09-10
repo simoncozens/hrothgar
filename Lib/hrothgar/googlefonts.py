@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 from functools import cached_property
 from pathlib import Path
-from typing import Optional, Self, Union
+from typing import Self
 
 import numpy as np
 import uharfbuzz as hb
@@ -22,7 +22,7 @@ class Font:
     path: Path
 
     def render(
-        self, char: int, size: int = 64, axis_position: Optional[list[float]] = None
+        self, char: int, size: int = 64, axis_position: list[float] | None = None
     ) -> np.ndarray:
         """Render a single glyph as a (3, size, size) float32 array."""
         try:
@@ -32,7 +32,7 @@ class Font:
             return np.ones((3, size, size), dtype=np.float32)
 
     def render_gid(
-        self, gid: int, size: int = 64, axis_position: Optional[list[float]] = None
+        self, gid: int, size: int = 64, axis_position: list[float] | None = None
     ) -> np.ndarray:
         """Render a single glyph by GID as a (3, size, size) float32 array."""
         try:
@@ -122,8 +122,8 @@ class GoogleFonts:
     def __init__(
         self,
         repo: str | Path,
-        having: Optional[set[int]] = None,
-        max_fonts: Optional[int] = None,
+        having: set[int] | None = None,
+        max_fonts: int | None = None,
     ):
         """Load fonts from ``repo`` (``ofl/*/*.ttf``), newest first by path.
 
@@ -273,7 +273,7 @@ class GoogleFont(Font):
         display_descriptor = f"This is a {centile_to_text(int(display))} display font. "
         return display_descriptor + self.description_with_tags()
 
-    def reference_font(self, hint=None) -> Union[Self, None]:
+    def reference_font(self, hint=None) -> Self | None:
         """Returns a reference font for this font, based on its stroke tags. This is used to provide a baseline for comparison when describing the font."""
         if (
             self.metadata.stroke == "SANS_SERIF"
@@ -315,22 +315,22 @@ class StandaloneFont(Font):
 
     def __init__(
         self,
-        path: Union[str, Path],
-        reference: Optional[StandaloneFont | GoogleFont] = None,
+        path: str | Path,
+        reference: StandaloneFont | GoogleFont | None = None,
     ) -> None:
         self.path = Path(path)
         self.hb_face = hb.Face(hb.Blob.from_file_path(str(self.path)))
         self.family = self.path.stem
         self._reference = reference
 
-    def reference_font(self) -> Optional[StandaloneFont | GoogleFont]:
+    def reference_font(self) -> StandaloneFont | GoogleFont | None:
         """Return the reference (content) font, or None if not set."""
         return self._reference
 
 
 def find_google_font_by_basename(
-    dataset_path: Union[str, Path],
-    font_path: Union[str, Path],
+    dataset_path: str | Path,
+    font_path: str | Path,
 ) -> GoogleFont:
     """Find exactly one ``GoogleFont`` by matching font filename basename.
 

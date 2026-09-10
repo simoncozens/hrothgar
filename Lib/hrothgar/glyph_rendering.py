@@ -15,7 +15,8 @@ bounding box to denormalize the glyph back onto the baseline.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 import numpy as np
 import torch
@@ -47,7 +48,7 @@ def render_glyph(
     font: Font,
     codepoint: int,
     size: int,
-    axis_position: Optional[list[float]] = None,
+    axis_position: list[float] | None = None,
 ) -> torch.Tensor:
     """Render a glyph as a ``(3, size, size)`` float32 tensor in [0, 1]."""
     arr = font.render(codepoint, size=size, axis_position=axis_position)
@@ -120,7 +121,7 @@ def render_normalized(
     font: Font,
     codepoint: int,
     size: int,
-    axis_position: Optional[list[float]] = None,
+    axis_position: list[float] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render + crop-to-ink a glyph.
 

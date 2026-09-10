@@ -10,7 +10,6 @@ from the same font rendered at high resolution — for style conditioning.
 
 from __future__ import annotations
 
-from typing import Optional, Set
 
 import numpy as np
 import torch
@@ -28,8 +27,8 @@ class UpscalerDatasetMaker(DatasetMaker):
         batch_size: int,
         low_res_size: int = 128,
         high_res_size: int = 512,
-        canary_size: Optional[int] = None,
-        having: Optional[Set[int]] = None,
+        canary_size: int | None = None,
+        having: set[int] | None = None,
         style_conformance_mode: bool = False,
         clean_font_only: bool = False,
         clean_font_display_score_threshold: float = 45.0,

@@ -7,7 +7,7 @@ Loads the Google Fonts repository and produces batches of
 from __future__ import annotations
 
 from collections import Counter
-from typing import Iterable, List, Sequence
+from collections.abc import Iterable, Sequence
 
 import torch
 from hrothgar.dataset import LATIN_CORE, ClassBalancedBatchSampler, DatasetMaker
