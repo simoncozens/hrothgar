@@ -114,11 +114,34 @@ class FontIdConditionalUnet(nn.Module):
         self.weight_direction = nn.Parameter(torch.randn(time_dim))
         self.style_emb = nn.Embedding(num_style_buckets, time_dim)
         cond_dim = time_dim * 2  # codepoint + style, concatenated
-        # Per-(codepoint, font) geometry regression head: predicts the five
-        # em-unit labels (scale_x, scale_y, left_sidebearing, baseline_offset,
-        # advance) needed to place a generated glyph back on the baseline.
+        # A glyph encoder condenses the *specific* generated glyph (the one the
+        # denoiser actually produced) into a low-dimensional "mode" vector, so
+        # the geometry head can answer "what bbox/advance does THIS glyph need
+        # in this font?" rather than trying to guess the construction from the
+        # conditioning alone.  The glyph image is the crop-to-ink normalized
+        # rendering in [0, 1], so its aspect ratio / em extent are *not* in the
+        # image — those magnitudes still come from the font conditioning; the
+        # mode vector only disambiguates which construction was drawn.
+        self.mode_dim = time_dim
+        self.glyph_encoder = nn.Sequential(
+            nn.Conv2d(channels, 32, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(128, self.mode_dim),
+            nn.GELU(),
+            nn.Linear(self.mode_dim, self.mode_dim),
+        )
+        # Per-(codepoint, font, glyph-mode) geometry regression head: predicts
+        # the five em-unit labels (scale_x, scale_y, left_sidebearing,
+        # baseline_offset, advance) needed to place the generated glyph back on
+        # the baseline.
         self.geometry_head = nn.Sequential(
-            nn.Linear(cond_dim, time_dim),
+            nn.Linear(cond_dim + self.mode_dim, time_dim),
             nn.GELU(),
             nn.Linear(time_dim, len(GEOMETRY_SPEC)),
         )
@@ -203,16 +226,28 @@ class FontIdConditionalUnet(nn.Module):
         return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
 
     def predict_geometry(
-        self, codepoint: torch.Tensor, font_meta: torch.Tensor
+        self,
+        codepoint: torch.Tensor,
+        font_meta: torch.Tensor,
+        glyph: torch.Tensor,
     ) -> torch.Tensor:
-        """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
-        raw = self.geometry_head(self._cond(codepoint, font_meta))
+        """Predict the five geometry labels (em units) for ``glyph``.
+
+        ``glyph`` is the crop-to-ink normalized glyph ``(B, 1, H, W)`` in
+        ``[0, 1]`` — either the generated glyph at inference, or the ground-truth
+        glyph during training.  The font conditioning supplies the em-scale
+        conventions; the glyph disambiguates which construction was drawn.
+        """
+        cond = self._cond(codepoint, font_meta)  # (B, cond_dim)
+        mode = self.glyph_encoder(glyph)  # (B, mode_dim)
+        raw = self.geometry_head(torch.cat([cond, mode], dim=-1))
         return _decode_geometry(raw)
 
     def geometry_loss(
         self,
         codepoint: torch.Tensor,
         font_meta: torch.Tensor,
+        glyph: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         """Per-value MSE in em units.
@@ -221,7 +256,7 @@ class FontIdConditionalUnet(nn.Module):
         batch of the squared error, averaged over the five labels — so each
         label contributes equally regardless of its em magnitude.
         """
-        pred = self.predict_geometry(codepoint, font_meta)  # (B, 5) em units
+        pred = self.predict_geometry(codepoint, font_meta, glyph)  # (B, 5) em units
         return ((pred - gt_geometry) ** 2).mean()
 
     def forward(
@@ -469,19 +504,22 @@ class FontIdDiffusionModel(SaveLoadModel):
         return self.diffusion.sample(codepoint, font_meta)
 
     def predict_geometry(
-        self, codepoint: torch.Tensor, font_meta: torch.Tensor
+        self, codepoint: torch.Tensor, font_meta: torch.Tensor, glyph: torch.Tensor
     ) -> torch.Tensor:
-        """Predict the five geometry labels (em units) for ``(codepoint, font)``."""
-        return self.diffusion.model.predict_geometry(codepoint, font_meta)
+        """Predict the five geometry labels (em units) for ``glyph``."""
+        return self.diffusion.model.predict_geometry(codepoint, font_meta, glyph)
 
     def geometry_loss(
         self,
         codepoint: torch.Tensor,
         font_meta: torch.Tensor,
+        glyph: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         """Per-value MSE in em units between predicted and target geometry labels."""
-        return self.diffusion.model.geometry_loss(codepoint, font_meta, gt_geometry)
+        return self.diffusion.model.geometry_loss(
+            codepoint, font_meta, glyph, gt_geometry
+        )
 
 
 def build_fontid_model(config: FontIdDiffusionConfig) -> FontIdDiffusionModel:

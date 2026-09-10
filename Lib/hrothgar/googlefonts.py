@@ -132,6 +132,10 @@ class GoogleFonts:
         the full cost of scanning thousands of fonts.
         """
         self.repo_path = Path(repo)
+        # Load tags *before* scanning fonts, so ``should_skip`` can consult the
+        # /Special use/{Symbols,Barcode,Redaction} tags (``font.tags()`` is
+        # empty otherwise, and those fonts would leak through).
+        self._init_tags()
         self.fonts = []
         for font_path in sorted(self.repo_path.glob("ofl/*/*.ttf")):
             try:
@@ -148,7 +152,6 @@ class GoogleFonts:
             self.fonts.append(font)
             if max_fonts is not None and len(self.fonts) >= max_fonts:
                 break
-        self._init_tags()
 
     def _init_tags(self):
         # Need a proper csv decoder to handle quoted values, etc.

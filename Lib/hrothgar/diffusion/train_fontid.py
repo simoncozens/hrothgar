@@ -135,7 +135,9 @@ class FontIdTrainingLoop(TrainingLoop):
 
         with self._autocast_context():
             diffusion_loss = self.model(images, codepoints, font_meta)
-            geometry_loss = self.model.geometry_loss(codepoints, font_meta, geometry)
+            geometry_loss = self.model.geometry_loss(
+                codepoints, font_meta, images, geometry
+            )
             loss = diffusion_loss + self.geometry_weight * geometry_loss
         return loss, {
             "loss": loss.detach().float(),
@@ -159,7 +161,9 @@ class FontIdTrainingLoop(TrainingLoop):
 
                 with self._autocast_context():
                     recs = self.model.sample(codepoints, font_meta)
-                    pred_geometry = self.model.predict_geometry(codepoints, font_meta)
+                    pred_geometry = self.model.predict_geometry(
+                        codepoints, font_meta, recs
+                    )
                 # Metrics in fp32 (LPIPS/SSIM are precision-sensitive).
                 recs = recs.float().clamp(0.0, 1.0)
                 pred_geometry = pred_geometry.float()
@@ -203,7 +207,7 @@ class FontIdTrainingLoop(TrainingLoop):
 
         with torch.no_grad(), self._autocast_context():
             recs = self.model.sample(codepoints, font_meta)
-            pred_geometry = self.model.predict_geometry(codepoints, font_meta)
+            pred_geometry = self.model.predict_geometry(codepoints, font_meta, recs)
         recs = recs.float().clamp(0.0, 1.0)
         pred_geometry = pred_geometry.float()
 
