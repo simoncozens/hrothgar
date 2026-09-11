@@ -45,7 +45,7 @@ def render_glyph_with_geometry(
         ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
         tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is a dict of the
         five em-unit labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
-        ``baseline_offset``, ``advance``.
+        ``descender_depth``, ``advance``.
     """
     gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
     raw = render_gid_raw(font.path, gid, size, axis_position=axis_position)

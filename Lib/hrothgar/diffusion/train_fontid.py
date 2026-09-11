@@ -66,6 +66,7 @@ class FontIdTrainingLoop(TrainingLoop):
             learning_rate=train_args.learning_rate,
             warmup_steps=train_args.warmup_steps,
             geometry_loss_weight=train_args.geometry_weight,
+            geometry_std=maker.geometry_std,
             min_snr_gamma=train_args.min_snr_gamma,
         )
         config.save_sidecar(train_args.model_path)
@@ -422,8 +423,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--geometry-weight",
         type=float,
-        default=1.0,
-        help="Weight of the geometry regression objective (em-unit labels)",
+        default=0.1,
+        help="Weight of the geometry regression objective (unit variance labels)",
     )
     parser.add_argument("--dim", type=int, default=64)
     parser.add_argument("--timesteps", type=int, default=1000)

@@ -127,6 +127,9 @@ def main() -> None:
                 image = glyph[0, 0].cpu().numpy()  # (H, W) in [0, 1]
 
             geom = dict(zip(GEOMETRY_NAMES, geometry))
+            # Recover the absolute baseline position for any downstream consumer
+            # that still expects ``baseline_offset``.
+            geom["baseline_offset"] = geom["scale_y"] - geom["descender_depth"]
             suffix = "" if variant == 0 else f"_v{variant}"
             style = "" if inst["style"] == "normal" else "_italic"
             stem = (

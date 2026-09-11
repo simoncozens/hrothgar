@@ -48,7 +48,7 @@ from hrothgar.dataset import (
     _hb_font_for_face,
 )
 from hrothgar.dataset_constants import LATIN_KERNEL
-from hrothgar.glyph_rendering import geometry_tensor
+from hrothgar.glyph_rendering import GEOMETRY_SPEC, geometry_tensor
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
 from hrothgar.render_utils import render_glyph_with_geometry
 
@@ -341,6 +341,20 @@ def contrast_instances(unit: Unit, k: int) -> list[Instance]:
     return chosen
 
 
+def _has_continuous_wght(unit: Unit) -> bool:
+    """True if any variable instance has a non-degenerate ``wght`` axis.
+
+    A continuous ``wght`` range means the family can be synthesised at arbitrary
+    weights, so it can supply a full contrast ladder up to ``max_per_unit``
+    (not just the two endpoints).
+    """
+    for i in unit.instances:
+        wght = next((a for a in (i.axes or []) if a[0] == "wght"), None)
+        if wght and wght[1] < wght[3]:
+            return True
+    return False
+
+
 def contrast_capacity(unit: Unit, max_per_unit: int) -> int:
     """How many contrasting instances this unit can supply."""
     rng = unit.weight_range()
@@ -349,12 +363,9 @@ def contrast_capacity(unit: Unit, max_per_unit: int) -> int:
     wmin, wmax = rng
     if wmin == wmax:
         return 1
-    points = set(unit.static_weights())
-    for i in unit.instances:
-        wght = next((a for a in (i.axes or []) if a[0] == "wght"), None)
-        if wght:
-            points |= {int(wght[1]), int(wght[3])}
-    return min(len(points), max_per_unit)
+    if _has_continuous_wght(unit):
+        return max_per_unit
+    return min(len(unit.static_weights()), max_per_unit)
 
 
 def target_contrast_capacity(unit: Unit, max_per_unit: int) -> int:
@@ -367,14 +378,16 @@ def target_contrast_capacity(unit: Unit, max_per_unit: int) -> int:
     wmin, wmax = rng
     if wmin == wmax:
         return 1
-    pts = {i.weight for i in unit.instances if not i.variable and i.has_target}
+    # A variable font whose file contains the target glyph carries it at every
+    # synthesised weight, so it can supply a full contrast ladder.
     for i in unit.instances:
         if not i.has_target:
             continue
         wght = next((a for a in (i.axes or []) if a[0] == "wght"), None)
-        if wght:
-            pts |= {int(wght[1]), int(wght[3])}
-    return min(len(pts), max_per_unit)
+        if wght and wght[1] < wght[3]:
+            return max_per_unit
+    return min(len({i.weight for i in unit.instances if not i.variable and i.has_target}),
+               max_per_unit)
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +815,7 @@ class FontIdDatasetMaker:
 
         self.font_meta = [inst.font_meta for inst in self.instances]
         self._build_pairs()
+        self.geometry_std = self._compute_geometry_std()
         print(
             f"Instances: {len(self.instances)} unique "
             f"({sum(i.copies for i in self.instances)} rows); "
@@ -810,6 +824,24 @@ class FontIdDatasetMaker:
         print(f"Pairs: {len(self.train_pairs)} train / {len(self.val_pairs)} held-out")
 
     # -- pair construction ---------------------------------------------------
+
+    def _compute_geometry_std(self, n_samples: int = 2000) -> tuple[float, ...]:
+        """Per-label standard deviation of the geometry labels, over a sample of
+        training pairs (used to normalise the geometry loss)."""
+        if not self.train_pairs:
+            return tuple([1.0] * len(GEOMETRY_SPEC))
+        rng = random.Random(self.split_seed)
+        sample = rng.sample(self.train_pairs, min(n_samples, len(self.train_pairs)))
+        geos = []
+        for iid, cp_idx in sample:
+            inst = self.instances[iid]
+            _, geom = render_glyph_with_geometry(
+                inst.font, self.cp_list[cp_idx], self.image_size,
+                axis_position=inst.axis_position,
+            )
+            geos.append(geometry_tensor(geom))
+        std = torch.stack(geos).std(dim=0).clamp_min(1e-3)
+        return tuple(std.tolist())
 
     def _available_codepoints(self, font: StandaloneFont) -> list[int]:
         """Codepoints in the vocabulary that this font draws with a real outline."""

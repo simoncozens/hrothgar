@@ -46,7 +46,11 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
 from torch import nn
 
 from hrothgar.diffusion.config import FontIdDiffusionConfig
-from hrothgar.glyph_rendering import GEOMETRY_SPEC
+from hrothgar.glyph_rendering import (
+    DESCENDER_SNAP_EPSILON,
+    GEOMETRY_NAMES,
+    GEOMETRY_SPEC,
+)
 from hrothgar.utils import SaveLoadModel
 
 
@@ -82,8 +86,21 @@ class FontIdConditionalUnet(nn.Module):
         attn_dim_head: int = 32,
         attn_heads: int = 4,
         self_condition: bool = False,
+        geometry_std: tuple[float, ...] | None = None,
     ) -> None:
         super().__init__()
+        # Per-label standard deviations of the geometry labels, used to
+        # normalise the geometry loss so each label contributes equally
+        # regardless of its natural magnitude (e.g. scale_x ~1.5 vs descender
+        # depth ~0.01).  None = raw MSE.
+        if geometry_std is not None:
+            self.register_buffer(
+                "geometry_std", torch.tensor(geometry_std, dtype=torch.float32)
+            )
+        else:
+            self.register_buffer(
+                "geometry_std", torch.ones(len(GEOMETRY_SPEC), dtype=torch.float32)
+            )
         self.channels = channels
         self.out_dim = channels
         self.self_condition = self_condition
@@ -138,7 +155,7 @@ class FontIdConditionalUnet(nn.Module):
         )
         # Per-(codepoint, font, glyph-mode) geometry regression head: predicts
         # the five em-unit labels (scale_x, scale_y, left_sidebearing,
-        # baseline_offset, advance) needed to place the generated glyph back on
+        # descender_depth, advance) needed to place the generated glyph back on
         # the baseline.
         self.geometry_head = nn.Sequential(
             nn.Linear(cond_dim + self.mode_dim, time_dim),
@@ -230,6 +247,7 @@ class FontIdConditionalUnet(nn.Module):
         codepoint: torch.Tensor,
         font_meta: torch.Tensor,
         glyph: torch.Tensor,
+        snap: bool = True,
     ) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``glyph``.
 
@@ -237,11 +255,24 @@ class FontIdConditionalUnet(nn.Module):
         ``[0, 1]`` — either the generated glyph at inference, or the ground-truth
         glyph during training.  The font conditioning supplies the em-scale
         conventions; the glyph disambiguates which construction was drawn.
+
+        ``snap`` rounds predicted descender depths within
+        :data:`~hrothgar.glyph_rendering.DESCENDER_SNAP_EPSILON` of zero to
+        exactly zero, so text faces achieve absolute baseline alignment.  It is
+        on by default for inference and off for the training loss.
         """
         cond = self._cond(codepoint, font_meta)  # (B, cond_dim)
         mode = self.glyph_encoder(glyph)  # (B, mode_dim)
         raw = self.geometry_head(torch.cat([cond, mode], dim=-1))
-        return _decode_geometry(raw)
+        out = _decode_geometry(raw)  # (B, 5) em units
+        if snap:
+            idx = GEOMETRY_NAMES.index("descender_depth")
+            dd = out[:, idx : idx + 1]
+            snapped = torch.where(
+                torch.abs(dd) < DESCENDER_SNAP_EPSILON, torch.zeros_like(dd), dd
+            )
+            out = torch.cat([out[:, :idx], snapped, out[:, idx + 1 :]], dim=1)
+        return out
 
     def geometry_loss(
         self,
@@ -250,14 +281,17 @@ class FontIdConditionalUnet(nn.Module):
         glyph: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
-        """Per-value MSE in em units.
+        """Per-label variance-normalised MSE in em units.
 
-        ``gt_geometry`` is ``(B, 5)`` in em units.  The loss is the mean over the
-        batch of the squared error, averaged over the five labels — so each
-        label contributes equally regardless of its em magnitude.
+        ``gt_geometry`` is ``(B, 5)`` in em units.  Each label's squared error
+        is divided by its dataset standard deviation (``self.geometry_std``) so a
+        tiny label like descender depth is optimised as eagerly as scale_x /
+        advance.  The prediction is *un*snapped here so the model trains on the
+        continuous target (snapping is an inference-only post-process).
         """
-        pred = self.predict_geometry(codepoint, font_meta, glyph)  # (B, 5) em units
-        return ((pred - gt_geometry) ** 2).mean()
+        pred = self.predict_geometry(codepoint, font_meta, glyph, snap=False)
+        se = (pred - gt_geometry) ** 2  # (B, 5)
+        return (se / self.geometry_std.square()).mean()
 
     def forward(
         self,
@@ -482,6 +516,7 @@ class FontIdDiffusionModel(SaveLoadModel):
             attn_dim_head=config.attn_dim_head,
             attn_heads=config.attn_heads,
             self_condition=config.self_condition,
+            geometry_std=config.geometry_std,
         )
         self.diffusion = FontIdDiffusion(
             unet,
@@ -504,10 +539,16 @@ class FontIdDiffusionModel(SaveLoadModel):
         return self.diffusion.sample(codepoint, font_meta)
 
     def predict_geometry(
-        self, codepoint: torch.Tensor, font_meta: torch.Tensor, glyph: torch.Tensor
+        self,
+        codepoint: torch.Tensor,
+        font_meta: torch.Tensor,
+        glyph: torch.Tensor,
+        snap: bool = True,
     ) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``glyph``."""
-        return self.diffusion.model.predict_geometry(codepoint, font_meta, glyph)
+        return self.diffusion.model.predict_geometry(
+            codepoint, font_meta, glyph, snap=snap
+        )
 
     def geometry_loss(
         self,

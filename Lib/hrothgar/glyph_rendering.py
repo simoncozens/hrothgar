@@ -32,16 +32,24 @@ _INK_THRESHOLD = 0.5
 # (codepoint, font-ID) diffusion model's geometry regression head predicts these
 # five values in this order, using sigmoid (non-negative widths) or tanh
 # (signed offsets) scaled by the em range below.  ``left_sidebearing`` and
-# ``baseline_offset`` are signed; the rest are non-negative.
+# ``descender_depth`` are signed; the rest are non-negative.
 GEOMETRY_SPEC = (
     # (name, activation, em-scale)
     ("scale_x", "sigmoid", 1.5),
     ("scale_y", "sigmoid", 1.2),
     ("left_sidebearing", "tanh", 1.0),
-    ("baseline_offset", "tanh", 0.8),
+    # Descender depth = scale_y - baseline_offset: how far the ink hangs below
+    # the baseline (overshoot, descender).  Small (mostly ~0), signed, and the
+    # quantity that must be *exactly* right for baseline alignment.
+    ("descender_depth", "tanh", 0.8),
     ("advance", "sigmoid", 1.5),
 )
 GEOMETRY_NAMES = tuple(name for name, _, _ in GEOMETRY_SPEC)
+
+# Predicted descender depths within this (em) of zero are snapped to exactly
+# zero, so text faces achieve absolute baseline alignment instead of a tiny
+# continuous offset that never lands on 0.
+DESCENDER_SNAP_EPSILON = 0.001
 
 
 def render_glyph(
@@ -159,7 +167,7 @@ def normalize_bitmap(
         ``(image, geometry)`` where ``image`` is a ``(1, size, size)`` float32
         tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is a dict of the
         five labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
-        ``baseline_offset``, ``advance`` in em units.
+        ``descender_depth``, ``advance`` in em units.
     """
     if bitmap.size == 0:
         # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
@@ -168,7 +176,7 @@ def normalize_bitmap(
             "scale_x": 0.0,
             "scale_y": 0.0,
             "left_sidebearing": 0.0,
-            "baseline_offset": 0.0,
+            "descender_depth": 0.0,
             "advance": advance_px / size,
         }
         return image, geometry
@@ -182,7 +190,7 @@ def normalize_bitmap(
             "scale_x": 0.0,
             "scale_y": 0.0,
             "left_sidebearing": float(bitmap_left) / size,
-            "baseline_offset": float(bitmap_top) / size,
+            "descender_depth": -float(bitmap_top) / size,
             "advance": advance_px / size,
         }
         return image, geometry
@@ -200,11 +208,13 @@ def normalize_bitmap(
         crop_t, size=(size, size), mode="bilinear", align_corners=False
     )[0]  # (1, size, size)
 
+    scale_y = (y1 - y0 + 1) / size
+    baseline_offset = (bitmap_top - y0) / size
     geometry = {
         "scale_x": (x1 - x0 + 1) / size,
-        "scale_y": (y1 - y0 + 1) / size,
+        "scale_y": scale_y,
         "left_sidebearing": (bitmap_left + x0) / size,
-        "baseline_offset": (bitmap_top - y0) / size,
+        "descender_depth": scale_y - baseline_offset,
         "advance": advance_px / size,
     }
     return image, geometry
@@ -226,7 +236,7 @@ def place_glyph(
         image: ``(H, W)`` float32 array in [0, 1], ink = 0, white = 1 — a
             crop-to-ink normalized square.
         geometry: the five em-unit labels in canonical order
-            ``(scale_x, scale_y, left_sidebearing, baseline_offset, advance)``.
+            ``(scale_x, scale_y, left_sidebearing, descender_depth, advance)``.
         ppm: pixels per em (canvas resolution).
         ascender_em / descender_em: canvas space above / below the baseline.
         origin_x_em: X-origin offset in em from the left edge (room for
@@ -237,7 +247,9 @@ def place_glyph(
         is a ``(H, W)`` float32 array in [0, 1] (ink = 0, white = 1) and the
         three pixel positions locate the X origin, baseline, and advance width.
     """
-    scale_x, scale_y, lsb, baseline_offset, advance = (float(v) for v in geometry)
+    scale_x, scale_y, lsb, descender_depth, advance = (float(v) for v in geometry)
+    # Recover the absolute baseline position from the alignment-critical residual.
+    baseline_offset = scale_y - descender_depth
 
     # Un-square the normalized glyph back to its true ink size.
     h_px = max(1, int(round(scale_y * ppm)))

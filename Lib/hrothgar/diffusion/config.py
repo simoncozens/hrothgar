@@ -227,9 +227,13 @@ class FontIdDiffusionConfig:
     # Linear LR warmup (steps), then hold constant at ``learning_rate``.
     warmup_steps: int = 2000
     # Weight of the geometry regression objective (em-unit labels).  The head
-    # predicts scale_x/scale_y/left_sidebearing/baseline_offset/advance so the
+    # predicts scale_x/scale_y/left_sidebearing/descender_depth/advance so the
     # generated glyph can be placed back on the baseline.
     geometry_loss_weight: float = 1.0
+    # Per-label standard deviations of the five geometry labels (data-derived),
+    # used to normalise the geometry loss so each label contributes equally
+    # regardless of its natural magnitude.  ``None`` = raw MSE.
+    geometry_std: tuple[float, ...] | None = None
 
     def save_sidecar(self, model_path) -> None:
         """Save config as a JSON sidecar alongside the model weights."""

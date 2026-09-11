@@ -107,7 +107,8 @@ def test_normalize_bitmap_geometry_in_em_units() -> None:
     assert geometry["scale_x"] == (2 - 1 + 1) / 10  # 0.2
     assert geometry["scale_y"] == (3 - 1 + 1) / 10  # 0.3
     assert geometry["left_sidebearing"] == (2 + 1) / 10  # 0.3
-    assert geometry["baseline_offset"] == (10 - 1) / 10  # 0.9
+    # descender_depth = scale_y - baseline_offset = 0.3 - 0.9
+    assert geometry["descender_depth"] == (3 - 1 + 1) / 10 - (10 - 1) / 10
     assert geometry["advance"] == 7 / 10  # 0.7
 
 
@@ -125,7 +126,7 @@ def test_normalize_bitmap_blank_glyph_preserves_advance() -> None:
     assert geometry["scale_x"] == 0.0
     assert geometry["scale_y"] == 0.0
     assert geometry["left_sidebearing"] == 0.0
-    assert geometry["baseline_offset"] == 0.0
+    assert geometry["descender_depth"] == 0.0
     assert geometry["advance"] == 0.8
 
 
@@ -135,7 +136,7 @@ def test_geometry_tensor_packs_canonical_order() -> None:
     geometry = {
         "advance": 0.7,
         "scale_x": 0.2,
-        "baseline_offset": 0.9,
+        "descender_depth": 0.9,
         "left_sidebearing": 0.3,
         "scale_y": 0.3,
     }
@@ -144,12 +145,13 @@ def test_geometry_tensor_packs_canonical_order() -> None:
 
 
 def test_place_glyph_denormalizes_onto_baseline() -> None:
-    # A fully-inked 32x32 square, geometry: 0.5em x 0.5em ink, no LSB, 0.5em
-    # ascent above baseline, 0.6em advance.  At 128 ppm the ink should occupy a
-    # 64x64 block starting at x=64 (origin) and y=128 (baseline - ascent).
+    # A fully-inked 32x32 square, geometry: 0.5em x 0.5em ink, no LSB, no
+    # descender (ink bottom exactly on the baseline), 0.6em advance.  At 128 ppm
+    # the ink should occupy a 64x64 block starting at x=64 (origin) and
+    # y=128 (baseline - ascent).
     image = np.zeros((32, 32), dtype=np.float32)
     canvas, origin_x, baseline_y, advance_x = place_glyph(
-        image, [0.5, 0.5, 0.0, 0.5, 0.6]
+        image, [0.5, 0.5, 0.0, 0.0, 0.6]
     )
 
     assert canvas.shape == (256, 384)  # 2em tall, 3em wide
