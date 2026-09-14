@@ -31,6 +31,7 @@ them correctly is the actual acceptance test.
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -726,7 +727,7 @@ class FontIdDatasetMaker:
         extra_codepoints: Optional[Sequence[int]] = None,
         remove_codepoints: Optional[Sequence[int]] = None,
         oversample_codepoints: Optional[dict[int, int]] = None,
-        subset_n: Optional[int] = 200,
+        num_instances: int,
         strata: Optional[dict[str, float]] = None,
         max_per_unit: int = 3,
         avg_instances: float = 1.6,
@@ -764,22 +765,23 @@ class FontIdDatasetMaker:
         if units is None:
             gf = GoogleFonts(str(self.repo))
             units = build_units(gf, needed_codepoints=base)
-        strata_fracs = dict(strata or DEFAULT_STRATA)
-        if subset_n is None or subset_n <= 0:
-            # Use every instance of every eligible unit (full-library run).
-            selected = _all_instances(units, min_train_fonts_per_codepoint + 1)
-            self.subset_report = {"mode": "full", "n_instances": len(selected)}
-        else:
-            selected, self.subset_report = select_subset(
-                units, subset_n, strata_fracs,
-                max_per_unit=max_per_unit,
-                avg_instances=avg_instances,
-                target_frac=target_frac,
-                prefer_multi_target=prefer_multi_target,
-                replacement=replacement,
-                min_coverage=min_train_fonts_per_codepoint + 1,
-                seed=subset_seed,
+        if num_instances <= 0:
+            raise ValueError(
+                "num_instances must be a positive integer (the stratified "
+                "dataset size).  There is deliberately no 'all instances' "
+                "mode — the raw library is unbalanced."
             )
+        strata_fracs = dict(strata or DEFAULT_STRATA)
+        selected, self.subset_report = select_subset(
+            units, num_instances, strata_fracs,
+            max_per_unit=max_per_unit,
+            avg_instances=avg_instances,
+            target_frac=target_frac,
+            prefer_multi_target=prefer_multi_target,
+            replacement=replacement,
+            min_coverage=min_train_fonts_per_codepoint + 1,
+            seed=subset_seed,
+        )
 
         # --- Materialise unique instances (collapse replacement copies). ----
         self.families = sorted({s.family for s in selected})
@@ -940,19 +942,118 @@ class FontIdDatasetMaker:
         ]
 
 
-def _all_instances(units: list[Unit], min_coverage: int) -> list[SelectedInstance]:
-    """Every instance of every eligible unit (full-library mode)."""
-    out: list[SelectedInstance] = []
-    for unit in units:
-        if unit.max_coverage() < min_coverage:
+def load_or_build_units(
+    repo: str | Path,
+    needed_codepoints: set[int],
+    cache_path: Path | None = None,
+    rebuild: bool = False,
+) -> list[Unit]:
+    """Load sampling units from a JSON cache, or build + cache them from the repo."""
+    if cache_path is not None and not rebuild and cache_path.exists():
+        data = json.loads(cache_path.read_text())
+        if data.get("repo") == str(repo) and data.get("needed") == sorted(needed_codepoints):
+            print(f"Loaded {len(data['units'])} (family, style) units from {cache_path}")
+            return units_from_dicts(data["units"])
+    gf = GoogleFonts(str(repo))
+    units = build_units(gf, needed_codepoints=needed_codepoints)
+    if cache_path is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(
+            {"repo": str(repo), "needed": sorted(needed_codepoints),
+             "units": units_to_dicts(units)}
+        ))
+        print(f"Cached {len(units)} (family, style) units -> {cache_path}")
+    return units
+
+
+def parse_strata(spec: str | None) -> dict[str, float]:
+    """Parse a ``'sans:0.25,serif:0.25,...'`` fraction spec (empty = defaults)."""
+    if not spec:
+        return dict(DEFAULT_STRATA)
+    out: dict[str, float] = {}
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
             continue
-        for inst in unit.instances:
-            out.append(SelectedInstance(
-                unit=unit.key(), family=unit.family, bucket=unit.bucket,
-                stratum=unit.stratum(), path=inst.path, weight=inst.weight,
-                weight_norm=(inst.weight - 400.0) / 400.0, style=inst.style,
-                style_bucket=0 if inst.style == "normal" else 1,
-                variable=inst.variable, axis_position=inst.axis_position,
-                has_target=inst.has_target,
-            ))
+        name, frac = part.split(":")
+        out[name.strip()] = float(frac)
     return out
+
+
+def main() -> None:
+    """CLI: report balance statistics for a given ``--num-instances``.
+
+    Run ``python -m hrothgar.diffusion.dataset_fontid --num-instances N`` to see,
+    before training, how a stratified subset of size ``N`` is distributed:
+    instances per category, how many of the available families are sampled, and
+    how many instances are oversampled (replacement fill).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", default=os.environ.get("GOOGLE_FONTS_REPO"))
+    parser.add_argument("--num-instances", type=int, required=True,
+                        help="target stratified instance count")
+    parser.add_argument("--strata", default=None,
+                        help="override, e.g. 'sans:0.25,serif:0.25,display:0.2,"
+                             "script:0.2,handwriting:0.1'")
+    parser.add_argument("--max-per-unit", type=int, default=3)
+    parser.add_argument("--avg-instances", type=float, default=1.6)
+    parser.add_argument("--target-frac", type=float, default=0.7)
+    parser.add_argument("--min-coverage", type=int, default=21)
+    parser.add_argument("--no-prefer-multi-target", dest="prefer_multi_target",
+                        action="store_false", default=True)
+    parser.add_argument("--no-replacement", dest="replacement", action="store_false")
+    parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--cache", type=Path,
+                        default=Path(os.environ.get("FONT_DB_CACHE",
+                                                    "/tmp/hrothgar_units.json")))
+    parser.add_argument("--rebuild-cache", action="store_true")
+    args = parser.parse_args()
+
+    if not args.repo:
+        raise SystemExit("Provide --repo or set GOOGLE_FONTS_REPO")
+
+    needed = set(LATIN_KERNEL) | {RUPEE}
+    units = load_or_build_units(args.repo, needed, args.cache, args.rebuild_cache)
+    strata_fracs = parse_strata(args.strata)
+    selected, rep = select_subset(
+        units, args.num_instances, strata_fracs,
+        max_per_unit=args.max_per_unit,
+        avg_instances=args.avg_instances,
+        target_frac=args.target_frac,
+        prefer_multi_target=args.prefer_multi_target,
+        replacement=args.replacement,
+        min_coverage=args.min_coverage,
+        seed=args.seed,
+    )
+
+    all_families = len({u.family for u in units})
+    eligible_families = len(
+        {u.family for u in units if u.max_coverage() >= args.min_coverage}
+    )
+
+    print(f"\nStratified subset report (n={args.num_instances}, seed={args.seed})")
+    print(f"instances: {rep['n_instances']} total "
+          f"({rep['distinct_instances']} distinct + "
+          f"{rep['oversampled_instances']} oversampled)")
+    print("instances per category:")
+    for st in STRATA:
+        n = rep["instances_per_stratum"].get(st, 0)
+        if n:
+            print(f"  {st:<12}{n:>6}  ({n / max(rep['n_instances'], 1):>5.0%})")
+    print(f"text / fancy: {rep['text_instances']} / {rep['fancy_instances']}")
+    print(f"families sampled: {rep['families']} "
+          f"(of {all_families} available, {eligible_families} eligible "
+          f"at min-coverage {args.min_coverage})")
+    print(f"units sampled: {rep['units']}")
+    print(f"oversampled instances: {rep['oversampled_instances']}")
+    print(f"instances per family: {rep['family_k_histogram']}")
+    print(f"styles: {rep['style_counts']}  | variable instances: "
+          f"{rep['variable_instances']}")
+    print(f"families with target: {rep['families_with_target']}/{rep['families']} "
+          f"({rep['target_family_frac']:.0%})")
+
+
+if __name__ == "__main__":
+    main()

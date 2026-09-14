@@ -408,6 +408,17 @@ class FontIdDiffusion(nn.Module):
         )
 
     def p_losses(self, x_start, t, codepoint, font_meta, noise=None):
+        """Return just the diffusion loss (convenience over :meth:`p_losses_with_x0`)."""
+        return self.p_losses_with_x0(x_start, t, codepoint, font_meta, noise)[0]
+
+    def p_losses_with_x0(self, x_start, t, codepoint, font_meta, noise=None):
+        """Return ``(diffusion_loss, predicted_x0)``.
+
+        ``predicted_x0`` is the denoiser's own reconstruction of the glyph (in
+        ``[0, 1]``, detached) — the glyph the model is actually producing at this
+        noise level.  The geometry head trains on this (not the ground-truth
+        glyph) so it sees the same distribution at training and sampling time.
+        """
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
 
@@ -425,22 +436,29 @@ class FontIdDiffusion(nn.Module):
                 )
 
         pred = self.model(x, t, codepoint, font_meta, x_self_cond=x_self_cond)
+        x0_pred = self.predict_start_from_noise(x, t, pred).detach()
 
         if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
-            return F.mse_loss(pred, noise)
+            loss = F.mse_loss(pred, noise)
+        else:
+            # Min-SNR weighting for the noise (eps) prediction objective:
+            #   w(t) = min(SNR(t), gamma) / SNR(t) = min(gamma / SNR(t), 1)
+            # (raw min(SNR, gamma) is the signal/x0-prediction weight; the noise
+            # objective divides by SNR).  This downweights the high-SNR
+            # (low-noise) steps, whose noise-prediction gradient is
+            # ill-conditioned.
+            loss = F.mse_loss(pred, noise, reduction="none")
+            loss = loss.mean(dim=(1, 2, 3))  # (B,) per-sample MSE
+            snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t])  # (B,)
+            weight = snr.clamp(max=self.min_snr_gamma) / snr
+            loss = (loss * weight).mean()
 
-        # Min-SNR weighting for the noise (eps) prediction objective:
-        #   w(t) = min(SNR(t), gamma) / SNR(t) = min(gamma / SNR(t), 1)
-        # (raw min(SNR, gamma) is the signal/x0-prediction weight; the noise
-        # objective divides by SNR).  This downweights the high-SNR (low-noise)
-        # steps, whose noise-prediction gradient is ill-conditioned.
-        loss = F.mse_loss(pred, noise, reduction="none")
-        loss = loss.mean(dim=(1, 2, 3))  # (B,) per-sample MSE
-        snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t])  # (B,)
-        weight = snr.clamp(max=self.min_snr_gamma) / snr
-        return (loss * weight).mean()
+        return loss, unnormalize_to_zero_to_one(x0_pred).clamp(0.0, 1.0)
 
     def forward(self, img, codepoint, font_meta, times=None):
+        return self.forward_with_x0(img, codepoint, font_meta, times)[0]
+
+    def forward_with_x0(self, img, codepoint, font_meta, times=None):
         b = img.shape[0]
         img = normalize_to_neg_one_to_one(img)
         times = default(
@@ -449,7 +467,7 @@ class FontIdDiffusion(nn.Module):
                 0, self.num_timesteps, (b,), device=img.device
             ).long(),
         )
-        return self.p_losses(img, times, codepoint, font_meta)
+        return self.p_losses_with_x0(img, times, codepoint, font_meta)
 
     @torch.no_grad()
     def sample(self, codepoint, font_meta):
@@ -533,6 +551,16 @@ class FontIdDiffusionModel(SaveLoadModel):
         self, img: torch.Tensor, codepoint: torch.Tensor, font_meta: torch.Tensor
     ) -> torch.Tensor:
         return self.diffusion(img, codepoint, font_meta)
+
+    def forward_with_x0(
+        self, img: torch.Tensor, codepoint: torch.Tensor, font_meta: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return ``(diffusion_loss, predicted_x0)`` for one training batch.
+
+        ``predicted_x0`` is the denoiser's own reconstruction (in ``[0, 1]``,
+        detached) and is the input the geometry head should train on.
+        """
+        return self.diffusion.forward_with_x0(img, codepoint, font_meta)
 
     @torch.no_grad()
     def sample(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:

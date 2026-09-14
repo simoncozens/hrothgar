@@ -41,7 +41,7 @@ class FontIdTrainingLoop(TrainingLoop):
             extra_codepoints=train_args.extra_codepoints,
             remove_codepoints=train_args.remove_codepoints,
             oversample_codepoints=train_args.oversample_codepoints,
-            subset_n=train_args.subset_n,
+            num_instances=train_args.num_instances,
             strata=train_args.subset_strata,
             max_per_unit=train_args.max_per_unit,
             avg_instances=train_args.avg_instances,
@@ -135,9 +135,11 @@ class FontIdTrainingLoop(TrainingLoop):
         geometry = batch["geometry"].to(self.device)
 
         with self._autocast_context():
-            diffusion_loss = self.model(images, codepoints, font_meta)
+            diffusion_loss, x0_pred = self.model.forward_with_x0(
+                images, codepoints, font_meta
+            )
             geometry_loss = self.model.geometry_loss(
-                codepoints, font_meta, images, geometry
+                codepoints, font_meta, x0_pred, geometry
             )
             loss = diffusion_loss + self.geometry_weight * geometry_loss
         return loss, {
@@ -356,10 +358,12 @@ if __name__ == "__main__":
         help="Duplication factor for --oversample-codepoints",
     )
     parser.add_argument(
-        "--subset-n",
+        "--num-instances",
         type=int,
-        default=200,
-        help="Number of stratified training instances (<=0 = full library)",
+        required=True,
+        help="Number of stratified training instances (the dataset size). "
+             "There is deliberately no 'all instances' mode — the raw library "
+             "is unbalanced, so you must choose a (balanced) size.",
     )
     parser.add_argument(
         "--subset-strata",

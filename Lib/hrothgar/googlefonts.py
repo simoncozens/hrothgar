@@ -169,8 +169,8 @@ class GoogleFonts:
     def should_skip(self, font: GoogleFont) -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
-        # Ban all small-caps fonts, they mess everything up
-        if "SC" in str(font.path):
+        # Ban all small-caps / guideline fonts, they mess everything up
+        if "SC" in str(font.path) or "Guides" in str(font.path):
             return True
         if (
             font.tags().get("/Special use/Symbols", 0)
