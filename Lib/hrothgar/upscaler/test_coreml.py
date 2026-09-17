@@ -17,30 +17,25 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+
+from hrothgar.glyph_rendering import crop_to_ink
+from hrothgar.googlefonts import StandaloneFont
 
 
 def _render_glyph(font_path: str, char: str, size: int) -> np.ndarray:
-    """Render a glyph as a (3, size, size) float32 CHW array."""
-    import freetype
+    """Render a glyph as a ``(1, size, size)`` crop-to-ink grayscale array.
 
-    face = freetype.Face(font_path)
-    face.set_pixel_sizes(size, size)
-    face.load_char(char, freetype.FT_LOAD_RENDER)
-
-    bitmap = face.glyph.bitmap
-    buf = bitmap.buffer
-    w, rows = bitmap.width, bitmap.rows
-
-    raw = np.zeros((3, size, size), dtype=np.float32)
-    for y in range(rows):
-        for x in range(w):
-            v = buf[y * w + x] / 255.0
-            raw[:, y, x] = v
-    return raw
+    Uses the same crop-to-ink normalize-to-square convention as the diffusion
+    model, so outputs are directly comparable.
+    """
+    font = StandaloneFont(font_path)
+    rgb = np.ascontiguousarray(font.render(ord(char), size=size), dtype=np.float32)
+    return crop_to_ink(torch.from_numpy(rgb), size)[:1].numpy()  # (1, size, size)
 
 
 def _render_style_references(font_path: str, count: int, size: int) -> np.ndarray:
-    """Render *count* style reference glyphs as (count, 3, size, size)."""
+    """Render *count* style reference glyphs as ``(count, 1, size, size)``."""
     reference_chars = "ABEGNRSTabdeghknpqy023456789"
     refs: list[np.ndarray] = []
     for c in reference_chars:
@@ -52,12 +47,12 @@ def _render_style_references(font_path: str, count: int, size: int) -> np.ndarra
             continue
 
     if not refs:
-        blank = np.zeros((3, size, size), dtype=np.float32)
+        blank = np.zeros((1, size, size), dtype=np.float32)
         refs = [blank] * count
     while len(refs) < count:
         refs.append(refs[-1])
 
-    return np.stack(refs[:count])  # (count, 3, size, size)
+    return np.stack(refs[:count])  # (count, 1, size, size)
 
 
 def _find_sidecar(model_dir: Path) -> Path:

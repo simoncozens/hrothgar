@@ -272,7 +272,7 @@ def main() -> None:
             se,
             (
                 torch.randn(
-                    K, 3, config.high_res_size, config.high_res_size, device=device
+                    K, 1, config.high_res_size, config.high_res_size, device=device
                 ),
             ),
             input_names=["style_references"],
@@ -289,7 +289,7 @@ def main() -> None:
     _convert(
         body,
         (
-            torch.randn(1, 3, config.low_res_size, config.low_res_size, device=device),
+            torch.randn(1, 1, config.low_res_size, config.low_res_size, device=device),
             torch.randn(1, config.base_channels * 2, device=device),
         ),
         input_names=["low_res", "style_gamma_beta"],

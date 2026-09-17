@@ -106,13 +106,13 @@ class UpscalerInference:
         """Upscale a low-resolution glyph raster.
 
         Args:
-            low_res: ``(3, 128, 128)`` float32 numpy array, CHW, values in [0, 1].
-            style_references: Optional ``(K, 3, 512, 512)`` float32 array of
+            low_res: ``(1, 128, 128)`` float32 numpy array, CHW, values in [0, 1].
+            style_references: Optional ``(K, 1, 512, 512)`` float32 array of
                 reference glyphs for style encoding.  ``None`` uses the
                 learned fallback.
 
         Returns:
-            ``(3, 512, 512)`` float32 numpy array, CHW, values in [0, 1].
+            ``(1, 512, 512)`` float32 numpy array, CHW, values in [0, 1].
         """
         # Style gamma_beta.
         if style_references is not None and self._style_model is not None:

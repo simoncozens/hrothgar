@@ -16,10 +16,23 @@ import torch
 import torch.nn.functional as F
 
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
+from hrothgar.glyph_rendering import crop_to_ink
 
 
 class UpscalerDatasetMaker(DatasetMaker):
     """Create (low_res, high_res) glyph pairs for super-resolution training."""
+
+    @staticmethod
+    def _render_gid_grayscale(font, gid: int, size: int) -> torch.Tensor:
+        """Render a glyph by GID, cropped to ink and normalized to a square.
+
+        This is the same crop-to-ink normalize-to-square convention the
+        factorized diffusion model uses, so the diffusion model's output can be
+        fed directly to the upscaler.  Returns a ``(size, size)`` grayscale
+        tensor in ``[0, 1]`` (0 = ink, 1 = white).
+        """
+        rgb = torch.tensor(font.render_gid(gid, size=size), dtype=torch.float32)
+        return crop_to_ink(rgb, size)[0]  # (size, size)
 
     def __init__(
         self,
@@ -366,13 +379,10 @@ class UpscalerDatasetMaker(DatasetMaker):
         gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
         high_res = torch.stack(
             [
-                torch.tensor(
-                    item["font"].render_gid(item["gid"], size=self.high_res_size),
-                    dtype=torch.float32,
-                )
+                self._render_gid_grayscale(item["font"], item["gid"], self.high_res_size)
                 for item in batch
             ]
-        )
+        ).unsqueeze(1)  # (B, 1, H, W)
 
         # --- Style references ---
         style_refs: list[torch.Tensor] = []
@@ -382,13 +392,10 @@ class UpscalerDatasetMaker(DatasetMaker):
                     item["font"], item["gid"], self.style_reference_count
                 )
                 ref_rasters = [
-                    torch.tensor(
-                        item["font"].render_gid(g, size=self.high_res_size),
-                        dtype=torch.float32,
-                    )
+                    self._render_gid_grayscale(item["font"], g, self.high_res_size)
                     for g in ref_gids
                 ]
-                style_refs.append(torch.stack(ref_rasters))  # (K, 3, H, W)
+                style_refs.append(torch.stack(ref_rasters).unsqueeze(1))  # (K, 1, H, W)
 
         low_res_source = high_res
         if self.style_conformance_mode:
@@ -410,7 +417,7 @@ class UpscalerDatasetMaker(DatasetMaker):
             "high_res": high_res,
         }
         if style_refs:
-            result["style_references"] = torch.stack(style_refs)  # (B, K, 3, H, W)
+            result["style_references"] = torch.stack(style_refs)  # (B, K, 1, H, W)
         return result
 
 

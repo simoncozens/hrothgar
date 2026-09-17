@@ -143,7 +143,7 @@ class GlyphStyleEncoder(nn.Module):
         super().__init__()
         # Shared conv backbone: 512→256→128→64→32, then global pool.
         self.backbone = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=7, stride=2, padding=3),
+            nn.Conv2d(1, 32, kernel_size=7, stride=2, padding=3),
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),
             nn.ReLU(inplace=True),
@@ -163,7 +163,7 @@ class GlyphStyleEncoder(nn.Module):
         """Encode K reference glyphs into FiLM parameters.
 
         Args:
-            references: ``(B, K, 3, H, W)`` tensor of high-res glyph rasters
+            references: ``(B, K, 1, H, W)`` tensor of high-res glyph rasters
                from the target font.
 
         Returns:
@@ -191,7 +191,7 @@ class UpscalerModel(SaveLoadModel):
         self.config = config
         self.use_style_conditioning = config.use_style_conditioning
 
-        self.input_projection = nn.Conv2d(3, config.base_channels, 3, 1, 1)
+        self.input_projection = nn.Conv2d(1, config.base_channels, 3, 1, 1)
 
         self.residual_body = nn.Sequential(
             *[
@@ -215,7 +215,7 @@ class UpscalerModel(SaveLoadModel):
                 for _ in range(num_upsample_stages)
             ]
         )
-        self.output_head = nn.Conv2d(config.base_channels, 3, 3, 1, 1)
+        self.output_head = nn.Conv2d(config.base_channels, 1, 3, 1, 1)
 
         # --- Style conditioning ---
         self.style_encoder: GlyphStyleEncoder | None = None
@@ -291,14 +291,14 @@ class UpscalerModel(SaveLoadModel):
         """Upscale a low-resolution glyph raster.
 
         Args:
-            low_res: ``(B, 3, low_res_size, low_res_size)`` input rasters.
-            style_references: Optional ``(B, K, 3, high_res_size, high_res_size)``
+            low_res: ``(B, 1, low_res_size, low_res_size)`` input rasters.
+            style_references: Optional ``(B, K, 1, high_res_size, high_res_size)``
                 tensor of existing glyphs from the target font, used to encode
                 the font's visual style.  Pass ``None`` to use the learned
                 no-style fallback.
 
         Returns:
-            ``(B, 3, high_res_size, high_res_size)`` upscaled glyphs in [0, 1].
+            ``(B, 1, high_res_size, high_res_size)`` upscaled glyphs in [0, 1].
         """
         x = self.input_projection(low_res)
 

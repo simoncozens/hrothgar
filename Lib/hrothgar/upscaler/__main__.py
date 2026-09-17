@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from hrothgar.googlefonts import StandaloneFont
+from hrothgar.glyph_rendering import crop_to_ink
 from hrothgar.render import render_gid
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
@@ -29,10 +30,25 @@ def _parse_char(value: str) -> int:
     return ord(value)
 
 
+def _crop_grayscale(rgb: np.ndarray) -> np.ndarray:
+    """Crop a full-frame ``(3, H, W)`` render to its ink bbox, normalized square.
+
+    Returns a ``(1, H, W)`` grayscale array in ``[0, 1]`` (0 = ink, 1 = white) —
+    the same crop-to-ink normalize-to-square convention the diffusion model
+    emits, so a diffusion glyph can be fed straight to the upscaler.
+    """
+    tensor = torch.from_numpy(np.ascontiguousarray(rgb, dtype=np.float32))
+    return crop_to_ink(tensor, tensor.shape[-1])[:1].numpy()  # (1, H, W)
+
+
 def _array_for_plot(image_chw: np.ndarray) -> np.ndarray:
-    if image_chw.shape[0] != 3:
-        raise ValueError(f"Expected CHW image with 3 channels, got {image_chw.shape}")
-    return np.transpose(image_chw, (1, 2, 0)).clip(0.0, 1.0)
+    if image_chw.shape[0] == 1:
+        return image_chw[0].clip(0.0, 1.0)
+    if image_chw.shape[0] == 3:
+        return np.transpose(image_chw, (1, 2, 0)).clip(0.0, 1.0)
+    raise ValueError(
+        f"Expected CHW image with 1 or 3 channels, got {image_chw.shape}"
+    )
 
 
 def _save_image(path: Path, image_chw: np.ndarray) -> None:
@@ -44,14 +60,14 @@ def _render_pair(
     font: StandaloneFont, *, char: int | None, gid: int | None
 ) -> tuple[np.ndarray, np.ndarray, str]:
     if gid is not None:
-        low_res = render_gid(font.path, gid=gid, size=128)
-        high_res = render_gid(font.path, gid=gid, size=512)
+        low_res = _crop_grayscale(render_gid(font.path, gid=gid, size=128))
+        high_res = _crop_grayscale(render_gid(font.path, gid=gid, size=512))
         label = f"gid_{gid}"
         return low_res, high_res, label
 
     assert char is not None
-    low_res = font.render(char, size=128)
-    high_res = font.render(char, size=512)
+    low_res = _crop_grayscale(font.render(char, size=128))
+    high_res = _crop_grayscale(font.render(char, size=512))
     codepoint = f"U+{char:04X}"
     label = f"cp_{char:04X}"
     print(f"Rendering character {chr(char)!r} ({codepoint})")
@@ -123,14 +139,14 @@ def _render_style_references(font: StandaloneFont, count: int, size: int) -> np.
     rasters: list[np.ndarray] = []
     for cp in reference_codepoints:
         if font.has_codepoint(cp):
-            rasters.append(font.render(cp, size=size))
+            rasters.append(_crop_grayscale(font.render(cp, size=size)))
             if len(rasters) >= count:
                 break
     # Pad with the last-found raster if the font is very limited.
-    fallback = rasters[-1] if rasters else np.ones((3, size, size), dtype=np.float32)
+    fallback = rasters[-1] if rasters else np.ones((1, size, size), dtype=np.float32)
     while len(rasters) < count:
         rasters.append(fallback)
-    return np.stack(rasters[:count])  # (K, 3, size, size)
+    return np.stack(rasters[:count])  # (K, 1, size, size)
 
 
 def main() -> None:
@@ -165,7 +181,7 @@ def main() -> None:
         )
         style_tensor = torch.tensor(
             style_refs, dtype=torch.float32, device=device
-        ).unsqueeze(0)  # (1, K, 3, 512, 512)
+        ).unsqueeze(0)  # (1, K, 1, 512, 512)
 
     model = UpscalerModel(config).to(device)
     model.load(str(args.model_path), device=device)
