@@ -254,8 +254,8 @@ def place_glyph(
     baseline_offset = scale_y - descender_depth
 
     # Un-square the normalized glyph back to its true ink size.
-    h_px = max(1, int(round(scale_y * ppm)))
-    w_px = max(1, int(round(scale_x * ppm)))
+    h_px = max(1, round(scale_y * ppm))
+    w_px = max(1, round(scale_x * ppm))
     src = (
         torch.from_numpy(np.ascontiguousarray(image, dtype=np.float32))
         .unsqueeze(0)
@@ -265,17 +265,17 @@ def place_glyph(
         0, 0
     ].numpy()  # (h_px, w_px)
 
-    canvas_h = int(round((ascender_em + descender_em) * ppm))
+    canvas_h = round((ascender_em + descender_em) * ppm)
     # 2.5em right of the origin covers the label maxima (LSB 1.0 + scale_x 1.5)
     # and advance (1.5em); 0.5em is reserved left of the origin for negative LSB.
-    canvas_w = int(round((origin_x_em + 2.5) * ppm))
-    origin_x = int(round(origin_x_em * ppm))
-    baseline_y = int(round(ascender_em * ppm))
-    advance_x = origin_x + int(round(advance * ppm))
+    canvas_w = round((origin_x_em + 2.5) * ppm)
+    origin_x = round(origin_x_em * ppm)
+    baseline_y = round(ascender_em * ppm)
+    advance_x = origin_x + round(advance * ppm)
 
     canvas = np.ones((canvas_h, canvas_w), dtype=np.float32)
-    x0 = origin_x + int(round(lsb * ppm))
-    y0 = baseline_y - int(round(baseline_offset * ppm))
+    x0 = origin_x + round(lsb * ppm)
+    y0 = baseline_y - round(baseline_offset * ppm)
 
     # Paste the glyph with clipping (blank or out-of-canvas glyphs are no-ops).
     gy1 = glyph.shape[0]

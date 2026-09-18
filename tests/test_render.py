@@ -1,7 +1,7 @@
-import numpy as np
-import uharfbuzz as hb
 from pathlib import Path
 
+import numpy as np
+import uharfbuzz as hb
 from hrothgar.glyph_rendering import geometry_tensor, normalize_bitmap, place_glyph
 from hrothgar.render import _paste_bitmap_onto_canvas, render_gid
 
@@ -80,18 +80,16 @@ def test_render_phrase_variable_font_axis_changes_output() -> None:
     light = render_phrase(font_path, phrase, size=48, axis_position=(100.0, 100.0))
     heavy = render_phrase(font_path, phrase, size=48, axis_position=(900.0, 100.0))
 
-    assert light.shape == heavy.shape, (
-        f"Shape mismatch: {light.shape} vs {heavy.shape}"
-    )
+    assert light.shape == heavy.shape, f"Shape mismatch: {light.shape} vs {heavy.shape}"
     assert light.shape[0] > 0 and light.shape[1] > 0, "Empty output"
     # Different weights should produce measurably different rendering.
     # Heavy weight has more ink (darker pixels).
     light_ink = (light < 255).sum()
     heavy_ink = (heavy < 255).sum()
     assert light_ink > 0, "Light rendering is blank"
-    assert heavy_ink > light_ink, (
-        f"Heavy ({heavy_ink}) should have more ink than light ({light_ink})"
-    )
+    assert (
+        heavy_ink > light_ink
+    ), f"Heavy ({heavy_ink}) should have more ink than light ({light_ink})"
 
 
 def test_normalize_bitmap_geometry_in_em_units() -> None:
@@ -157,7 +155,7 @@ def test_place_glyph_denormalizes_onto_baseline() -> None:
     assert canvas.shape == (256, 384)  # 2em tall, 3em wide
     assert origin_x == 64
     assert baseline_y == 192
-    assert advance_x == 64 + int(round(0.6 * 128))
+    assert advance_x == 64 + round(0.6 * 128)
 
     # Ink is present exactly in the placed block; margins stay white.
     assert canvas[128:192, 64:128].min() == 0.0
@@ -168,9 +166,9 @@ def test_place_glyph_denormalizes_onto_baseline() -> None:
 
 def test_place_glyph_blank_glyph_preserves_advance() -> None:
     image = np.ones((32, 32), dtype=np.float32)
-    canvas, origin_x, baseline_y, advance_x = place_glyph(
+    canvas, origin_x, _baseline_y, advance_x = place_glyph(
         image, [0.0, 0.0, 0.0, 0.0, 0.3]
     )
 
     assert canvas.max() == 1.0  # stays white
-    assert advance_x == origin_x + int(round(0.3 * 128))
+    assert advance_x == origin_x + round(0.3 * 128)

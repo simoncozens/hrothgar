@@ -38,8 +38,10 @@ def test_class_balanced_batch_sampler_more_classes_than_slots() -> None:
 def test_class_balanced_batch_sampler_len() -> None:
     items = list(range(10))
     sampler = ClassBalancedBatchSampler(
-        items, key=lambda i: "even" if i % 2 == 0 else "odd",
-        batch_size=3, drop_last=True,
+        items,
+        key=lambda i: "even" if i % 2 == 0 else "odd",
+        batch_size=3,
+        drop_last=True,
     )
     assert len(sampler) == 3  # 10 // 3
 

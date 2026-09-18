@@ -5,6 +5,8 @@ code (Core ML, Glyphs.app plugin) can import them without pulling in
 the full ML stack.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 
 from glyphsets import GlyphSet, unicodes_per_glyphset

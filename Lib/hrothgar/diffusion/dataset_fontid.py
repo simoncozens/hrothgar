@@ -36,9 +36,9 @@ import os
 import random
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional, Sequence
 
 import torch
 from torch.utils.data import DataLoader
@@ -92,7 +92,7 @@ def parse_metadata_weights(metadata_pb: Path) -> dict[str, tuple[int, str]]:
     return out
 
 
-def fvar_axes(path: Path) -> Optional[list[list]]:
+def fvar_axes(path: Path) -> list[list] | None:
     """Return ``[[tag, min, default, max], ...]`` if the font is variable."""
     if "[" not in path.name:
         return None
@@ -138,8 +138,8 @@ class Instance:
     weight: int  # weight class (100..900)
     style: str  # "normal" | "italic"
     variable: bool
-    axes: Optional[list[list]]  # fvar axes if variable, else None
-    axis_position: Optional[list[float]]  # set only for synthesised locations
+    axes: list[list] | None  # fvar axes if variable, else None
+    axis_position: list[float] | None  # set only for synthesised locations
     has_target: bool  # font contains U+20B9
     coverage: int = 0  # number of needed codepoints present
 
@@ -167,7 +167,7 @@ class Unit:
     def static_weights(self) -> list[int]:
         return sorted({i.weight for i in self.instances if not i.variable})
 
-    def weight_range(self) -> Optional[tuple[int, int]]:
+    def weight_range(self) -> tuple[int, int] | None:
         ws = [i.weight for i in self.instances]
         for i in self.instances:
             wght = next((a for a in (i.axes or []) if a[0] == "wght"), None)
@@ -201,13 +201,13 @@ class SelectedInstance:
     style: str
     style_bucket: int
     variable: bool
-    axis_position: Optional[list[float]]
+    axis_position: list[float] | None
     has_target: bool
     copy: int = 0
 
 
 def build_units(
-    gf: GoogleFonts, needed_codepoints: Optional[set[int]] = None
+    gf: GoogleFonts, needed_codepoints: set[int] | None = None
 ) -> list[Unit]:
     """Build ``(family, style)`` sampling units from a Google Fonts checkout."""
     needed = needed_codepoints or set()
@@ -293,7 +293,7 @@ def _axis_position(axes: list[list], weight: int) -> list[float]:
     ]
 
 
-def _match_instance(unit: Unit, target: int) -> Optional[Instance]:
+def _match_instance(unit: Unit, target: int) -> Instance | None:
     for i in unit.instances:
         if not i.variable and i.weight == target:
             return i
@@ -680,7 +680,7 @@ class TrainInstance:
 
     path: str  # repo-relative
     font: StandaloneFont
-    axis_position: Optional[list[float]]
+    axis_position: list[float] | None
     family: str
     family_id: int
     weight: int
@@ -754,12 +754,12 @@ class FontIdDatasetMaker:
         batch_size: int,
         *,
         image_size: int = 128,
-        character_set: Optional[Sequence[int]] = None,
-        extra_codepoints: Optional[Sequence[int]] = None,
-        remove_codepoints: Optional[Sequence[int]] = None,
-        oversample_codepoints: Optional[dict[int, int]] = None,
+        character_set: Sequence[int] | None = None,
+        extra_codepoints: Sequence[int] | None = None,
+        remove_codepoints: Sequence[int] | None = None,
+        oversample_codepoints: dict[int, int] | None = None,
         num_instances: int,
-        strata: Optional[dict[str, float]] = None,
+        strata: dict[str, float] | None = None,
         max_per_unit: int = 3,
         avg_instances: float = 1.6,
         target_frac: float = 0.7,
@@ -769,7 +769,7 @@ class FontIdDatasetMaker:
         heldout_fraction: float = 0.25,
         min_train_fonts_per_codepoint: int = 20,
         split_seed: int = 1234,
-        units: Optional[list[Unit]] = None,
+        units: list[Unit] | None = None,
     ) -> None:
         self.repo = Path(repo)
         self.image_size = image_size

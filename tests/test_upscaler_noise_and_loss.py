@@ -1,14 +1,13 @@
 """Regression tests for upscaler corruption, corner detection, and BCE stability."""
 
 import torch
-
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.train import compute_upscaler_loss
-
 
 # ---------------------------------------------------------------------------
 # Low-res noise
 # ---------------------------------------------------------------------------
+
 
 def test_low_res_noise_injection_is_monochrome() -> None:
     maker = UpscalerDatasetMaker.__new__(UpscalerDatasetMaker)
@@ -25,6 +24,7 @@ def test_low_res_noise_injection_is_monochrome() -> None:
 # ---------------------------------------------------------------------------
 # BCE stability
 # ---------------------------------------------------------------------------
+
 
 def test_compute_upscaler_loss_handles_invalid_prediction_values() -> None:
     predictions = torch.full((1, 3, 8, 8), 0.5, dtype=torch.float32)
@@ -48,6 +48,7 @@ def test_compute_upscaler_loss_handles_invalid_prediction_values() -> None:
 # ---------------------------------------------------------------------------
 # Gaussian blur
 # ---------------------------------------------------------------------------
+
 
 def test_gaussian_blur_preserves_shape_and_range() -> None:
     x = torch.rand((2, 3, 32, 32), dtype=torch.float32)
@@ -73,6 +74,7 @@ def test_gaussian_blur_reduces_variance() -> None:
 # ---------------------------------------------------------------------------
 # Corner response
 # ---------------------------------------------------------------------------
+
 
 def _make_edge_image() -> torch.Tensor:
     """Create a sharp vertical edge in a 64×64 image."""
@@ -132,6 +134,7 @@ def test_corner_response_uniform_image_is_zero() -> None:
 # ---------------------------------------------------------------------------
 # Curvature-weighted corruption
 # ---------------------------------------------------------------------------
+
 
 def test_corrupt_high_res_preserves_shape_and_range() -> None:
     maker = UpscalerDatasetMaker.__new__(UpscalerDatasetMaker)
@@ -207,9 +210,9 @@ def test_sigma_jitter_produces_different_blur_strength() -> None:
     corrupted_b = maker._corrupt_high_res_for_conformance(img.clone())
 
     # The two corruptions should differ (different sigma → different blur)
-    assert not torch.allclose(corrupted_a, corrupted_b, atol=1e-4), (
-        "Sigma jitter should produce different corruption across calls"
-    )
+    assert not torch.allclose(
+        corrupted_a, corrupted_b, atol=1e-4
+    ), "Sigma jitter should produce different corruption across calls"
 
 
 def test_spatial_noise_creates_non_uniform_corruption() -> None:
@@ -232,7 +235,9 @@ def test_spatial_noise_creates_non_uniform_corruption() -> None:
     diff = (corrupted - img).abs()
 
     # Compute per-pixel difference along the edge band (column ~32)
-    edge_col = diff[:, :, :, 31:33].mean(dim=(0, 1))  # (H, 2) → mean over batch, channel, width
+    edge_col = diff[:, :, :, 31:33].mean(
+        dim=(0, 1)
+    )  # (H, 2) → mean over batch, channel, width
     std_along_edge = edge_col.std()
 
     assert std_along_edge > 0.0, (

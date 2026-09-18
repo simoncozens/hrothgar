@@ -30,7 +30,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.glyph_rendering import GEOMETRY_NAMES
@@ -52,19 +51,19 @@ def _save_grayscale(image: np.ndarray, path: Path) -> None:
     """Save a [0, 1] ink=0 / white=1 array as a grayscale PNG."""
     from PIL import Image
 
-    Image.fromarray(
-        (np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L"
-    ).save(path)
+    Image.fromarray((np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L").save(
+        path
+    )
 
 
 def _resize(image: np.ndarray, w_px: int, h_px: int) -> np.ndarray:
     """Resize a [0, 1] (H, W) ink array to (h_px, w_px) with bilinear."""
     from PIL import Image
 
-    pil = Image.fromarray(
-        (np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L"
+    pil = Image.fromarray((np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L")
+    return (
+        np.asarray(pil.resize((w_px, h_px), Image.BILINEAR), dtype=np.float32) / 255.0
     )
-    return np.asarray(pil.resize((w_px, h_px), Image.BILINEAR), dtype=np.float32) / 255.0
 
 
 def _add_white_border(image: np.ndarray, border: int = 1) -> np.ndarray:
@@ -104,12 +103,12 @@ def _compose_string(
     grayscale array in ``[0, 1]`` (0 = ink, 1 = white).
     """
     total_advance = sum(float(g["advance"]) for _, g in glyphs)
-    canvas_h = max(1, int(round((ascender_em + descender_em) * ppm)))
-    canvas_w = max(1, int(round((origin_x_em + total_advance + right_margin_em) * ppm)))
+    canvas_h = max(1, round((ascender_em + descender_em) * ppm))
+    canvas_w = max(1, round((origin_x_em + total_advance + right_margin_em) * ppm))
     canvas = np.ones((canvas_h, canvas_w), dtype=np.float32)
 
-    baseline_y = int(round(ascender_em * ppm))
-    origin_x = int(round(origin_x_em * ppm))
+    baseline_y = round(ascender_em * ppm)
+    origin_x = round(origin_x_em * ppm)
     pen = origin_x
     for image, g in glyphs:
         scale_x = float(g["scale_x"])
@@ -119,12 +118,12 @@ def _compose_string(
         advance = float(g["advance"])
 
         baseline_offset = scale_y - descender_depth
-        w_px = max(1, int(round(scale_x * ppm)))
-        h_px = max(1, int(round(scale_y * ppm)))
+        w_px = max(1, round(scale_x * ppm))
+        h_px = max(1, round(scale_y * ppm))
         placed = _resize(image, w_px, h_px)  # (h_px, w_px)
 
-        x0 = pen + int(round(lsb * ppm))
-        y0 = baseline_y - int(round(baseline_offset * ppm))
+        x0 = pen + round(lsb * ppm)
+        y0 = baseline_y - round(baseline_offset * ppm)
 
         gy, gx = placed.shape
         cy0, cy1 = max(0, y0), min(canvas_h, y0 + gy)
@@ -132,29 +131,58 @@ def _compose_string(
         if cy1 > cy0 and cx1 > cx0:
             canvas[cy0:cy1, cx0:cx1] = placed[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
 
-        pen += int(round(advance * ppm))
+        pen += round(advance * ppm)
 
     return canvas
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model-path", type=str, required=True,
-                   help="Path to the trained diffusion checkpoint (sidecars derived)")
-    p.add_argument("--upscaler-path", type=str, required=True,
-                   help="Path to the trained super-resolution checkpoint")
-    p.add_argument("--repo", type=str, default=os.environ.get("GOOGLE_FONTS_REPO"),
-                   help="Google Fonts repo root, to resolve repo-relative instance paths")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--model-path",
+        type=str,
+        required=True,
+        help="Path to the trained diffusion checkpoint (sidecars derived)",
+    )
+    p.add_argument(
+        "--upscaler-path",
+        type=str,
+        required=True,
+        help="Path to the trained super-resolution checkpoint",
+    )
+    p.add_argument(
+        "--repo",
+        type=str,
+        default=os.environ.get("GOOGLE_FONTS_REPO"),
+        help="Google Fonts repo root, to resolve repo-relative instance paths",
+    )
     p.add_argument("--output-dir", type=str, default="outputs/rupees")
-    p.add_argument("--ppm", type=int, default=128,
-                   help="Pixels-per-em resolution for the evaluation image canvas")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Only generate this many missing glyphs (for a quick smoke test)")
-    p.add_argument("--seed", type=int, default=0,
-                   help="Sampling seed (DDIM is deterministic, but initial noise is seeded)")
-    p.add_argument("--variants", type=int, default=1,
-                   help="Independent samples per instance (each uses a distinct seed)")
+    p.add_argument(
+        "--ppm",
+        type=int,
+        default=128,
+        help="Pixels-per-em resolution for the evaluation image canvas",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Only generate this many missing glyphs (for a quick smoke test)",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Sampling seed (DDIM is deterministic, but initial noise is seeded)",
+    )
+    p.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        help="Independent samples per instance (each uses a distinct seed)",
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -205,7 +233,8 @@ def main() -> None:
 
         meta = torch.tensor(
             [[inst["family_id"], inst["weight_norm"], inst["style_bucket"]]],
-            device=device, dtype=torch.float32,
+            device=device,
+            dtype=torch.float32,
         )
         for variant in range(args.variants):
             torch.manual_seed(args.seed + 1000 * variant + iid)
@@ -230,7 +259,9 @@ def main() -> None:
             )
 
             # Vectorization image: 512x512 with a 1px white border.
-            _save_grayscale(_add_white_border(up512, border=1), out_dir / f"{stem}_512.png")
+            _save_grayscale(
+                _add_white_border(up512, border=1), out_dir / f"{stem}_512.png"
+            )
 
             # Evaluation image: "ABC5$₹" baseline-aligned, advance-spaced.
             glyphs: list[tuple[np.ndarray, dict[str, float]]] = []
