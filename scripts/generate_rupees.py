@@ -274,7 +274,7 @@ def main() -> None:
                         ref_img, ref_geom = render_glyph_with_geometry(
                             font, cp, glyph_size
                         )
-                        glyphs.append((ref_img, ref_geom))
+                        glyphs.append((ref_img.detach().cpu().numpy(), ref_geom))
                     except Exception:
                         continue
             eval_canvas = _compose_string(glyphs, args.ppm)
