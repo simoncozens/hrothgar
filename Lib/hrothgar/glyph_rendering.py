@@ -15,8 +15,8 @@ bounding box to denormalize the glyph back onto the baseline.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -206,7 +206,9 @@ def normalize_bitmap(
     )
     image = F.interpolate(
         crop_t, size=(size, size), mode="bilinear", align_corners=False
-    )[0]  # (1, size, size)
+    )[
+        0
+    ]  # (1, size, size)
 
     scale_y = (y1 - y0 + 1) / size
     baseline_offset = (bitmap_top - y0) / size

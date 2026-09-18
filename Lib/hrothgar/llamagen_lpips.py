@@ -1,4 +1,5 @@
 """Stripped version of https://github.com/richzhang/PerceptualSimilarity/tree/master/models"""
+
 from __future__ import annotations
 
 import hashlib

@@ -8,7 +8,6 @@ contrastive, tag-prediction, and category heads.
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -235,7 +234,9 @@ class FontStyleEmbedder(SaveLoadModel):
             self.config.input_codepoints,
             self.config.glyph_size,
             axis_position=axis_position,
-        ).unsqueeze(0)  # (1, G, 1, H, W)
+        ).unsqueeze(
+            0
+        )  # (1, G, 1, H, W)
 
         # ``Font.render`` silently returns an all-white image on failure, so
         # surface blank glyphs here so callers can apply their unrenderable-font
@@ -254,9 +255,9 @@ class FontStyleEmbedder(SaveLoadModel):
 
     def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
         """Project frozen text embeddings into the contrastive projection space."""
-        assert self.text_projection is not None, (
-            "text_projection not initialised; set text_encoder_name in config"
-        )
+        assert (
+            self.text_projection is not None
+        ), "text_projection not initialised; set text_encoder_name in config"
         if torch.isnan(text_embeddings).any():
             raise RuntimeError("NaN in text_embeddings input to project_text")
         projected = self.text_projection(text_embeddings)

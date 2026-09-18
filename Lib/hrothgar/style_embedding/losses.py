@@ -6,7 +6,6 @@ All loss-computation functions return ``(total_loss, loss_info)`` where
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 

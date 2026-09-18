@@ -44,10 +44,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import (
-    _has_non_empty_outline,
-    _hb_font_for_face,
-)
+from hrothgar.dataset import _has_non_empty_outline, _hb_font_for_face
 from hrothgar.dataset_constants import LATIN_KERNEL
 from hrothgar.glyph_rendering import GEOMETRY_SPEC, geometry_tensor
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
@@ -272,7 +269,9 @@ def units_from_dicts(data: Sequence[dict]) -> list[Unit]:
     units = []
     for u in data:
         unit = Unit(
-            family=u["family"], style=u["style"], bucket=u["bucket"],
+            family=u["family"],
+            style=u["style"],
+            bucket=u["bucket"],
             classification=u.get("classification", ""),
             tag_category=u.get("tag_category", ""),
         )
@@ -303,9 +302,14 @@ def _match_instance(unit: Unit, target: int) -> Optional[Instance]:
         wght = next((a for a in axes if a[0] == "wght"), None)
         if wght and wght[1] <= target <= wght[3]:
             return Instance(
-                path=i.path, weight=target, style=i.style, variable=True,
-                axes=axes, axis_position=_axis_position(axes, target),
-                has_target=i.has_target, coverage=i.coverage,
+                path=i.path,
+                weight=target,
+                style=i.style,
+                variable=True,
+                axes=axes,
+                axis_position=_axis_position(axes, target),
+                has_target=i.has_target,
+                coverage=i.coverage,
             )
     statics = [i for i in unit.instances if not i.variable]
     if statics:
@@ -387,8 +391,10 @@ def target_contrast_capacity(unit: Unit, max_per_unit: int) -> int:
         wght = next((a for a in (i.axes or []) if a[0] == "wght"), None)
         if wght and wght[1] < wght[3]:
             return max_per_unit
-    return min(len({i.weight for i in unit.instances if not i.variable and i.has_target}),
-               max_per_unit)
+    return min(
+        len({i.weight for i in unit.instances if not i.variable and i.has_target}),
+        max_per_unit,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -448,8 +454,9 @@ def _stratum_capacity(pool: list[Unit], max_per_unit: int, target_frac: float) -
         without = [u for u in pool if not u.has_target()]
         n_other = round(len(with_target) * (1 - target_frac) / max(target_frac, 1e-9))
         eligible = with_target + without[:n_other]
-    return sum(min(max_per_unit, max(contrast_capacity(u, max_per_unit), 1))
-               for u in eligible)
+    return sum(
+        min(max_per_unit, max(contrast_capacity(u, max_per_unit), 1)) for u in eligible
+    )
 
 
 def _normalise_targets(desired: dict[str, int], n: int) -> dict[str, int]:
@@ -489,31 +496,37 @@ def select_subset(
     spent on fonts that cannot train the vocabulary).
     """
     rng = random.Random(seed)
-    eligible = [u for u in units
-                if min_coverage <= 0 or u.max_coverage() >= min_coverage]
+    eligible = [
+        u for u in units if min_coverage <= 0 or u.max_coverage() >= min_coverage
+    ]
     by_stratum: dict[str, list[Unit]] = defaultdict(list)
     for unit in eligible:
         by_stratum[unit.stratum()].append(unit)
 
     desired = {st: round(n * frac) for st, frac in strata_fracs.items()}
-    capacity = {st: _stratum_capacity(by_stratum.get(st, []), max_per_unit,
-                                      target_frac)
-                for st in desired}
+    capacity = {
+        st: _stratum_capacity(by_stratum.get(st, []), max_per_unit, target_frac)
+        for st in desired
+    }
     if replacement:
         final = _normalise_targets(desired, n)
     else:
         final = {st: min(desired[st], capacity[st]) for st in desired}
         deficit = n - sum(final.values())
         if deficit > 0:
-            spare = {st: capacity[st] - final[st] for st in final
-                     if desired[st] > 0 and capacity[st] - final[st] > 0}
+            spare = {
+                st: capacity[st] - final[st]
+                for st in final
+                if desired[st] > 0 and capacity[st] - final[st] > 0
+            }
             total_spare = sum(spare.values())
             if total_spare > 0:
                 shares = {st: deficit * spare[st] / total_spare for st in spare}
                 base = {st: int(shares[st]) for st in spare}
                 remainder = deficit - sum(base.values())
-                for st in sorted(spare, key=lambda s: shares[s] - base[s],
-                                 reverse=True):
+                for st in sorted(
+                    spare, key=lambda s: shares[s] - base[s], reverse=True
+                ):
                     if remainder <= 0:
                         break
                     if base[st] < spare[st]:
@@ -532,14 +545,17 @@ def select_subset(
         without_target = [u for u in pool if not u.has_target()]
         rng.shuffle(with_target)
         rng.shuffle(without_target)
-        n_other = min(len(without_target),
-                      max(0, round((1 - target_frac) * n_units_needed)))
+        n_other = min(
+            len(without_target), max(0, round((1 - target_frac) * n_units_needed))
+        )
         n_with = min(len(with_target), max(0, n_units_needed - n_other))
         allowed = with_target[:n_with] + without_target[:n_other]
         without_rem = without_target[n_other:] if target_frac < 1.0 else []
         extra = with_target[n_with:] + without_rem
-        cap_sum = sum(min(max_per_unit, max(contrast_capacity(u, max_per_unit), 1))
-                      for u in allowed)
+        cap_sum = sum(
+            min(max_per_unit, max(contrast_capacity(u, max_per_unit), 1))
+            for u in allowed
+        )
         for unit in extra:
             if cap_sum >= target:
                 break
@@ -548,8 +564,11 @@ def select_subset(
         if not allowed:
             continue
         picks = _allocate_stratum(
-            allowed, target, max_per_unit=max_per_unit,
-            avg_instances=avg_instances, rng=rng,
+            allowed,
+            target,
+            max_per_unit=max_per_unit,
+            avg_instances=avg_instances,
+            rng=rng,
             prefer_multi_target=prefer_multi_target,
         )
         pairs: list[tuple[Unit, Instance]] = []
@@ -566,9 +585,11 @@ def select_subset(
             ]
             while len(pairs) < target and cands:
                 unit = rng.choices(cands, weights=weights, k=1)[0]
-                k = min(max_per_unit,
-                        max(contrast_capacity(unit, max_per_unit), 1),
-                        target - len(pairs))
+                k = min(
+                    max_per_unit,
+                    max(contrast_capacity(unit, max_per_unit), 1),
+                    target - len(pairs),
+                )
                 cs = contrast_instances(unit, k)
                 if not cs:
                     break
@@ -576,25 +597,32 @@ def select_subset(
 
         seen: Counter = Counter()
         for unit, inst in pairs:
-            key = (unit.family, inst.path, inst.weight, inst.style,
-                   tuple(inst.axis_position or ()))
+            key = (
+                unit.family,
+                inst.path,
+                inst.weight,
+                inst.style,
+                tuple(inst.axis_position or ()),
+            )
             copy_index = seen[key]
             seen[key] += 1
-            selected.append(SelectedInstance(
-                unit=unit.key(),
-                family=unit.family,
-                bucket=unit.bucket,
-                stratum=st,
-                path=inst.path,
-                weight=inst.weight,
-                weight_norm=(inst.weight - 400.0) / 400.0,
-                style=inst.style,
-                style_bucket=0 if inst.style == "normal" else 1,
-                variable=inst.variable,
-                axis_position=inst.axis_position,
-                has_target=inst.has_target,
-                copy=copy_index,
-            ))
+            selected.append(
+                SelectedInstance(
+                    unit=unit.key(),
+                    family=unit.family,
+                    bucket=unit.bucket,
+                    stratum=st,
+                    path=inst.path,
+                    weight=inst.weight,
+                    weight_norm=(inst.weight - 400.0) / 400.0,
+                    style=inst.style,
+                    style_bucket=0 if inst.style == "normal" else 1,
+                    variable=inst.variable,
+                    axis_position=inst.axis_position,
+                    has_target=inst.has_target,
+                    copy=copy_index,
+                )
+            )
 
     return selected, summarise_subset(selected, n, seed)
 
@@ -606,8 +634,9 @@ def summarise_subset(selected: list[SelectedInstance], n: int, seed: int) -> dic
     per_unit = Counter(s.unit for s in distinct)
     per_family = Counter(s.family for s in distinct)
     fam_names = set(per_family)
-    target_fams = {f for f in fam_names
-                   if any(s.has_target for s in distinct if s.family == f)}
+    target_fams = {
+        f for f in fam_names if any(s.has_target for s in distinct if s.family == f)
+    }
     multi_units = {u: c for u, c in per_unit.items() if c >= 2}
     unit_family = {s.unit: s.family for s in distinct}
     fam_units = Counter(unit_family[u] for u in set(per_unit))
@@ -690,7 +719,9 @@ class _PairDataset(TorchDataset):
         instance = self.instances[instance_id]
         cp = self.cp_list[cp_idx]
         img, geometry = render_glyph_with_geometry(
-            instance.font, cp, self.image_size,
+            instance.font,
+            cp,
+            self.image_size,
             axis_position=instance.axis_position,
         )
         return {
@@ -773,7 +804,9 @@ class FontIdDatasetMaker:
             )
         strata_fracs = dict(strata or DEFAULT_STRATA)
         selected, self.subset_report = select_subset(
-            units, num_instances, strata_fracs,
+            units,
+            num_instances,
+            strata_fracs,
             max_per_unit=max_per_unit,
             avg_instances=avg_instances,
             target_frac=target_frac,
@@ -800,20 +833,22 @@ class FontIdDatasetMaker:
             font = StandaloneFont(abspath)
             cps = self._available_codepoints(font)
             index_of[key] = len(self.instances)
-            self.instances.append(TrainInstance(
-                path=s.path,
-                font=font,
-                axis_position=s.axis_position,
-                family=s.family,
-                family_id=self.family_to_id[s.family],
-                weight=s.weight,
-                weight_norm=s.weight_norm,
-                style=s.style,
-                style_bucket=s.style_bucket,
-                variable=s.variable,
-                copies=1,
-                codepoints=cps,
-            ))
+            self.instances.append(
+                TrainInstance(
+                    path=s.path,
+                    font=font,
+                    axis_position=s.axis_position,
+                    family=s.family,
+                    family_id=self.family_to_id[s.family],
+                    weight=s.weight,
+                    weight_norm=s.weight_norm,
+                    style=s.style,
+                    style_bucket=s.style_bucket,
+                    variable=s.variable,
+                    copies=1,
+                    codepoints=cps,
+                )
+            )
 
         self.font_meta = [inst.font_meta for inst in self.instances]
         self._build_pairs()
@@ -838,7 +873,9 @@ class FontIdDatasetMaker:
         for iid, cp_idx in sample:
             inst = self.instances[iid]
             _, geom = render_glyph_with_geometry(
-                inst.font, self.cp_list[cp_idx], self.image_size,
+                inst.font,
+                self.cp_list[cp_idx],
+                self.image_size,
                 axis_position=inst.axis_position,
             )
             geos.append(geometry_tensor(geom))
@@ -894,9 +931,7 @@ class FontIdDatasetMaker:
     # -- loaders -------------------------------------------------------------
 
     def _loader(self, pairs: list[tuple[int, int]], shuffle: bool):
-        dataset = _PairDataset(
-            pairs, self.instances, self.cp_list, self.image_size
-        )
+        dataset = _PairDataset(pairs, self.instances, self.cp_list, self.image_size)
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -917,9 +952,7 @@ class FontIdDatasetMaker:
     def random_val_batch(self, n: int) -> dict:
         """A random (unseeded) batch of held-out pairs, for visualization only."""
         pairs = random.sample(self.val_pairs, k=min(n, len(self.val_pairs)))
-        dataset = _PairDataset(
-            pairs, self.instances, self.cp_list, self.image_size
-        )
+        dataset = _PairDataset(pairs, self.instances, self.cp_list, self.image_size)
         return _collate_fn([dataset[i] for i in range(len(pairs))])
 
     # -- sidecars ------------------------------------------------------------
@@ -951,17 +984,26 @@ def load_or_build_units(
     """Load sampling units from a JSON cache, or build + cache them from the repo."""
     if cache_path is not None and not rebuild and cache_path.exists():
         data = json.loads(cache_path.read_text())
-        if data.get("repo") == str(repo) and data.get("needed") == sorted(needed_codepoints):
-            print(f"Loaded {len(data['units'])} (family, style) units from {cache_path}")
+        if data.get("repo") == str(repo) and data.get("needed") == sorted(
+            needed_codepoints
+        ):
+            print(
+                f"Loaded {len(data['units'])} (family, style) units from {cache_path}"
+            )
             return units_from_dicts(data["units"])
     gf = GoogleFonts(str(repo))
     units = build_units(gf, needed_codepoints=needed_codepoints)
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(
-            {"repo": str(repo), "needed": sorted(needed_codepoints),
-             "units": units_to_dicts(units)}
-        ))
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "repo": str(repo),
+                    "needed": sorted(needed_codepoints),
+                    "units": units_to_dicts(units),
+                }
+            )
+        )
         print(f"Cached {len(units)} (family, style) units -> {cache_path}")
     return units
 
@@ -992,22 +1034,35 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=os.environ.get("GOOGLE_FONTS_REPO"))
-    parser.add_argument("--num-instances", type=int, required=True,
-                        help="target stratified instance count")
-    parser.add_argument("--strata", default=None,
-                        help="override, e.g. 'sans:0.25,serif:0.25,display:0.2,"
-                             "script:0.2,handwriting:0.1'")
+    parser.add_argument(
+        "--num-instances",
+        type=int,
+        required=True,
+        help="target stratified instance count",
+    )
+    parser.add_argument(
+        "--strata",
+        default=None,
+        help="override, e.g. 'sans:0.25,serif:0.25,display:0.2,"
+        "script:0.2,handwriting:0.1'",
+    )
     parser.add_argument("--max-per-unit", type=int, default=3)
     parser.add_argument("--avg-instances", type=float, default=1.6)
     parser.add_argument("--target-frac", type=float, default=0.7)
     parser.add_argument("--min-coverage", type=int, default=21)
-    parser.add_argument("--no-prefer-multi-target", dest="prefer_multi_target",
-                        action="store_false", default=True)
+    parser.add_argument(
+        "--no-prefer-multi-target",
+        dest="prefer_multi_target",
+        action="store_false",
+        default=True,
+    )
     parser.add_argument("--no-replacement", dest="replacement", action="store_false")
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--cache", type=Path,
-                        default=Path(os.environ.get("FONT_DB_CACHE",
-                                                    "/tmp/hrothgar_units.json")))
+    parser.add_argument(
+        "--cache",
+        type=Path,
+        default=Path(os.environ.get("FONT_DB_CACHE", "/tmp/hrothgar_units.json")),
+    )
     parser.add_argument("--rebuild-cache", action="store_true")
     args = parser.parse_args()
 
@@ -1018,7 +1073,9 @@ def main() -> None:
     units = load_or_build_units(args.repo, needed, args.cache, args.rebuild_cache)
     strata_fracs = parse_strata(args.strata)
     selected, rep = select_subset(
-        units, args.num_instances, strata_fracs,
+        units,
+        args.num_instances,
+        strata_fracs,
         max_per_unit=args.max_per_unit,
         avg_instances=args.avg_instances,
         target_frac=args.target_frac,
@@ -1034,25 +1091,33 @@ def main() -> None:
     )
 
     print(f"\nStratified subset report (n={args.num_instances}, seed={args.seed})")
-    print(f"instances: {rep['n_instances']} total "
-          f"({rep['distinct_instances']} distinct + "
-          f"{rep['oversampled_instances']} oversampled)")
+    print(
+        f"instances: {rep['n_instances']} total "
+        f"({rep['distinct_instances']} distinct + "
+        f"{rep['oversampled_instances']} oversampled)"
+    )
     print("instances per category:")
     for st in STRATA:
         n = rep["instances_per_stratum"].get(st, 0)
         if n:
             print(f"  {st:<12}{n:>6}  ({n / max(rep['n_instances'], 1):>5.0%})")
     print(f"text / fancy: {rep['text_instances']} / {rep['fancy_instances']}")
-    print(f"families sampled: {rep['families']} "
-          f"(of {all_families} available, {eligible_families} eligible "
-          f"at min-coverage {args.min_coverage})")
+    print(
+        f"families sampled: {rep['families']} "
+        f"(of {all_families} available, {eligible_families} eligible "
+        f"at min-coverage {args.min_coverage})"
+    )
     print(f"units sampled: {rep['units']}")
     print(f"oversampled instances: {rep['oversampled_instances']}")
     print(f"instances per family: {rep['family_k_histogram']}")
-    print(f"styles: {rep['style_counts']}  | variable instances: "
-          f"{rep['variable_instances']}")
-    print(f"families with target: {rep['families_with_target']}/{rep['families']} "
-          f"({rep['target_family_frac']:.0%})")
+    print(
+        f"styles: {rep['style_counts']}  | variable instances: "
+        f"{rep['variable_instances']}"
+    )
+    print(
+        f"families with target: {rep['families_with_target']}/{rep['families']} "
+        f"({rep['target_family_frac']:.0%})"
+    )
 
 
 if __name__ == "__main__":

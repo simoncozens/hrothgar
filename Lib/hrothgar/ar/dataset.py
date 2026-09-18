@@ -13,6 +13,8 @@ from collections.abc import Sequence
 
 import torch
 import uharfbuzz as hb
+from torch.utils.data import DataLoader
+
 from hrothgar.dataset import ClassBalancedBatchSampler, Dataset, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.glyph_rendering import bbox_size, crop_to_ink
@@ -23,7 +25,6 @@ from hrothgar.style_sampling import (
     _is_blank_rendering,
     _sample_style_codepoints,
 )
-from torch.utils.data import DataLoader
 
 
 class _OversampledTargetDataset(Dataset):

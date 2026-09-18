@@ -224,7 +224,9 @@ class FontIdTrainingLoop(TrainingLoop):
             avail = sorted(set(inst.codepoints) - {target_cp})
             ref_cp = rng.choice(avail) if avail else target_cp
             ref_img, _ = render_glyph_with_geometry(
-                inst.font, ref_cp, self.maker.image_size,
+                inst.font,
+                ref_cp,
+                self.maker.image_size,
                 axis_position=inst.axis_position,
             )
             refs.append(ref_img.unsqueeze(0))
@@ -309,7 +311,6 @@ def _parse_strata(spec: str) -> dict[str, float]:
 if __name__ == "__main__":
     import argparse
 
-
     parser = argparse.ArgumentParser(
         description="Train factorized font-ID diffusion model"
     )
@@ -362,15 +363,15 @@ if __name__ == "__main__":
         type=int,
         required=True,
         help="Number of stratified training instances (the dataset size). "
-             "There is deliberately no 'all instances' mode — the raw library "
-             "is unbalanced, so you must choose a (balanced) size.",
+        "There is deliberately no 'all instances' mode — the raw library "
+        "is unbalanced, so you must choose a (balanced) size.",
     )
     parser.add_argument(
         "--subset-strata",
         type=str,
         default="",
         help="Stratum fractions, e.g. "
-             "'sans:0.25,serif:0.25,display:0.2,script:0.2,handwriting:0.1'",
+        "'sans:0.25,serif:0.25,display:0.2,script:0.2,handwriting:0.1'",
     )
     parser.add_argument(
         "--max-per-unit",

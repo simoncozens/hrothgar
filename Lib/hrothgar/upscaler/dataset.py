@@ -10,7 +10,6 @@ from the same font rendered at high resolution — for style conditioning.
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 
@@ -380,10 +379,14 @@ class UpscalerDatasetMaker(DatasetMaker):
         gids = torch.tensor([item["gid"] for item in batch], dtype=torch.long)
         high_res = torch.stack(
             [
-                self._render_gid_grayscale(item["font"], item["gid"], self.high_res_size)
+                self._render_gid_grayscale(
+                    item["font"], item["gid"], self.high_res_size
+                )
                 for item in batch
             ]
-        ).unsqueeze(1)  # (B, 1, H, W)
+        ).unsqueeze(
+            1
+        )  # (B, 1, H, W)
 
         # --- Style references ---
         style_refs: list[torch.Tensor] = []

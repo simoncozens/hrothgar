@@ -17,15 +17,16 @@ from __future__ import annotations
 
 import os
 import random
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 
 import torch
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset as TorchDataset
+
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.style_extraction.render_utils import render_glyph
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset as TorchDataset
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
@@ -199,7 +200,10 @@ class StyleExtractionDatasetMaker(DatasetMaker):
             num_batches = len(order) // self.batch_size
             batches = [
                 self._render_batch(
-                    [fonts[i] for i in order[k * self.batch_size : (k + 1) * self.batch_size]],
+                    [
+                        fonts[i]
+                        for i in order[k * self.batch_size : (k + 1) * self.batch_size]
+                    ],
                     rng=rng,
                 )
                 for k in range(num_batches)

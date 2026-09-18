@@ -13,9 +13,7 @@ from hrothgar.style_embedding.config import (
     FontStyleEmbedderConfig,
     FontStyleEmbeddingLossWeights,
 )
-from hrothgar.style_embedding.dataset import (
-    FontStyleDatasetMaker,
-)
+from hrothgar.style_embedding.dataset import FontStyleDatasetMaker
 from hrothgar.style_embedding.losses import (
     category_loss,
     compute_losses,

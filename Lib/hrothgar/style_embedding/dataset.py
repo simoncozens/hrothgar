@@ -8,8 +8,8 @@ contrastive objective learns invariance to *which* glyphs are shown.
 from __future__ import annotations
 
 import random
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F

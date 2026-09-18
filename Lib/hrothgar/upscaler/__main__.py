@@ -56,9 +56,7 @@ def _array_for_plot(image_chw: np.ndarray) -> np.ndarray:
         return image_chw[0].clip(0.0, 1.0)
     if image_chw.shape[0] == 3:
         return np.transpose(image_chw, (1, 2, 0)).clip(0.0, 1.0)
-    raise ValueError(
-        f"Expected CHW image with 1 or 3 channels, got {image_chw.shape}"
-    )
+    raise ValueError(f"Expected CHW image with 1 or 3 channels, got {image_chw.shape}")
 
 
 def _save_image(path: Path, image_chw: np.ndarray) -> None:
@@ -191,7 +189,9 @@ def main() -> None:
         )
         style_tensor = torch.tensor(
             style_refs, dtype=torch.float32, device=device
-        ).unsqueeze(0)  # (1, K, 1, 512, 512)
+        ).unsqueeze(
+            0
+        )  # (1, K, 1, 512, 512)
 
     model = UpscalerModel(config).to(device)
     model.load(str(args.model_path), device=device)

@@ -243,20 +243,24 @@ class ExemplarConditionalUnet(nn.Module):
                             time_emb_dim=time_dim,
                             classes_emb_dim=time_dim,
                         ),
-                        Residual(
-                            PreNorm(
-                                dim_in,
-                                Attention(
-                                    dim_in, heads=attn_heads, dim_head=attn_dim_head
-                                ),
+                        (
+                            Residual(
+                                PreNorm(
+                                    dim_in,
+                                    Attention(
+                                        dim_in, heads=attn_heads, dim_head=attn_dim_head
+                                    ),
+                                )
                             )
-                        )
-                        if has_attn
-                        else nn.Identity(),
+                            if has_attn
+                            else nn.Identity()
+                        ),
                         cross,
-                        Downsample(dim_in, dim_out)
-                        if not is_last
-                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                        (
+                            Downsample(dim_in, dim_out)
+                            if not is_last
+                            else nn.Conv2d(dim_in, dim_out, 3, padding=1)
+                        ),
                     ]
                 )
             )
@@ -307,20 +311,26 @@ class ExemplarConditionalUnet(nn.Module):
                             time_emb_dim=time_dim,
                             classes_emb_dim=time_dim,
                         ),
-                        Residual(
-                            PreNorm(
-                                dim_out,
-                                Attention(
-                                    dim_out, heads=attn_heads, dim_head=attn_dim_head
-                                ),
+                        (
+                            Residual(
+                                PreNorm(
+                                    dim_out,
+                                    Attention(
+                                        dim_out,
+                                        heads=attn_heads,
+                                        dim_head=attn_dim_head,
+                                    ),
+                                )
                             )
-                        )
-                        if has_attn
-                        else nn.Identity(),
+                            if has_attn
+                            else nn.Identity()
+                        ),
                         cross,
-                        Upsample(dim_out, dim_in)
-                        if not is_last
-                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                        (
+                            Upsample(dim_out, dim_in)
+                            if not is_last
+                            else nn.Conv2d(dim_out, dim_in, 3, padding=1)
+                        ),
                     ]
                 )
             )

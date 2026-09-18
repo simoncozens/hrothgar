@@ -12,11 +12,11 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset_constants import (  # noqa: F401
-    CAPS_ONLY,  # pyright: ignore[reportUnusedImport]
-    LATIN_CORE,
-    LATIN_KERNEL,  # pyright: ignore[reportUnusedImport]
-)
+from hrothgar.dataset_constants import CAPS_ONLY  # pyright: ignore[reportUnusedImport]
+from hrothgar.dataset_constants import (
+    LATIN_KERNEL,
+)  # pyright: ignore[reportUnusedImport]
+from hrothgar.dataset_constants import LATIN_CORE  # noqa: F401
 from hrothgar.googlefonts import GoogleFonts
 
 _T = TypeVar("_T")

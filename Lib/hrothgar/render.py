@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 import freetype
 import numpy as np

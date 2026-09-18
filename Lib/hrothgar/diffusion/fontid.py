@@ -184,9 +184,11 @@ class FontIdConditionalUnet(nn.Module):
                                 ),
                             )
                         ),
-                        Downsample(dim_in, dim_out)
-                        if not is_last
-                        else nn.Conv2d(dim_in, dim_out, 3, padding=1),
+                        (
+                            Downsample(dim_in, dim_out)
+                            if not is_last
+                            else nn.Conv2d(dim_in, dim_out, 3, padding=1)
+                        ),
                     ]
                 )
             )
@@ -215,9 +217,11 @@ class FontIdConditionalUnet(nn.Module):
                                 ),
                             )
                         ),
-                        Upsample(dim_out, dim_in)
-                        if not is_last
-                        else nn.Conv2d(dim_out, dim_in, 3, padding=1),
+                        (
+                            Upsample(dim_out, dim_in)
+                            if not is_last
+                            else nn.Conv2d(dim_out, dim_in, 3, padding=1)
+                        ),
                     ]
                 )
             )

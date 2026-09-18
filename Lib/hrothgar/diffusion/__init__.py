@@ -27,14 +27,8 @@ from hrothgar.diffusion.dataset import (
     materialize,
 )
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
-from hrothgar.diffusion.exemplar import (
-    ExemplarDiffusionModel,
-    build_exemplar_model,
-)
-from hrothgar.diffusion.fontid import (
-    FontIdDiffusionModel,
-    build_fontid_model,
-)
+from hrothgar.diffusion.exemplar import ExemplarDiffusionModel, build_exemplar_model
+from hrothgar.diffusion.fontid import FontIdDiffusionModel, build_fontid_model
 from hrothgar.diffusion.losses import (
     AxisHead,
     attention_health,
