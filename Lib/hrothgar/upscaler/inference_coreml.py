@@ -8,10 +8,7 @@ Usage::
     from hrothgar.upscaler.inference_coreml import UpscalerInference
 
     infer = UpscalerInference("models/coreml")
-    upscaled = infer.upscale(
-        low_res=low_res_numpy,
-        style_references=style_refs_numpy,
-    )
+    upscaled = infer.upscale(low_res=low_res_numpy)
 """
 
 from __future__ import annotations
@@ -60,7 +57,7 @@ def _predict(model: ct.models.MLModel, **inputs: np.ndarray) -> dict:
 
 
 class UpscalerInference:
-    """Run the upscaler pipeline using exported Core ML models.
+    """Run the upscaler pipeline using the exported Core ML model.
 
     Args:
         model_dir: Directory containing the exported Core ML model files.
@@ -69,68 +66,31 @@ class UpscalerInference:
     def __init__(self, model_dir: str | Path) -> None:
         model_dir = Path(model_dir)
 
-        style_base = model_dir / "style_encoder"
-        body_base = model_dir / "upscaler_body"
+        base = model_dir / "upscaler"
 
-        # Resolve to whichever extension exists (.mlmodelc preferred).
-        def _find(base: Path) -> Path:
+        def _find(path_base: Path) -> Path:
             for ext in (".mlmodelc", ".mlpackage"):
-                candidate = base.with_suffix(ext)
+                candidate = path_base.with_suffix(ext)
                 if candidate.exists():
                     return candidate
-            raise FileNotFoundError(f"Model not found: {base}.mlmodelc or .mlpackage")
+            raise FileNotFoundError(
+                f"Model not found: {path_base}.mlmodelc or .mlpackage"
+            )
 
-        self._style_model: ct.models.MLModel | None = None
-        if (
-            style_base.with_suffix(".mlmodelc").exists()
-            or style_base.with_suffix(".mlpackage").exists()
-        ):
-            self._style_model = _load_model(_find(style_base))
+        self._model = _load_model(_find(base))
 
-        self._body_model = _load_model(_find(body_base))
-
-        # Pre-computed style fallback.
-        fallback_path = model_dir / "style_fallback.bin"
-        if fallback_path.exists():
-            self._fallback_style_gb = np.frombuffer(
-                fallback_path.read_bytes(), dtype=np.float32
-            ).copy()
-        else:
-            self._fallback_style_gb = np.zeros(128, dtype=np.float32)
-
-    def upscale(
-        self,
-        low_res: np.ndarray,
-        style_references: np.ndarray | None = None,
-    ) -> np.ndarray:
+    def upscale(self, low_res: np.ndarray) -> np.ndarray:
         """Upscale a low-resolution glyph raster.
 
         Args:
-            low_res: ``(1, 128, 128)`` float32 numpy array, CHW, values in [0, 1].
-            style_references: Optional ``(K, 1, 512, 512)`` float32 array of
-                reference glyphs for style encoding.  ``None`` uses the
-                learned fallback.
+            low_res: ``(1, H, W)`` float32 numpy array, CHW, values in [0, 1].
 
         Returns:
-            ``(1, 512, 512)`` float32 numpy array, CHW, values in [0, 1].
+            ``(1, H*f, W*f)`` float32 numpy array, CHW, values in [0, 1], where
+            ``f`` is the upscale factor of the exported model.
         """
-        # Style gamma_beta.
-        if style_references is not None and self._style_model is not None:
-            result = _predict(
-                self._style_model, style_references=style_references.astype(np.float32)
-            )
-            style_gb = result["style_gamma_beta"]
-        else:
-            style_gb = self._fallback_style_gb
-
         low_res_b = low_res[np.newaxis, ...].astype(np.float32)
-        style_gb_b = style_gb[np.newaxis, ...].astype(np.float32)
-
-        result = _predict(
-            self._body_model,
-            low_res=low_res_b,
-            style_gamma_beta=style_gb_b,
-        )
+        result = _predict(self._model, low_res=low_res_b)
         upscaled = result["upscaled"]
         return upscaled.squeeze(0).astype(np.float32)
 

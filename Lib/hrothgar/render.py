@@ -214,11 +214,24 @@ def render_gid_raw(
     face = _face_for_path(str(font_path), axis_tuple)
     ppem = size
     face.set_pixel_sizes(0, ppem)
-    face.load_glyph(
-        gid,
-        freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
-        | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
-    )
+    try:
+        face.load_glyph(
+            gid,
+            freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
+            | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
+        )
+    except freetype.FT_Exception:
+        # Very complex outlines can overflow FreeType's rasterizer at render
+        # time (e.g. "raster overflow").  The glyph metrics (advance width)
+        # are loaded before the render step, so preserve them and fall back to
+        # a blank glyph — the caller's ``normalize_bitmap`` already treats an
+        # empty bitmap as blank.
+        return RawGlyph(
+            bitmap=np.zeros((0, 0), dtype=np.uint8),
+            bitmap_left=0,
+            bitmap_top=0,
+            advance_px=face.glyph.linearHoriAdvance / 65536.0,
+        )
 
     glyph_slot = face.glyph
     return RawGlyph(

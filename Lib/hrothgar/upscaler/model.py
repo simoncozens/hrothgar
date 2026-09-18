@@ -1,14 +1,15 @@
-"""Glyph-aware super-resolution model.
+"""Glyph super-resolution model.
 
-The model is intentionally lightweight and uses two forms of conditioning:
+A lightweight, **content-preserving** upscaler: it de-aliases a crop-to-ink
+``low_res_size`` glyph raster to ``high_res_size`` for cleaner vectorization,
+without changing the glyph's construction.  The construction is already decided
+by the upstream diffusion model; this model only interpolates the raster.
 
-1. **Style conditioning** — a learned embedding of a font's visual style
-   derived from K existing high-resolution glyphs, applied via FiLM after
-   the residual body (close to pixel-level decisions about terminals and
-   corners).
-2. **Learned fallback** — when no style references are provided, a learned
-   parameter is used in place of the style encoder output, so the model
-   can still produce reasonable output.
+There is deliberately no style conditioning — the earlier style-reference path
+existed to *repair* fine detail the AR generator could not produce.  The
+diffusion model already emits correct terminals/corners, and conditioning on
+the font's native reference glyphs would push the output toward the font's GT
+construction, i.e. *undo* the diffusion model's (valid) design choices.
 """
 
 from __future__ import annotations
@@ -29,9 +30,6 @@ class UpscalerConfig:
     high_res_size: int = 512
     base_channels: int = 64
     num_residual_blocks: int = 8
-    use_style_conditioning: bool = True
-    style_reference_count: int = 4
-    style_embedding_dim: int = 256
 
     def __post_init__(self) -> None:
         if self.low_res_size <= 0 or self.high_res_size <= 0:
@@ -42,15 +40,6 @@ class UpscalerConfig:
             raise ValueError(
                 "high_res_size must be divisible by low_res_size "
                 f"(got {self.high_res_size} and {self.low_res_size})"
-            )
-        if self.style_reference_count < 0:
-            raise ValueError(
-                f"style_reference_count must be non-negative "
-                f"(got {self.style_reference_count})"
-            )
-        if self.style_embedding_dim <= 0:
-            raise ValueError(
-                f"style_embedding_dim must be positive (got {self.style_embedding_dim})"
             )
 
     @property
@@ -125,71 +114,12 @@ class PixelShuffleUpsample(nn.Module):
         return self.block(x)
 
 
-class GlyphStyleEncoder(nn.Module):
-    """Encode a font's visual style from a set of K reference glyph rasters.
-
-    Each reference is independently passed through a lightweight conv backbone.
-    Features are mean-pooled across references to produce a single style vector,
-    which is then projected to FiLM (γ, β) parameters for channel-wise
-    conditioning of the upscaler body.
-
-    This is designed to capture global style properties — stroke contrast,
-    terminal sharpness, corner treatment, serif presence — from high-resolution
-    exemplars of an existing font, and inject that knowledge to disambiguate
-    the subpixel decisions the upscaler must make at terminals and corners.
-    """
-
-    def __init__(self, base_channels: int, style_dim: int = 256) -> None:
-        super().__init__()
-        # Shared conv backbone: 512→256→128→64→32, then global pool.
-        self.backbone = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=7, stride=2, padding=3),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d(1),
-        )
-        self.projection = nn.Sequential(
-            nn.Linear(256, style_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(style_dim, base_channels * 2),
-        )
-
-    def forward(self, references: torch.Tensor) -> torch.Tensor:
-        """Encode K reference glyphs into FiLM parameters.
-
-        Args:
-            references: ``(B, K, 1, H, W)`` tensor of high-res glyph rasters
-               from the target font.
-
-        Returns:
-            ``(B, base_channels * 2)`` — concatenated γ, β for FiLM.
-        """
-        B, K, C, H, W = references.shape
-        refs_flat = references.reshape(B * K, C, H, W)
-        features = self.backbone(refs_flat)  # (B*K, 256, 1, 1)
-        features = features.squeeze(-1).squeeze(-1)  # (B*K, 256)
-        features = features.view(B, K, 256)
-        pooled = features.mean(dim=1)  # (B, 256)
-        return self.projection(pooled)  # (B, base_channels * 2)
-
-
 class UpscalerModel(SaveLoadModel):
-    """A lightweight super-resolution model for glyph rasters.
-
-    Style conditioning (via reference glyphs) provides the primary signal
-    for disambiguating subpixel decisions.  A learned fallback embedding
-    is used when no style references are available.
-    """
+    """A lightweight content-preserving super-resolution model for glyph rasters."""
 
     def __init__(self, config: UpscalerConfig) -> None:
         super().__init__()
         self.config = config
-        self.use_style_conditioning = config.use_style_conditioning
 
         self.input_projection = nn.Conv2d(1, config.base_channels, 3, 1, 1)
 
@@ -217,96 +147,18 @@ class UpscalerModel(SaveLoadModel):
         )
         self.output_head = nn.Conv2d(config.base_channels, 1, 3, 1, 1)
 
-        # --- Style conditioning ---
-        self.style_encoder: GlyphStyleEncoder | None = None
-        self._no_style_embedding: nn.Parameter | None = None
-        self._init_style_conditioning()
-
-    # ------------------------------------------------------------------
-    # Style conditioning
-    # ------------------------------------------------------------------
-
-    def _init_style_conditioning(self) -> None:
-        if not self.use_style_conditioning:
-            return
-
-        self.style_encoder = GlyphStyleEncoder(
-            base_channels=self.config.base_channels,
-            style_dim=self.config.style_embedding_dim,
-        )
-        self._no_style_embedding = nn.Parameter(
-            torch.zeros(1, self.config.style_embedding_dim)
-        )
-
-    def _style_conditioning_vector(
-        self, style_references: torch.Tensor | None
-    ) -> torch.Tensor | None:
-        """Produce the FiLM (γ, β) tensor from style references.
-
-        Falls back to the learned no-style embedding when references are absent.
-        """
-        if not self.use_style_conditioning or self.style_encoder is None:
-            return None
-
-        if style_references is None:
-            return self._style_encoder_fallback(style_references)
-
-        return self.style_encoder(style_references)
-
-    def _style_encoder_fallback(
-        self, _refs: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        """Return FiLM parameters from the learned no-style embedding."""
-        assert self.style_encoder is not None
-        assert self._no_style_embedding is not None
-        style_vec = self._no_style_embedding  # (1, style_dim)
-        return self.style_encoder.projection(style_vec)
-
-    def _apply_style_conditioning(
-        self,
-        x: torch.Tensor,
-        style_references: torch.Tensor | None,
-    ) -> torch.Tensor:
-        gamma_beta = self._style_conditioning_vector(style_references)
-        if gamma_beta is None:
-            return x
-
-        if gamma_beta.shape[0] == 1 and x.shape[0] > 1:
-            gamma_beta = gamma_beta.expand(x.shape[0], -1)
-
-        gamma, beta = torch.chunk(gamma_beta, chunks=2, dim=-1)
-        gamma = gamma.unsqueeze(-1).unsqueeze(-1)
-        beta = beta.unsqueeze(-1).unsqueeze(-1)
-        return x * (1.0 + gamma) + beta
-
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
-
-    def forward(
-        self,
-        low_res: torch.Tensor,
-        style_references: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    def forward(self, low_res: torch.Tensor) -> torch.Tensor:
         """Upscale a low-resolution glyph raster.
 
         Args:
-            low_res: ``(B, 1, low_res_size, low_res_size)`` input rasters.
-            style_references: Optional ``(B, K, 1, high_res_size, high_res_size)``
-                tensor of existing glyphs from the target font, used to encode
-                the font's visual style.  Pass ``None`` to use the learned
-                no-style fallback.
+            low_res: ``(B, 1, low_res_size, low_res_size)`` input rasters in
+                ``[0, 1]`` (0 = ink, 1 = white).
 
         Returns:
-            ``(B, 1, high_res_size, high_res_size)`` upscaled glyphs in [0, 1].
+            ``(B, 1, high_res_size, high_res_size)`` upscaled glyphs in ``[0, 1]``.
         """
         x = self.input_projection(low_res)
-
-        residual = self.body_projection(self.residual_body(x))
-        x = x + residual
-
-        x = self._apply_style_conditioning(x, style_references)
-
+        x = x + self.body_projection(self.residual_body(x))
         x = self.upsampler(x)
         x = self.output_head(x)
         return torch.sigmoid(x)

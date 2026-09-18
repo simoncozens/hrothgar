@@ -34,27 +34,6 @@ def _render_glyph(font_path: str, char: str, size: int) -> np.ndarray:
     return crop_to_ink(torch.from_numpy(rgb), size)[:1].numpy()  # (1, size, size)
 
 
-def _render_style_references(font_path: str, count: int, size: int) -> np.ndarray:
-    """Render *count* style reference glyphs as ``(count, 1, size, size)``."""
-    reference_chars = "ABEGNRSTabdeghknpqy023456789"
-    refs: list[np.ndarray] = []
-    for c in reference_chars:
-        try:
-            refs.append(_render_glyph(font_path, c, size))
-            if len(refs) >= count:
-                break
-        except Exception:
-            continue
-
-    if not refs:
-        blank = np.zeros((1, size, size), dtype=np.float32)
-        refs = [blank] * count
-    while len(refs) < count:
-        refs.append(refs[-1])
-
-    return np.stack(refs[:count])  # (count, 1, size, size)
-
-
 def _find_sidecar(model_dir: Path) -> Path:
     """Find the config sidecar in *model_dir*."""
     for name in model_dir.iterdir():
@@ -76,23 +55,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory with exported Core ML models and config sidecar.",
     )
     p.add_argument(
-        "--style-reference-count",
-        type=int,
-        default=None,
-        help="Override the number of reference glyphs (default: from config).",
-    )
-    p.add_argument(
         "--output-dir",
         type=Path,
         default=Path("outputs/coreml_test"),
         help="Output directory for images.",
     )
     p.add_argument("--no-show", action="store_true", help="Skip matplotlib preview.")
-    p.add_argument(
-        "--disable-style",
-        action="store_true",
-        help="Skip style conditioning (uses fallback).",
-    )
     return p
 
 
@@ -110,12 +78,7 @@ def main() -> None:
     config = UpscalerConfig.from_sidecar(sidecar_path)
     low_sz = config.low_res_size
     high_sz = config.high_res_size
-    K = (
-        args.style_reference_count
-        if args.style_reference_count is not None
-        else config.style_reference_count
-    )
-    print(f"Upscaler config: {low_sz}->{high_sz}, K={K}")
+    print(f"Upscaler config: {low_sz}->{high_sz}")
 
     print(f"Font: {args.font.name}")
     char = args.char
@@ -126,19 +89,12 @@ def main() -> None:
     low_arr = _render_glyph(str(args.font), char, size=low_sz)
     native_arr = _render_glyph(str(args.font), char, size=high_sz)
 
-    style_refs: np.ndarray | None = None
-    if not args.disable_style:
-        style_refs = _render_style_references(str(args.font), count=K, size=high_sz)
-        print(f"Rendered {style_refs.shape[0]} style references.")
-    else:
-        print("Style conditioning DISABLED (using fallback).")
-
     # Core ML inference.
     print(f"Loading Core ML models from {args.model_dir} ...")
     infer = UpscalerInference(args.model_dir)
 
     print("Running upscaler ...")
-    upscaled_arr = infer.upscale(low_res=low_arr, style_references=style_refs)
+    upscaled_arr = infer.upscale(low_res=low_arr)
 
     # Save & display.
     args.output_dir.mkdir(parents=True, exist_ok=True)

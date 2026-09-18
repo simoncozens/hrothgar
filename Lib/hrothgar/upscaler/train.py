@@ -1,4 +1,4 @@
-"""Training script for glyph super-resolution prototype."""
+"""Training script for glyph super-resolution."""
 
 from __future__ import annotations
 
@@ -10,40 +10,22 @@ import torch.nn.functional as F
 import torchvision
 import tqdm
 
-from glyphloss import glyph_reconstruction_loss
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import TrainingLoop
 
 
-def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:
-    """Convert NaN/Inf to finite values and clamp to BCE's expected range."""
-    return torch.nan_to_num(tensor, nan=nan_fill, posinf=1.0, neginf=0.0).clamp(
-        0.0, 1.0
-    )
-
-
 def compute_upscaler_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
-    glyphloss_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Combine pixel BCE with edge-aware L1 penalty."""
-    predictions = _sanitize_for_bce(predictions, nan_fill=0.5)
-    targets = _sanitize_for_bce(targets, nan_fill=0.0)
-
-    bce = F.binary_cross_entropy(predictions, targets)
-    glyphloss = glyph_reconstruction_loss(predictions, targets)
-    loss = bce + glyphloss_weight * glyphloss
-    return loss, {
-        "bce": bce,
-        "glyphloss": glyphloss,
-        "loss": loss,
-    }
+    """Pixel L1 loss (the standard objective for grayscale super-resolution)."""
+    loss = F.l1_loss(predictions, targets)
+    return loss, {"l1": loss, "loss": loss}
 
 
 class UpscalerTrainingLoop(TrainingLoop):
-    """Training loop for the glyph SR prototype."""
+    """Training loop for the glyph SR model."""
 
     def post_init(self, train_args):
         config = UpscalerConfig(
@@ -51,8 +33,6 @@ class UpscalerTrainingLoop(TrainingLoop):
             high_res_size=train_args.low_res_size * train_args.upscaling_factor,
             base_channels=train_args.base_channels,
             num_residual_blocks=train_args.num_residual_blocks,
-            use_style_conditioning=not train_args.disable_style_conditioning,
-            style_reference_count=train_args.style_reference_count,
         )
         model = UpscalerModel(config).to(self.device)
         config.save_sidecar(train_args.model_path)
@@ -62,19 +42,6 @@ class UpscalerTrainingLoop(TrainingLoop):
             batch_size=train_args.batch_size,
             low_res_size=config.low_res_size,
             high_res_size=config.high_res_size,
-            style_conformance_mode=train_args.style_conformance_mode,
-            clean_font_only=train_args.clean_font_only,
-            clean_font_display_score_threshold=train_args.clean_font_display_score_threshold,
-            outline_noise_std=train_args.outline_noise_std,
-            outline_noise_edge_threshold=train_args.outline_noise_edge_threshold,
-            low_res_noise_std=train_args.low_res_noise_std,
-            style_reference_count=config.style_reference_count,
-            terminal_blur_sigma=train_args.terminal_blur_sigma,
-            stem_blur_sigma=train_args.stem_blur_sigma,
-            blur_mix_min=train_args.blur_mix_min,
-            blur_mix_max=train_args.blur_mix_max,
-            blur_sigma_jitter=train_args.blur_sigma_jitter,
-            mix_spatial_noise=train_args.mix_spatial_noise,
         )
 
         self.train_loader = maker.train_loader()
@@ -89,22 +56,14 @@ class UpscalerTrainingLoop(TrainingLoop):
         self.target_steps = train_args.target_steps
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
-        self.num_epochs = (self.target_steps // len(self.train_loader)) + 1
+        self.num_epochs = (train_args.target_steps // len(self.train_loader)) + 1
         self.validation_direction = "lower"
-        self.edge_weight = train_args.edge_weight
 
     def train_step(self, batch):
         low_res = batch["low_res"].to(self.device)
         high_res = batch["high_res"].to(self.device)
-        style_references = batch.get("style_references")
-        if style_references is not None:
-            style_references = style_references.to(self.device)
-        predictions = self.model(low_res, style_references=style_references)
-        return compute_upscaler_loss(
-            predictions,
-            high_res,
-            glyphloss_weight=1.0,
-        )
+        predictions = self.model(low_res)
+        return compute_upscaler_loss(predictions, high_res)
 
     def post_train_step(self):
         if self.global_step % self.validation_every != 0:
@@ -112,7 +71,7 @@ class UpscalerTrainingLoop(TrainingLoop):
 
         self.model.eval()
         with torch.no_grad():
-            val_glyphloss = []
+            val_l1 = []
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
                 desc="Validation",
@@ -120,20 +79,12 @@ class UpscalerTrainingLoop(TrainingLoop):
             ):
                 low_res = val_batch["low_res"].to(self.device)
                 high_res = val_batch["high_res"].to(self.device)
-                style_refs = val_batch.get("style_references")
-                if style_refs is not None:
-                    style_refs = style_refs.to(self.device)
-                pred = self.model(
-                    low_res,
-                    style_references=style_refs,
-                )
-                # val_ssim.append(self.ssim(pred, high_res))
-                val_glyphloss.append(glyph_reconstruction_loss(pred, high_res))
+                pred = self.model(low_res)
+                val_l1.append(F.l1_loss(pred, high_res))
 
-            avg_glyphloss = torch.mean(torch.stack(val_glyphloss))
-            # self.write_scalar("Validation/SSIM", avg_ssim)
-            self.write_scalar("Validation/GlyphLoss", avg_glyphloss)
-            self.checkpoint_if_best(avg_glyphloss)
+            avg_l1 = torch.mean(torch.stack(val_l1))
+            self.write_scalar("Validation/L1", avg_l1)
+            self.checkpoint_if_best(avg_l1)
             self.visualize()
 
         self.model.train()
@@ -142,13 +93,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         val_batch = next(iter(self.test_loader))
         low_res = val_batch["low_res"].to(self.device)
         high_res = val_batch["high_res"].to(self.device)
-        style_refs = val_batch.get("style_references")
-        if style_refs is not None:
-            style_refs = style_refs.to(self.device)
-        pred = self.model(
-            low_res,
-            style_references=style_refs,
-        )
+        pred = self.model(low_res)
 
         preview_count = min(8, low_res.shape[0])
         bicubic = F.interpolate(
@@ -255,100 +200,10 @@ if __name__ == "__main__":
         help="Validation batch count per validation pass",
     )
     parser.add_argument(
-        "--style-conformance-mode",
-        action="store_true",
-        help=(
-            "Corrupt low-res inputs with synthetic outline noise while keeping clean "
-            "high-res targets, to train cleanup/conformance behavior"
-        ),
-    )
-    parser.add_argument(
-        "--clean-font-only",
-        action="store_true",
-        help="Filter out high-display fonts during SR training",
-    )
-    parser.add_argument(
-        "--clean-font-display-score-threshold",
-        type=float,
-        default=45.0,
-        help="Maximum display score to keep when --clean-font-only is set",
-    )
-    parser.add_argument(
-        "--outline-noise-std",
-        type=float,
-        default=0.08,
-        help="Stddev of edge-localized noise used in conformance mode",
-    )
-    parser.add_argument(
-        "--outline-noise-edge-threshold",
-        type=float,
-        default=0.12,
-        help="Normalized edge threshold (0-1) used to place outline noise",
-    )
-    parser.add_argument(
-        "--low-res-noise-std",
-        type=float,
-        default=0.01,
-        help="Per-pixel replacement probability applied after downsampling in conformance mode",
-    )
-    parser.add_argument(
-        "--terminal-blur-sigma",
-        type=float,
-        default=2.75,
-        help="Gaussian sigma for blur at terminals, corners and joins (high-curvature regions)",
-    )
-    parser.add_argument(
-        "--stem-blur-sigma",
-        type=float,
-        default=0.75,
-        help="Gaussian sigma for blur along straight/low-curvature edges",
-    )
-    parser.add_argument(
-        "--blur-mix-min",
-        type=float,
-        default=0.2,
-        help="Minimum fraction of blurred pixels to mix in at edge regions (0-1)",
-    )
-    parser.add_argument(
-        "--blur-mix-max",
-        type=float,
-        default=0.85,
-        help="Maximum fraction of blurred pixels to mix in at edge regions (0-1)",
-    )
-    parser.add_argument(
-        "--blur-sigma-jitter",
-        type=float,
-        default=0.3,
-        help="Per-batch random jitter on blur sigma as a fraction of base sigma (0-1)",
-    )
-    parser.add_argument(
-        "--mix-spatial-noise",
-        type=float,
-        default=0.15,
-        help="Per-pixel spatial noise added to the blur mix weight (0-1)",
-    )
-    parser.add_argument(
-        "--edge-weight",
-        type=float,
-        default=1.0,
-        help="Relative weight of the edge-aware loss term compared to pixel BCE",
-    )
-    parser.add_argument(
         "--model-path",
         type=str,
         default="models/upscaler_model.pth",
         help="Path to save SR model weights",
-    )
-    parser.add_argument(
-        "--disable-style-conditioning",
-        action="store_true",
-        help="Disable style-reference conditioning during inference",
-    )
-    parser.add_argument(
-        "--style-reference-count",
-        type=int,
-        default=4,
-        help="Number of reference glyphs to use for style encoding",
     )
     args = parser.parse_args()
     if not args.dataset_path:
