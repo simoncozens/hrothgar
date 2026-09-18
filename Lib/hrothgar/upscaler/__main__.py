@@ -10,8 +10,7 @@ import numpy as np
 import torch
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.glyph_rendering import crop_to_ink
-from hrothgar.render import render_gid
+from hrothgar.render_utils import render_gid_with_geometry, render_glyph_with_geometry
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 
@@ -30,15 +29,26 @@ def _parse_char(value: str) -> int:
     return ord(value)
 
 
-def _crop_grayscale(rgb: np.ndarray) -> np.ndarray:
-    """Crop a full-frame ``(3, H, W)`` render to its ink bbox, normalized square.
+def _render_grayscale(
+    font: StandaloneFont,
+    size: int,
+    *,
+    gid: int | None = None,
+    char: int | None = None,
+) -> np.ndarray:
+    """Render a glyph via the raw-bitmap path to a ``(1, size, size)`` array.
 
-    Returns a ``(1, H, W)`` grayscale array in ``[0, 1]`` (0 = ink, 1 = white) —
-    the same crop-to-ink normalize-to-square convention the diffusion model
-    emits, so a diffusion glyph can be fed straight to the upscaler.
+    Returns a grayscale array in ``[0, 1]`` (0 = ink, 1 = white) using the same
+    crop-to-ink normalize-to-square convention as the diffusion model
+    (descenders and negative left sidebearings preserved), so the preview matches
+    what the diffusion model emits and the upscaler consumes.
     """
-    tensor = torch.from_numpy(np.ascontiguousarray(rgb, dtype=np.float32))
-    return crop_to_ink(tensor, tensor.shape[-1])[:1].numpy()  # (1, H, W)
+    if gid is not None:
+        image, _ = render_gid_with_geometry(font, gid, size)
+    else:
+        assert char is not None
+        image, _ = render_glyph_with_geometry(font, char, size)
+    return image.unsqueeze(0).numpy()  # (1, size, size)
 
 
 def _array_for_plot(image_chw: np.ndarray) -> np.ndarray:
@@ -60,14 +70,14 @@ def _render_pair(
     font: StandaloneFont, *, char: int | None, gid: int | None
 ) -> tuple[np.ndarray, np.ndarray, str]:
     if gid is not None:
-        low_res = _crop_grayscale(render_gid(font.path, gid=gid, size=128))
-        high_res = _crop_grayscale(render_gid(font.path, gid=gid, size=512))
+        low_res = _render_grayscale(font, 128, gid=gid)
+        high_res = _render_grayscale(font, 512, gid=gid)
         label = f"gid_{gid}"
         return low_res, high_res, label
 
     assert char is not None
-    low_res = _crop_grayscale(font.render(char, size=128))
-    high_res = _crop_grayscale(font.render(char, size=512))
+    low_res = _render_grayscale(font, 128, char=char)
+    high_res = _render_grayscale(font, 512, char=char)
     codepoint = f"U+{char:04X}"
     label = f"cp_{char:04X}"
     print(f"Rendering character {chr(char)!r} ({codepoint})")
@@ -139,7 +149,7 @@ def _render_style_references(font: StandaloneFont, count: int, size: int) -> np.
     rasters: list[np.ndarray] = []
     for cp in reference_codepoints:
         if font.has_codepoint(cp):
-            rasters.append(_crop_grayscale(font.render(cp, size=size)))
+            rasters.append(_render_grayscale(font, size, char=cp))
             if len(rasters) >= count:
                 break
     # Pad with the last-found raster if the font is very limited.

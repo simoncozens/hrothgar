@@ -29,17 +29,20 @@ def render_glyph(
     return crop_to_ink(rendering, size)[0]
 
 
-def render_glyph_with_geometry(
+def render_gid_with_geometry(
     font,
-    codepoint: int,
+    gid: int,
     size: int,
     axis_position: Sequence[float] | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render + crop-to-ink a glyph, also returning its geometry labels.
+    """Render a glyph by GID, crop-to-ink, and return its geometry labels.
 
-    Unlike :func:`render_glyph`, this reads FreeType's raw bitmap and offsets
-    directly, so descenders are not clipped at the baseline and negative left
-    sidebearings are not clipped at ``x=0``.
+    Reads FreeType's raw bitmap and offsets directly (via
+    :func:`hrothgar.render.render_gid_raw`), so descenders are not clipped at the
+    baseline and negative left sidebearings are not clipped at ``x=0``.  This is
+    the same normalize-to-square policy the factorized diffusion model uses, so a
+    glyph consumed here occupies the same canonical square as the diffusion
+    model's output.
 
     Returns:
         ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
@@ -47,9 +50,22 @@ def render_glyph_with_geometry(
         five em-unit labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
         ``descender_depth``, ``advance``.
     """
-    gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
     raw = render_gid_raw(font.path, gid, size, axis_position=axis_position)
     image, geometry = normalize_bitmap(
         raw.bitmap, raw.bitmap_left, raw.bitmap_top, raw.advance_px, size
     )
     return image[0], geometry
+
+
+def render_glyph_with_geometry(
+    font,
+    codepoint: int,
+    size: int,
+    axis_position: Sequence[float] | None = None,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Render + crop-to-ink a glyph by codepoint, returning its geometry labels.
+
+    See :func:`render_gid_with_geometry` for the normalization policy.
+    """
+    gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
+    return render_gid_with_geometry(font, gid, size, axis_position=axis_position)

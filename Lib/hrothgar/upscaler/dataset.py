@@ -11,12 +11,11 @@ from the same font rendered at high resolution — for style conditioning.
 from __future__ import annotations
 
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
-from hrothgar.glyph_rendering import crop_to_ink
+from hrothgar.render_utils import render_gid_with_geometry
 
 
 class UpscalerDatasetMaker(DatasetMaker):
@@ -26,13 +25,13 @@ class UpscalerDatasetMaker(DatasetMaker):
     def _render_gid_grayscale(font, gid: int, size: int) -> torch.Tensor:
         """Render a glyph by GID, cropped to ink and normalized to a square.
 
-        This is the same crop-to-ink normalize-to-square convention the
-        factorized diffusion model uses, so the diffusion model's output can be
-        fed directly to the upscaler.  Returns a ``(size, size)`` grayscale
-        tensor in ``[0, 1]`` (0 = ink, 1 = white).
+        Uses the same raw-bitmap + normalize-to-square pipeline as the factorized
+        diffusion model (descenders and negative left sidebearings preserved), so
+        the diffusion model's output can be fed directly to the upscaler.  Returns
+        a ``(size, size)`` grayscale tensor in ``[0, 1]`` (0 = ink, 1 = white).
         """
-        rgb = torch.tensor(font.render_gid(gid, size=size), dtype=torch.float32)
-        return crop_to_ink(rgb, size)[0]  # (size, size)
+        image, _ = render_gid_with_geometry(font, gid, size)
+        return image  # (size, size)
 
     def __init__(
         self,
@@ -365,9 +364,11 @@ class UpscalerDatasetMaker(DatasetMaker):
             attempts += 1
             if candidate == exclude_gid:
                 continue
-            # Quick render at low res to check if the glyph has drawable geometry.
-            raster = font.render_gid(candidate, size=64)  # type: ignore[union-attr]
-            if not np.allclose(raster, 1.0, atol=1e-2):
+            # Quick render at low res to check if the glyph has drawable geometry
+            # (using the raw-bitmap path, so a pure-descender glyph is not
+            # mistaken for empty).
+            image, _ = render_gid_with_geometry(font, candidate, 64)
+            if bool((image < 1.0 - 1e-2).any()):
                 gids.append(candidate)
         # Pad with the last-found gid (or exclude_gid as absolute fallback).
         fallback = gids[-1] if gids else exclude_gid
