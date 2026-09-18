@@ -272,7 +272,7 @@ def main() -> None:
                 elif cp in font.codepoints:
                     try:
                         ref_img, ref_geom = render_glyph_with_geometry(
-                            font, cp, glyph_size
+                            font, cp, glyph_size, axis_position=inst["axis_position"]
                         )
                         glyphs.append((ref_img.detach().cpu().numpy(), ref_geom))
                     except Exception:
