@@ -7,9 +7,12 @@ walks every training instance it recorded, skips instances whose font already
 contains the rupee, and for the rest:
 
   * samples a rupee glyph and predicts its geometry (the five em-unit labels), then
-  * writes **two** images per rupee:
-      - a 512x512 crop-to-ink raster (upscaled from the diffusion output via the
-        super-resolution model) with a one-pixel white border, for vectorization;
+  * writes **three** images per rupee:
+      - the raw diffusion output as a crop-to-ink raster at its native
+        resolution with a one-pixel white border, for vectorization, so the
+        effect of super-resolution can be assessed against the image below;
+      - the same raster upscaled 4x via the super-resolution model (512x512)
+        with a one-pixel white border, for vectorization;
       - an evaluation image rendering the string ``ABC5$₹`` on a single canvas,
         baseline-aligned and spaced by each glyph's advance width (the ₹ is the
         generated glyph, the rest are rendered from the font).
@@ -256,6 +259,14 @@ def main() -> None:
             stem = (
                 f"{iid:04d}_{Path(inst['path']).stem}"
                 f"{style}_w{inst['weight']}{suffix}"
+            )
+
+            # Pre-super-resolution vectorization image: the raw diffusion
+            # output at its native resolution, same 1px white border, so SR's
+            # contribution can be compared directly against the 512 below.
+            _save_grayscale(
+                _add_white_border(image, border=1),
+                out_dir / f"{stem}_{image.shape[0]}.png",
             )
 
             # Vectorization image: 512x512 with a 1px white border.
