@@ -346,6 +346,75 @@ def contrast_instances(unit: Unit, k: int) -> list[Instance]:
     return chosen
 
 
+def _master_weights(inst: Instance) -> list[int]:
+    """Weight master locations for a variable instance: the ``wght`` axis's
+    min/default/max (the interpolation endpoints plus the default).  A variable
+    instance without a ``wght`` axis yields just its declared weight."""
+    wght = next((a for a in (inst.axes or []) if a[0] == "wght"), None)
+    if wght is None:
+        return [inst.weight]
+    return sorted({int(wght[1]), int(wght[2]), int(wght[3])})
+
+
+def _instance_record(
+    unit: Unit, inst: Instance, family_id: int | None, weight: int, axis_position
+) -> dict:
+    """One inference-sidecar record, mirroring the training conditioning.
+
+    ``family_id`` is ``None`` for families the model never sampled; ``weight``
+    and ``axis_position`` describe a static file or a synthesized variable
+    location."""
+    return {
+        "path": inst.path,
+        "family": unit.family,
+        "family_id": family_id,
+        "weight": weight,
+        "weight_norm": (weight - 400.0) / 400.0,
+        "style": inst.style,
+        "style_bucket": 0 if inst.style == "normal" else 1,
+        "variable": inst.variable,
+        "axis_position": axis_position,
+    }
+
+
+def inference_jobs(
+    units: Sequence[Unit], family_to_id: dict[str, int]
+) -> list[dict]:
+    """Runtime generation jobs for every weight/style of a *known* family.
+
+    Weight/style conditioning is computed here, not read from a precomputed
+    sidecar: static files generate at their own weight, and variable files
+    generate at their ``wght`` master locations (axis min/default/max).
+    Families absent from ``family_to_id`` are skipped.
+    """
+    jobs: list[dict] = []
+    for unit in units:
+        family_id = family_to_id.get(unit.family)
+        if family_id is None:
+            continue
+        statics = [i for i in unit.instances if not i.variable]
+        variables = [i for i in unit.instances if i.variable]
+        covered = {i.weight for i in statics}
+        for inst in statics:
+            jobs.append(
+                _instance_record(unit, inst, family_id, inst.weight, None)
+            )
+        for inst in variables:
+            for weight in _master_weights(inst):
+                if weight in covered:
+                    continue
+                jobs.append(
+                    _instance_record(
+                        unit,
+                        inst,
+                        family_id,
+                        weight,
+                        _axis_position(inst.axes or [], weight),
+                    )
+                )
+    return jobs
+
+
 def _has_continuous_wght(unit: Unit) -> bool:
     """True if any variable instance has a non-degenerate ``wght`` axis.
 

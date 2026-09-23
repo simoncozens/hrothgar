@@ -40,15 +40,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
 import tqdm
 
+from hrothgar.googlefonts import GoogleFonts
 from hrothgar.style_embedding.config import FontStyleEmbedderConfig
 from hrothgar.style_embedding.model import FontStyleEmbedder
-from hrothgar.googlefonts import GoogleFonts
 from hrothgar.utils import pick_device
 
 
@@ -66,7 +65,7 @@ def build_index(
     model_path: Path,
     output_prefix: Path,
     device: torch.device,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     center: bool = True,
     normalize: bool = True,
 ) -> None:
@@ -77,16 +76,15 @@ def build_index(
     model.load(str(model_path), device=device)
     model.eval()
     dim = config.encoder_feature_dim
-    print(f"Model loaded: {sum(p.numel() for p in model.parameters()):,} params, "
-          f"embedding dim = {dim}")
+    print(
+        f"Model loaded: {sum(p.numel() for p in model.parameters()):,} params, "
+        f"embedding dim = {dim}"
+    )
 
     # ── Collect fonts ──────────────────────────────────────────────────
     gf = GoogleFonts(str(dataset_path))
     needed = set(config.input_codepoints)
-    fonts = [
-        f for f in gf.fonts
-        if needed <= f.codepoints
-    ]
+    fonts = [f for f in gf.fonts if needed <= f.codepoints]
     if limit:
         fonts = fonts[:limit]
     print(f"Found {len(fonts)} fonts with the full input glyph set")
@@ -104,10 +102,12 @@ def build_index(
             skipped += 1
             continue
         all_embeddings.append(embedding)
-        labels.append({
-            "path": str(font.path),
-            "family": font.family,
-        })
+        labels.append(
+            {
+                "path": str(font.path),
+                "family": font.family,
+            }
+        )
 
     if skipped:
         print(f"Skipped {skipped} fonts with blank glyphs")
@@ -122,10 +122,14 @@ def build_index(
     norms = np.linalg.norm(vectors, axis=1)
     mean = vectors.mean(axis=0, dtype=np.float64)
     mean_norm = float(np.linalg.norm(mean))
-    print(f"Embedding L2 norms: min/mean/max = {norms.min():.4f} / "
-          f"{norms.mean():.4f} / {norms.max():.4f}")
-    print(f"Dataset mean vector norm = {mean_norm:.4f} "
-          f"({mean_norm / float(norms.mean()):.2f} of average vector norm)")
+    print(
+        f"Embedding L2 norms: min/mean/max = {norms.min():.4f} / "
+        f"{norms.mean():.4f} / {norms.max():.4f}"
+    )
+    print(
+        f"Dataset mean vector norm = {mean_norm:.4f} "
+        f"({mean_norm / float(norms.mean()):.2f} of average vector norm)"
+    )
 
     # ── Transform ──────────────────────────────────────────────────────
     if center:
@@ -141,8 +145,10 @@ def build_index(
         print("Normalization skipped.")
 
     post_norms = np.linalg.norm(vectors, axis=1)
-    print(f"Final embedding L2 norms: min/mean/max = {post_norms.min():.4f} / "
-          f"{post_norms.mean():.4f} / {post_norms.max():.4f}")
+    print(
+        f"Final embedding L2 norms: min/mean/max = {post_norms.min():.4f} / "
+        f"{post_norms.mean():.4f} / {post_norms.max():.4f}"
+    )
 
     # ── Write ──────────────────────────────────────────────────────────
     vectors = np.ascontiguousarray(vectors, dtype="<f4")
@@ -151,8 +157,10 @@ def build_index(
 
     bin_path = output_prefix.with_suffix(".bin")
     vectors.tofile(bin_path)
-    print(f"Wrote {vectors.size:,} float32 values ({vectors.nbytes:,} bytes) to "
-          f"{bin_path}")
+    print(
+        f"Wrote {vectors.size:,} float32 values ({vectors.nbytes:,} bytes) to "
+        f"{bin_path}"
+    )
 
     payload = {
         "dim": int(vectors.shape[1]),
@@ -173,20 +181,41 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--dataset-path", type=Path, required=True)
     p.add_argument("--model-path", type=Path, required=True)
-    p.add_argument("--output-prefix", type=Path, required=True,
-                   help="Output stem; writes <prefix>.bin and <prefix>.json")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Limit number of fonts (for testing)")
-    p.add_argument("--center", dest="center", action="store_true", default=True,
-                   help="Subtract the dataset mean before normalizing "
-                        "(default: on)")
-    p.add_argument("--no-center", dest="center", action="store_false",
-                   help="Disable mean centering")
-    p.add_argument("--normalize", dest="normalize", action="store_true",
-                   default=True,
-                   help="L2-normalize each vector to unit norm (default: on)")
-    p.add_argument("--no-normalize", dest="normalize", action="store_false",
-                   help="Disable L2 normalization")
+    p.add_argument(
+        "--output-prefix",
+        type=Path,
+        required=True,
+        help="Output stem; writes <prefix>.bin and <prefix>.json",
+    )
+    p.add_argument(
+        "--limit", type=int, default=None, help="Limit number of fonts (for testing)"
+    )
+    p.add_argument(
+        "--center",
+        dest="center",
+        action="store_true",
+        default=True,
+        help="Subtract the dataset mean before normalizing " "(default: on)",
+    )
+    p.add_argument(
+        "--no-center",
+        dest="center",
+        action="store_false",
+        help="Disable mean centering",
+    )
+    p.add_argument(
+        "--normalize",
+        dest="normalize",
+        action="store_true",
+        default=True,
+        help="L2-normalize each vector to unit norm (default: on)",
+    )
+    p.add_argument(
+        "--no-normalize",
+        dest="normalize",
+        action="store_false",
+        help="Disable L2 normalization",
+    )
     return p.parse_args()
 
 

@@ -3,8 +3,9 @@
 was trained on.
 
 Given a trained factorized (codepoint, font-instance) diffusion checkpoint, this
-walks every training instance it recorded, skips instances whose font already
-contains the rupee, and for the rest:
+walks every repo instance whose family is in the checkpoint's vocabulary (each
+static weight, and each variable font's ``wght`` master locations), skips
+instances whose font already contains the rupee, and for the rest:
 
   * samples a rupee glyph and predicts its geometry (the five em-unit labels), then
   * writes **three** images per rupee:
@@ -19,9 +20,12 @@ contains the rupee, and for the rest:
   * and writes a single ``geometry.json`` mapping each output to its geometry.
 
 The checkpoint needs the ``.codepoints.json`` and ``.instances.json`` sidecars
-written by the training loop, plus ``--repo`` to resolve the repo-relative font
-paths (defaults to ``$GOOGLE_FONTS_REPO``).  ``--upscaler-path`` is the
-super-resolution checkpoint (with its ``.conf.json`` sidecar).
+written by the training loop (``.instances.json`` supplies the family -> id
+vocabulary), plus ``--repo`` to resolve the repo-relative font paths (defaults
+to ``$GOOGLE_FONTS_REPO``).  At runtime it enumerates the repo and generates
+the rupee for every static weight and for each variable font's ``wght`` master
+locations, for every family in the model's vocabulary.  ``--upscaler-path`` is
+the super-resolution checkpoint (with its ``.conf.json`` sidecar).
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from hrothgar.diffusion.config import FontIdDiffusionConfig
+from hrothgar.diffusion.dataset_fontid import inference_jobs, load_or_build_units
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.glyph_rendering import GEOMETRY_NAMES
 from hrothgar.googlefonts import StandaloneFont
@@ -161,6 +166,13 @@ def main() -> None:
         default=os.environ.get("GOOGLE_FONTS_REPO"),
         help="Google Fonts repo root, to resolve repo-relative instance paths",
     )
+    p.add_argument(
+        "--cache",
+        type=Path,
+        default=Path(os.environ.get("FONT_DB_CACHE", "/tmp/hrothgar_units.json")),
+        help="Sampling-units JSON cache for repo enumeration",
+    )
+    p.add_argument("--rebuild-cache", action="store_true")
     p.add_argument("--output-dir", type=str, default="outputs/rupees")
     p.add_argument(
         "--ppm",
@@ -194,8 +206,16 @@ def main() -> None:
     model_path = Path(args.model_path)
     config = FontIdDiffusionConfig.from_sidecar(model_path)
     codepoints = _load_json(Path(str(model_path) + ".codepoints.json"))
-    instances = _load_json(Path(str(model_path) + ".instances.json"))
     repo = Path(args.repo) if args.repo else None
+    if repo is None:
+        raise SystemExit(
+            "--repo (or $GOOGLE_FONTS_REPO) is required to enumerate the font library"
+        )
+
+    # The family -> embedding-id vocabulary is the only piece that can't be
+    # computed at runtime; it's recorded per sampled instance in .instances.json.
+    trained = _load_json(Path(str(model_path) + ".instances.json"))
+    family_to_id = {inst["family"]: inst["family_id"] for inst in trained}
 
     if RUPEE not in codepoints:
         raise SystemExit(
@@ -204,6 +224,13 @@ def main() -> None:
         )
     rupee_idx = codepoints.index(RUPEE)
     glyph_size = config.image_size
+
+    # Enumerate the repo at runtime and derive weight/style conditioning on the
+    # fly — static weights plus each variable font's wght master locations —
+    # rather than reading a precomputed manifest.
+    units = load_or_build_units(repo, set(codepoints), args.cache, args.rebuild_cache)
+    jobs = inference_jobs(units, family_to_id)
+    out_of_vocab = sum(1 for u in units if u.family not in family_to_id)
 
     # Diffusion model (sampling + geometry).
     model = build_fontid_model(config).to(device)
@@ -227,8 +254,21 @@ def main() -> None:
     results: dict[str, dict[str, float]] = {}
     generated = 0
     skipped = 0
+    seen: set[tuple] = set()
 
-    for iid, inst in enumerate(instances):
+    for iid, inst in enumerate(jobs):
+        # A family may ship a weight as both a static file and a variable
+        # master; generate once per distinct instance.
+        dedup_key = (
+            inst["path"],
+            inst.get("weight"),
+            inst.get("style"),
+            tuple(inst.get("axis_position") or ()),
+        )
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+
         font = StandaloneFont(_resolve(repo, inst["path"]))
         if RUPEE in font.codepoints:
             skipped += 1
@@ -305,7 +345,8 @@ def main() -> None:
 
     print(
         f"Generated {generated} rupee glyph pairs ({skipped} instances already "
-        f"have the rupee) -> {out_dir}\nGeometry written to {json_path}"
+        f"have the rupee; {out_of_vocab} families are outside the model "
+        f"vocabulary) -> {out_dir}\nGeometry written to {json_path}"
     )
 
 
