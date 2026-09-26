@@ -1,4 +1,6 @@
-GAR-Font
+.venv
+vecfusion
+output/
 outputs/
 *.md
 *.txt
