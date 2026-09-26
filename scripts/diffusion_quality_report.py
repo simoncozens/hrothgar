@@ -38,7 +38,7 @@ from hrothgar.diffusion.dataset_fontid import style_bucket
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
 from hrothgar.llamagen_lpips import LPIPS
-from hrothgar.render_utils import render_glyph_with_geometry
+from hrothgar.render import render_glyph_with_geometry
 from hrothgar.utils import pick_device
 
 GOOD_THRESHOLD = 0.1

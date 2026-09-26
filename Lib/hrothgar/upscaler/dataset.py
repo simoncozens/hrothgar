@@ -13,7 +13,7 @@ from __future__ import annotations
 import torch
 
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
-from hrothgar.render_utils import render_gid_with_geometry
+from hrothgar.render import render_gid_with_geometry
 
 
 class UpscalerDatasetMaker(DatasetMaker):

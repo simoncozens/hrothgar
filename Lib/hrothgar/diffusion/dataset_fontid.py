@@ -46,9 +46,9 @@ from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset import _has_non_empty_outline, _hb_font_for_face
 from hrothgar.dataset_constants import LATIN_KERNEL
-from hrothgar.glyph_rendering import GEOMETRY_SPEC, geometry_tensor
+from hrothgar.render import GEOMETRY_SPEC, geometry_tensor
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
-from hrothgar.render_utils import render_glyph_with_geometry
+from hrothgar.render import render_glyph_with_geometry
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 

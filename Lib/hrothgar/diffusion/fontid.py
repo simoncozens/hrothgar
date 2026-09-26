@@ -46,7 +46,7 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
 from torch import nn
 
 from hrothgar.diffusion.config import FontIdDiffusionConfig
-from hrothgar.glyph_rendering import (
+from hrothgar.render import (
     DESCENDER_SNAP_EPSILON,
     GEOMETRY_NAMES,
     GEOMETRY_SPEC,
@@ -261,7 +261,7 @@ class FontIdConditionalUnet(nn.Module):
         conventions; the glyph disambiguates which construction was drawn.
 
         ``snap`` rounds predicted descender depths within
-        :data:`~hrothgar.glyph_rendering.DESCENDER_SNAP_EPSILON` of zero to
+        :data:`~hrothgar.render.DESCENDER_SNAP_EPSILON` of zero to
         exactly zero, so text faces achieve absolute baseline alignment.  It is
         on by default for inference and off for the training loss.
         """

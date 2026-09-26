@@ -23,9 +23,9 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.fontid import build_fontid_model
-from hrothgar.glyph_rendering import GEOMETRY_NAMES, place_glyph
+from hrothgar.render import GEOMETRY_NAMES, place_glyph
 from hrothgar.llamagen_lpips import LPIPS
-from hrothgar.render_utils import render_glyph_with_geometry
+from hrothgar.render import render_glyph_with_geometry
 from hrothgar.utils import TrainingLoop
 
 

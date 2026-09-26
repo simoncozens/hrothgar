@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render_utils import render_gid_with_geometry, render_glyph_with_geometry
+from hrothgar.render import render_gid_with_geometry, render_glyph_with_geometry
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 

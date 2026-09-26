@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from hrothgar.glyph_rendering import crop_to_ink
+from hrothgar.render import crop_to_ink
 from hrothgar.googlefonts import StandaloneFont
 
 

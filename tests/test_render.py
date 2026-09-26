@@ -2,8 +2,13 @@ from pathlib import Path
 
 import numpy as np
 import uharfbuzz as hb
-from hrothgar.glyph_rendering import geometry_tensor, normalize_bitmap, place_glyph
-from hrothgar.render import _paste_bitmap_onto_canvas, render_gid
+from hrothgar.render import (
+    _paste_bitmap_onto_canvas,
+    geometry_tensor,
+    normalize_bitmap,
+    place_glyph,
+    render_gid,
+)
 
 
 def test_paste_bitmap_aligns_to_baseline() -> None:

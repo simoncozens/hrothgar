@@ -2,8 +2,7 @@
 
 Both the training dataset (``FontStyleDatasetMaker.collate_fn``) and
 ``FontStyleEmbedder.compute_embedding`` use these functions.  The actual
-render-to-tensor logic lives in ``hrothgar.glyph_rendering`` so the rendering
-path is shared across AR, GTok, and the style embedder.
+render-to-tensor logic lives in ``hrothgar.render``.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from collections.abc import Sequence
 
 import torch
 
-from hrothgar.glyph_rendering import render_glyph as _render_glyph_rgb
+from hrothgar.render import render_glyph as _render_glyph_rgb
 
 
 def render_glyph(

@@ -41,9 +41,9 @@ import torch
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import inference_jobs, load_or_build_units
 from hrothgar.diffusion.fontid import build_fontid_model
-from hrothgar.glyph_rendering import GEOMETRY_NAMES
+from hrothgar.render import GEOMETRY_NAMES
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render_utils import render_glyph_with_geometry
+from hrothgar.render import render_glyph_with_geometry
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 import tqdm
