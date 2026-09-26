@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from hrothgar.dataset import ClassBalancedBatchSampler, Dataset, DatasetMaker
 from hrothgar.dataset_constants import LATIN_CORE
-from hrothgar.glyph_rendering import bbox_size, crop_to_ink
+from hrothgar.glyph_rendering import bbox_size, crop_to_ink, render_size
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.style_sampling import (
     _font_has_codepoint,
@@ -180,6 +180,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
         all_metrics: list[torch.Tensor] = []
         bbox_sizes: list[torch.Tensor] = []
 
+        rsize = render_size(self.image_size)
         for item in batch:
             font: GoogleFont = item["font"]
             char = item["char"]
@@ -189,11 +190,11 @@ class ARPhase1DatasetMaker(DatasetMaker):
             axis_pos = font.random_axis_position()
 
             def render_with_font(char):
-                return font.render(char, size=self.image_size, axis_position=axis_pos)
+                return font.render(char, size=rsize, axis_position=axis_pos)
 
-            target_rendering = render_with_font(char)  # numpy (3, size, size)
+            target_rendering = render_with_font(char)  # numpy (3, rsize, rsize)
             target_tensor = torch.tensor(target_rendering, dtype=torch.float32)
-            bbox_sizes.append(bbox_size(target_tensor, self.image_size))
+            bbox_sizes.append(bbox_size(target_tensor, rsize))
             target_renderings.append(crop_to_ink(target_tensor, self.image_size))
 
             # Content rendering fallback.
@@ -202,7 +203,7 @@ class ARPhase1DatasetMaker(DatasetMaker):
             ) or not _has_non_empty_glyph(reference_font, char):
                 reference_font = font
 
-            content_render = reference_font.render(char, size=self.image_size)
+            content_render = reference_font.render(char, size=rsize)
             if _is_blank_rendering(content_render):
                 content_render = render_with_font(char)
             content_renderings.append(

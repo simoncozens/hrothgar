@@ -28,6 +28,17 @@ if TYPE_CHECKING:
 # Ink is rendered near 0.0 on a white (1.0) background.
 _INK_THRESHOLD = 0.5
 
+# Glyphs are rendered at this multiple of the target size, then downscaled
+# during crop-to-ink.  Rendering at the target size and *upscaling* back after
+# cropping blurs corners (bilinear spreads the AA ramp); rendering high and
+# *downscaling* preserves them.  4x was validated on the DMSerifText R counter.
+RENDER_SUPERSAMPLE = 4
+
+
+def render_size(size: int) -> int:
+    """The raster resolution to render at for a given output ``size``."""
+    return size * RENDER_SUPERSAMPLE
+
 # Canonical geometry label order and em-unit ranges.  The factorized
 # (codepoint, font-ID) diffusion model's geometry regression head predicts these
 # five values in this order, using sigmoid (non-negative widths) or tanh
@@ -133,12 +144,16 @@ def render_normalized(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Render + crop-to-ink a glyph.
 
+    Renders at ``render_size(size)`` (supersampled) and downscales during
+    crop-to-ink, so corners survive the AA.
+
     Returns:
         ``(normalized, bbox)`` where ``normalized`` is ``(3, size, size)`` and
         ``bbox`` is normalized ``(x0, y0, x1, y1)`` in [0, 1].
     """
-    rendering = render_glyph(font, codepoint, size, axis_position=axis_position)
-    return crop_to_ink(rendering, size), ink_bbox(rendering, size)
+    rsize = render_size(size)
+    rendering = render_glyph(font, codepoint, rsize, axis_position=axis_position)
+    return crop_to_ink(rendering, size), ink_bbox(rendering, rsize)
 
 
 def geometry_tensor(geometry: dict[str, float]) -> torch.Tensor:
@@ -154,14 +169,19 @@ def normalize_bitmap(
     bitmap_top: int,
     advance_px: float,
     size: int,
+    ppem: int | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Crop a raw FreeType bitmap to its ink and normalize it to a square.
 
     ``bitmap`` is a ``(rows, width)`` uint8 coverage array (0 = no ink,
     255 = full ink).  ``bitmap_left``/``bitmap_top`` are the FreeType bitmap
     offsets in pixels (left sidebearing and top bearing); ``advance_px`` is the
-    glyph advance width in pixels.  All returned geometry values are in **em
-    units** (1 em = ``size`` px at ``ppem=size``), so they are font-independent.
+    glyph advance width in pixels.
+
+    ``size`` is the output square side length.  ``ppem`` is the raster
+    resolution the bitmap was *rendered* at (used for the em-unit geometry;
+    defaults to ``size``).  They differ when the glyph was rendered
+    supersampled (``render_size``) and downscaled here.
 
     Returns:
         ``(image, geometry)`` where ``image`` is a ``(1, size, size)`` float32
@@ -169,6 +189,7 @@ def normalize_bitmap(
         five labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
         ``descender_depth``, ``advance`` in em units.
     """
+    ppem = ppem if ppem is not None else size
     if bitmap.size == 0:
         # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
         image = torch.ones((1, size, size), dtype=torch.float32)
@@ -177,7 +198,7 @@ def normalize_bitmap(
             "scale_y": 0.0,
             "left_sidebearing": 0.0,
             "descender_depth": 0.0,
-            "advance": advance_px / size,
+            "advance": advance_px / ppem,
         }
         return image, geometry
 
@@ -189,9 +210,9 @@ def normalize_bitmap(
         geometry = {
             "scale_x": 0.0,
             "scale_y": 0.0,
-            "left_sidebearing": float(bitmap_left) / size,
-            "descender_depth": -float(bitmap_top) / size,
-            "advance": advance_px / size,
+            "left_sidebearing": float(bitmap_left) / ppem,
+            "descender_depth": -float(bitmap_top) / ppem,
+            "advance": advance_px / ppem,
         }
         return image, geometry
 
@@ -210,14 +231,14 @@ def normalize_bitmap(
         0
     ]  # (1, size, size)
 
-    scale_y = (y1 - y0 + 1) / size
-    baseline_offset = (bitmap_top - y0) / size
+    scale_y = (y1 - y0 + 1) / ppem
+    baseline_offset = (bitmap_top - y0) / ppem
     geometry = {
-        "scale_x": (x1 - x0 + 1) / size,
+        "scale_x": (x1 - x0 + 1) / ppem,
         "scale_y": scale_y,
-        "left_sidebearing": (bitmap_left + x0) / size,
+        "left_sidebearing": (bitmap_left + x0) / ppem,
         "descender_depth": scale_y - baseline_offset,
-        "advance": advance_px / size,
+        "advance": advance_px / ppem,
     }
     return image, geometry
 

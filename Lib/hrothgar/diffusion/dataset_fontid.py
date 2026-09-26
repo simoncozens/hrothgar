@@ -378,7 +378,7 @@ def _instance_record(
 
 
 def inference_jobs(
-    units: Sequence[Unit], family_to_id: dict[str, int]
+    units: Sequence[Unit], family_to_id: dict[str, int], skip_re: str | None = None
 ) -> list[dict]:
     """Runtime generation jobs for every weight/style of a *known* family.
 
@@ -389,6 +389,9 @@ def inference_jobs(
     """
     jobs: list[dict] = []
     for unit in units:
+        if skip_re and re.match(skip_re, unit.family):
+            continue
+
         family_id = family_to_id.get(unit.family)
         if family_id is None:
             continue

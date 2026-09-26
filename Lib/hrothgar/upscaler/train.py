@@ -10,18 +10,41 @@ import torch.nn.functional as F
 import torchvision
 import tqdm
 
+from glyphloss import glyph_reconstruction_loss
 from hrothgar.upscaler.dataset import UpscalerDatasetMaker
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import TrainingLoop
 
 
+def _sanitize_for_bce(tensor: torch.Tensor, *, nan_fill: float) -> torch.Tensor:
+    """Convert NaN/Inf to finite values and clamp to BCE's expected range."""
+    return torch.nan_to_num(tensor, nan=nan_fill, posinf=1.0, neginf=0.0).clamp(
+        0.0, 1.0
+    )
+
+
 def compute_upscaler_loss(
     predictions: torch.Tensor,
     targets: torch.Tensor,
+    glyphloss_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Pixel L1 loss (the standard objective for grayscale super-resolution)."""
-    loss = F.l1_loss(predictions, targets)
-    return loss, {"l1": loss, "loss": loss}
+    """Pixel BCE plus a curvature-weighted glyph reconstruction loss.
+
+    The glyphloss term concentrates on edge sharpness and orientation, which
+    stops the upscaler drifting toward blur (the failure mode of a pure L1/BCE
+    objective) — the output feeds a vectorizer that wants crisp, clean edges.
+    """
+    predictions = _sanitize_for_bce(predictions, nan_fill=0.5)
+    targets = _sanitize_for_bce(targets, nan_fill=0.0)
+
+    bce = F.binary_cross_entropy(predictions, targets)
+    glyphloss = glyph_reconstruction_loss(predictions, targets)
+    loss = bce + glyphloss_weight * glyphloss
+    return loss, {
+        "bce": bce,
+        "glyphloss": glyphloss,
+        "loss": loss,
+    }
 
 
 class UpscalerTrainingLoop(TrainingLoop):
@@ -63,7 +86,7 @@ class UpscalerTrainingLoop(TrainingLoop):
         low_res = batch["low_res"].to(self.device)
         high_res = batch["high_res"].to(self.device)
         predictions = self.model(low_res)
-        return compute_upscaler_loss(predictions, high_res)
+        return compute_upscaler_loss(predictions, high_res, glyphloss_weight=1.0)
 
     def post_train_step(self):
         if self.global_step % self.validation_every != 0:
@@ -71,7 +94,7 @@ class UpscalerTrainingLoop(TrainingLoop):
 
         self.model.eval()
         with torch.no_grad():
-            val_l1 = []
+            val_glyphloss = []
             for val_batch in tqdm.tqdm(
                 itertools.islice(self.test_loader, self.validation_batches),
                 desc="Validation",
@@ -80,11 +103,11 @@ class UpscalerTrainingLoop(TrainingLoop):
                 low_res = val_batch["low_res"].to(self.device)
                 high_res = val_batch["high_res"].to(self.device)
                 pred = self.model(low_res)
-                val_l1.append(F.l1_loss(pred, high_res))
+                val_glyphloss.append(glyph_reconstruction_loss(pred, high_res))
 
-            avg_l1 = torch.mean(torch.stack(val_l1))
-            self.write_scalar("Validation/L1", avg_l1)
-            self.checkpoint_if_best(avg_l1)
+            avg_glyphloss = torch.mean(torch.stack(val_glyphloss))
+            self.write_scalar("Validation/GlyphLoss", avg_glyphloss)
+            self.checkpoint_if_best(avg_glyphloss)
             self.visualize()
 
         self.model.train()

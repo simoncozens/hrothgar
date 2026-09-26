@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import torch
 import uharfbuzz as hb
 
-from hrothgar.glyph_rendering import crop_to_ink, normalize_bitmap
+from hrothgar.glyph_rendering import crop_to_ink, normalize_bitmap, render_size
 from hrothgar.glyph_rendering import render_glyph as _render_glyph_rgb
 from hrothgar.render import render_gid_raw
 
@@ -25,7 +25,7 @@ def render_glyph(
     axis_position: Sequence[float] | None = None,
 ) -> torch.Tensor:
     """Render + crop-to-ink a glyph as a ``(size, size)`` greyscale tensor in [0, 1]."""
-    rendering = _render_glyph_rgb(font, codepoint, size, axis_position=axis_position)
+    rendering = _render_glyph_rgb(font, codepoint, render_size(size), axis_position=axis_position)
     return crop_to_ink(rendering, size)[0]
 
 
@@ -42,7 +42,8 @@ def render_gid_with_geometry(
     baseline and negative left sidebearings are not clipped at ``x=0``.  This is
     the same normalize-to-square policy the factorized diffusion model uses, so a
     glyph consumed here occupies the same canonical square as the diffusion
-    model's output.
+    model's output.  The glyph is rendered supersampled (``render_size``) and
+    downscaled during normalization, so corners survive the AA.
 
     Returns:
         ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
@@ -50,9 +51,10 @@ def render_gid_with_geometry(
         five em-unit labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
         ``descender_depth``, ``advance``.
     """
-    raw = render_gid_raw(font.path, gid, size, axis_position=axis_position)
+    rsize = render_size(size)
+    raw = render_gid_raw(font.path, gid, rsize, axis_position=axis_position)
     image, geometry = normalize_bitmap(
-        raw.bitmap, raw.bitmap_left, raw.bitmap_top, raw.advance_px, size
+        raw.bitmap, raw.bitmap_left, raw.bitmap_top, raw.advance_px, size, ppem=rsize
     )
     return image[0], geometry
 

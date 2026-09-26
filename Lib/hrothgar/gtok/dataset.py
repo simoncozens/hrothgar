@@ -15,7 +15,7 @@ from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import WeightedRandomSampler
 
 from hrothgar.dataset import LATIN_CORE, ClassBalancedBatchSampler, DatasetMaker
-from hrothgar.glyph_rendering import crop_to_ink
+from hrothgar.glyph_rendering import crop_to_ink, render_size
 
 # Dataset-level oversampling policy for underperforming style buckets.
 # Keep this in source (not CLI args) so training setup is reproducible from code.
@@ -239,7 +239,11 @@ class GTokDatasetMaker(DatasetMaker):
             if self.render_time_augmentation:
                 axis_pos = font.random_axis_position()
             rendered = torch.tensor(
-                font.render(item["char"], size=self.image_size, axis_position=axis_pos),
+                font.render(
+                    item["char"],
+                    size=render_size(self.image_size),
+                    axis_position=axis_pos,
+                ),
                 dtype=torch.float32,
             )
             renderings.append(crop_to_ink(rendered, self.image_size))
