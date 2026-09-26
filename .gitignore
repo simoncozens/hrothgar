@@ -17,3 +17,12 @@ logs/
 foo.py
 build/
 uv.lock
+*.csv
+*.html
+*.ttf
+*.tar.gz
+*.pt
+venv/
+__pycache__
+.pytest_cache/
+ruff_cache/
