@@ -6,7 +6,6 @@ outputs/
 *.png
 image_cache/
 /models/
-/scripts/
 *.egg-info
 *.swp
 .vscode

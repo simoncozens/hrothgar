@@ -39,3 +39,41 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["Lib"]
+
+# basedpyright is the language server used by the editor. It reads
+# [tool.basedpyright] (not [tool.pyright]) and rejects a pyproject.toml that
+# defines both sections.
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+# Hand-written stubs for C extensions that ship without type information.
+stubPath = "typings"
+
+# The project builds on a lot of untyped third-party libraries (torch,
+# uharfbuzz, transformers, ...). basedpyright's default mode reports every
+# Any/unknown that flows out of them, which floods the editor with thousands
+# of low-signal diagnostics. Disable those so genuine problems stand out.
+reportAny = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+reportMissingTypeStubs = "none"
+reportMissingTypeArgument = "none"
+reportMissingParameterType = "none"
+reportUnannotatedClassAttribute = "none"
+
+# Calling a function purely for its side effect (e.g. parser.add_argument)
+# is standard argparse idiom, not an oversight.
+reportUnusedCallResult = "none"
+
+# Stylistic; the codebase uses implicit concatenation deliberately.
+reportImplicitStringConcatenation = "none"
+reportImplicitOverride = "none"
+
+# Attributes are commonly assigned from helper methods rather than __init__.
+reportUninitializedInstanceVariable = "none"
+
+# Cross-module use of module-level "_helper" functions is intentional here.
+reportPrivateUsage = "none"

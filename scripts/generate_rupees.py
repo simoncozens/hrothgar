@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +46,7 @@ from hrothgar.googlefonts import StandaloneFont
 from hrothgar.render_utils import render_glyph_with_geometry
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
+import tqdm
 
 RUPEE = ord("\u20b9")  # U+20B9
 EVAL_STRING = "ABC5$\u20b9"  # "ABC5$₹"
@@ -198,6 +200,12 @@ def main() -> None:
         default=1,
         help="Independent samples per instance (each uses a distinct seed)",
     )
+    p.add_argument(
+        "--skip-regex",
+        type=str,
+        default="",
+        help="Skip families matching the regular expression"
+    )
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -229,7 +237,7 @@ def main() -> None:
     # fly — static weights plus each variable font's wght master locations —
     # rather than reading a precomputed manifest.
     units = load_or_build_units(repo, set(codepoints), args.cache, args.rebuild_cache)
-    jobs = inference_jobs(units, family_to_id)
+    jobs = inference_jobs(units, family_to_id, args.skip_regex)
     out_of_vocab = sum(1 for u in units if u.family not in family_to_id)
 
     # Diffusion model (sampling + geometry).
@@ -256,7 +264,9 @@ def main() -> None:
     skipped = 0
     seen: set[tuple] = set()
 
-    for iid, inst in enumerate(jobs):
+    progress = tqdm.tqdm(enumerate(jobs), total=len(jobs))
+
+    for iid, inst in progress:
         # A family may ship a weight as both a static file and a variable
         # master; generate once per distinct instance.
         dedup_key = (
@@ -265,6 +275,7 @@ def main() -> None:
             inst.get("style"),
             tuple(inst.get("axis_position") or ()),
         )
+        progress.set_description(inst["family"])
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
@@ -296,10 +307,11 @@ def main() -> None:
 
             suffix = "" if variant == 0 else f"_v{variant}"
             style = "" if inst["style"] == "normal" else "_italic"
-            stem = (
-                f"{iid:04d}_{Path(inst['path']).stem}"
-                f"{style}_w{inst['weight']}{suffix}"
-            )
+            # Matchable stem: family name (spaces removed) + style + weight.
+            # hrothgar-vectorize reconstructs this from the font source's
+            # family name and each master's userspace weight.
+            family_key = inst["family"].replace(" ", "")
+            stem = f"{family_key}{style}_w{inst['weight']}{suffix}"
 
             # Pre-super-resolution vectorization image: the raw diffusion
             # output at its native resolution, same 1px white border, so SR's

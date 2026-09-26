@@ -35,7 +35,6 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
-from typing import Optional, Sequence
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -43,20 +42,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from matplotlib.patches import Rectangle
 from matplotlib.colors import Normalize
+from matplotlib.patches import Rectangle
 
 # Project imports.
 from hrothgar.ar.config import ARModelConfig
 from hrothgar.ar.model import ARModel
-from hrothgar.googlefonts import GoogleFont, find_google_font_by_basename
-from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.ar.style_sampling import (
     _font_has_codepoint,
     _has_non_empty_glyph,
     _is_blank_rendering,
 )
 from hrothgar.dataset_constants import LATIN_KERNEL
+from hrothgar.googlefonts import GoogleFont, find_google_font_by_basename
+from hrothgar.gtok.model import load_model as load_gtok_model
 from hrothgar.utils import pick_device
 
 matplotlib.use("Agg")  # non-interactive backend
@@ -65,6 +64,7 @@ matplotlib.use("Agg")  # non-interactive backend
 # ---------------------------------------------------------------------------
 # Attention capture
 # ---------------------------------------------------------------------------
+
 
 class AttentionCapture:
     """Registers forward hooks to capture cross-attention weights.
@@ -79,7 +79,7 @@ class AttentionCapture:
         # captured_blocks[block_idx] = (B, n_heads, Q, K) — content→style attention
         self.captured_blocks: dict[int, torch.Tensor] = {}
         # captured_pool = (B, pool_n_heads, n_tokens, N_style) — learned queries→style positions
-        self.captured_pool: Optional[torch.Tensor] = None
+        self.captured_pool: torch.Tensor | None = None
         self._uses_pooling: bool = aggregator.style_pool is not None
 
     # ---- StyleAttentionBlock hooks ----------------------------------------
@@ -108,6 +108,7 @@ class AttentionCapture:
             attn_scores = torch.matmul(Q_, K_.transpose(-2, -1)) / (head_dim**0.5)
             attn_weights = F.softmax(attn_scores, dim=-1)  # (B, n_heads, Q, K)
             self.captured_blocks[block_idx] = attn_weights.detach().cpu()
+
         return hook_fn
 
     # ---- StyleAttentionPool hook ------------------------------------------
@@ -131,8 +132,11 @@ class AttentionCapture:
             Q_ = Q.view(B, n_tokens, n_heads, head_dim).transpose(1, 2)
             K_ = K.view(B, N_style, n_heads, head_dim).transpose(1, 2)
             attn_scores = torch.matmul(Q_, K_.transpose(-2, -1)) / (head_dim**0.5)
-            attn_weights = F.softmax(attn_scores, dim=-1)  # (B, n_heads, n_tokens, N_style)
+            attn_weights = F.softmax(
+                attn_scores, dim=-1
+            )  # (B, n_heads, n_tokens, N_style)
             self.captured_pool = attn_weights.detach().cpu()
+
         return hook_fn
 
     # ---- Registration -----------------------------------------------------
@@ -164,6 +168,7 @@ class AttentionCapture:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _render_glyph_codepoint(
     font: GoogleFont,
     codepoint: int,
@@ -194,18 +199,19 @@ def _cosine_similarity_matrix(vectors: np.ndarray) -> np.ndarray:
 # Main visualisation
 # ---------------------------------------------------------------------------
 
+
 def build_figure(
     *,
     glyph_image: np.ndarray,
     style_images: np.ndarray,  # (n_ref, 3, H, W)
     style_codepoints: list[int],
     captured_blocks: dict[int, torch.Tensor],  # block_idx → (1, n_heads, Q, K)
-    captured_pool: Optional[torch.Tensor],  # (1, pool_heads, n_tokens, N_style) or None
+    captured_pool: torch.Tensor | None,  # (1, pool_heads, n_tokens, N_style) or None
     grid_size: int,
     n_ref: int,
-    content_token_idx: Optional[int] = None,
+    content_token_idx: int | None = None,
     zero_aggregator: bool = False,
-    output_path: Optional[Path] = None,
+    output_path: Path | None = None,
 ) -> plt.Figure:
     """Build the multi-panel visualisation figure.
 
@@ -291,12 +297,14 @@ def build_figure(
         n_ref_cols = min(n_ref, 3)
         n_ref_rows = max(1, math.ceil(n_ref / 3))
         gs_ref = fig.add_gridspec(
-            n_ref_rows, n_ref_cols,
+            n_ref_rows,
+            n_ref_cols,
             left=gs[1, :].get_position(fig).x0,
             right=gs[1, :].get_position(fig).x1,
             bottom=gs[1, :].get_position(fig).y0,
             top=gs[1, :].get_position(fig).y1,
-            hspace=0.4, wspace=0.25,
+            hspace=0.4,
+            wspace=0.25,
         )
         for ref_i in range(n_ref):
             row, col = divmod(ref_i, 3)
@@ -305,7 +313,9 @@ def build_figure(
                 ax=ax_ref,
                 style_image=style_images[ref_i],
                 grid_size=grid_size,
-                token_attn=attn_np[content_token_idx, ref_i * K_per_ref : (ref_i + 1) * K_per_ref],
+                token_attn=attn_np[
+                    content_token_idx, ref_i * K_per_ref : (ref_i + 1) * K_per_ref
+                ],
                 ref_label=f"U+{style_codepoints[ref_i]:04X}",
             )
         for ref_i in range(n_ref, n_ref_rows * n_ref_cols):
@@ -335,6 +345,7 @@ def build_figure(
 # Panel drawing helpers
 # ---------------------------------------------------------------------------
 
+
 def _draw_token_grid_overlay(
     ax: plt.Axes,
     glyph_image: np.ndarray,
@@ -357,16 +368,25 @@ def _draw_token_grid_overlay(
             ent = entropies_2d[r, c]
             color = plt.cm.plasma(norm(ent))
             rect = Rectangle(
-                (c * cell, r * cell), cell, cell,
-                linewidth=1.0, edgecolor=color, facecolor=color, alpha=0.35,
+                (c * cell, r * cell),
+                cell,
+                cell,
+                linewidth=1.0,
+                edgecolor=color,
+                facecolor=color,
+                alpha=0.35,
             )
             ax.add_patch(rect)
 
     # Highlight selected token.
     hr, hc = divmod(highlight_idx, grid_size)
     rect = Rectangle(
-        (hc * cell, hr * cell), cell, cell,
-        linewidth=2.5, edgecolor="cyan", facecolor="none",
+        (hc * cell, hr * cell),
+        cell,
+        cell,
+        linewidth=2.5,
+        edgecolor="cyan",
+        facecolor="none",
     )
     ax.add_patch(rect)
 
@@ -375,12 +395,19 @@ def _draw_token_grid_overlay(
         for c in range(grid_size):
             idx = r * grid_size + c
             ax.text(
-                c * cell + cell / 2, r * cell + cell / 2,
-                str(idx), ha="center", va="center",
-                fontsize=5, color="white", weight="bold",
+                c * cell + cell / 2,
+                r * cell + cell / 2,
+                str(idx),
+                ha="center",
+                va="center",
+                fontsize=5,
+                color="white",
+                weight="bold",
             )
 
-    ax.set_title("Token grid + attention entropy\n(plasma: high entropy = unfocused)", fontsize=9)
+    ax.set_title(
+        "Token grid + attention entropy\n(plasma: high entropy = unfocused)", fontsize=9
+    )
     ax.set_xlim(0, W)
     ax.set_ylim(H, 0)
     ax.axis("off")
@@ -397,8 +424,14 @@ def _draw_content_correlation_matrix(
 ) -> None:
     """Content-token × content-token cosine similarity of attention vectors."""
     corr = _cosine_similarity_matrix(attn_np)  # (Q, Q)
-    im = ax.imshow(corr, cmap="RdYlBu_r", aspect="equal", vmin=0.5, vmax=1.0,
-                   interpolation="nearest")
+    im = ax.imshow(
+        corr,
+        cmap="RdYlBu_r",
+        aspect="equal",
+        vmin=0.5,
+        vmax=1.0,
+        interpolation="nearest",
+    )
     ax.set_title("Content token × content token\nattention correlation", fontsize=9)
     ax.set_xlabel("Content token index")
     ax.set_ylabel("Content token index")
@@ -422,7 +455,9 @@ def _draw_style_attention_summary(
     Q_per_ref = attn_np.shape[1] // n_ref
     masses = []
     for i in range(n_ref):
-        mass = float(attn_np[content_token_idx, i * Q_per_ref : (i + 1) * Q_per_ref].sum())
+        mass = float(
+            attn_np[content_token_idx, i * Q_per_ref : (i + 1) * Q_per_ref].sum()
+        )
         masses.append(mass)
 
     labels = [f"U+{cp:04X}" for cp in style_codepoints]
@@ -444,7 +479,9 @@ def _draw_style_attention_summary(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.01,
             f"{pct:.1f}%",
-            ha="center", va="bottom", fontsize=7,
+            ha="center",
+            va="bottom",
+            fontsize=7,
         )
 
 
@@ -484,8 +521,13 @@ def _draw_per_reference_heatmap(
             alpha = 0.1 + 0.7 * (val - vmin) / (vmax - vmin + 1e-8)
             color = plt.cm.hot(norm(val))
             rect = Rectangle(
-                (c * cell, r * cell), cell, cell,
-                linewidth=0.5, edgecolor=color, facecolor=color, alpha=alpha,
+                (c * cell, r * cell),
+                cell,
+                cell,
+                linewidth=0.5,
+                edgecolor=color,
+                facecolor=color,
+                alpha=alpha,
             )
             ax.add_patch(rect)
 
@@ -515,7 +557,9 @@ def _draw_token_attention_bars(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.01,
             f"{pct:.1f}%",
-            ha="center", va="bottom", fontsize=7,
+            ha="center",
+            va="bottom",
+            fontsize=7,
         )
 
 
@@ -523,7 +567,7 @@ def _draw_pool_heatmaps(
     fig: plt.Figure,
     gs,
     pool_attn_np: np.ndarray,  # (n_tokens, n_ref*Q)
-    style_images: np.ndarray,   # (n_ref, 3, H, W)
+    style_images: np.ndarray,  # (n_ref, 3, H, W)
     style_codepoints: list[int],
     grid_size: int,
     n_ref: int,
@@ -541,12 +585,14 @@ def _draw_pool_heatmaps(
     n_rows = max_tokens
 
     gs_pool = fig.add_gridspec(
-        n_rows, n_cols,
+        n_rows,
+        n_cols,
         left=gs[1, :].get_position(fig).x0,
         right=gs[1, :].get_position(fig).x1,
         bottom=gs[1, :].get_position(fig).y0,
         top=gs[1, :].get_position(fig).y1,
-        hspace=0.45, wspace=0.25,
+        hspace=0.45,
+        wspace=0.25,
     )
 
     for token_i in range(max_tokens):
@@ -557,7 +603,9 @@ def _draw_pool_heatmaps(
             else:
                 img = style_images[ref_i]
             H, W_img = img.shape
-            ax.imshow(img, cmap="gray", extent=[0, W_img, H, 0], interpolation="bilinear")
+            ax.imshow(
+                img, cmap="gray", extent=[0, W_img, H, 0], interpolation="bilinear"
+            )
 
             token_attn = pool_attn_np[token_i, ref_i * Q : (ref_i + 1) * Q]
             attn_2d = token_attn.reshape(grid_size, grid_size)
@@ -574,8 +622,13 @@ def _draw_pool_heatmaps(
                     alpha = 0.1 + 0.7 * (val - vmin) / (vmax - vmin + 1e-8)
                     color = plt.cm.hot(norm(val))
                     rect = Rectangle(
-                        (c * cell, r * cell), cell, cell,
-                        linewidth=0.5, edgecolor=color, facecolor=color, alpha=alpha,
+                        (c * cell, r * cell),
+                        cell,
+                        cell,
+                        linewidth=0.5,
+                        edgecolor=color,
+                        facecolor=color,
+                        alpha=alpha,
                     )
                     ax.add_patch(rect)
 
@@ -591,12 +644,13 @@ def _draw_pool_heatmaps(
 # Per-block, per-head decomposition plot
 # ---------------------------------------------------------------------------
 
+
 def build_decomposition_figure(
     captured: dict[int, torch.Tensor],
     grid_size: int,
     n_ref: int,
     content_token_idx: int,
-    output_path: Optional[Path] = None,
+    output_path: Path | None = None,
 ) -> plt.Figure:
     """Build a figure showing per-block, per-head attention.
 
@@ -615,14 +669,16 @@ def build_decomposition_figure(
         # Pooled tokens: show as a compact bar-chart grid.
         n_tokens = K
         fig, axes = plt.subplots(
-            n_heads, n_blocks,
+            n_heads,
+            n_blocks,
             figsize=(3 * n_blocks, 2 * n_heads),
             squeeze=False,
         )
         fig.suptitle(
             f"Per-head, per-block attention to {n_tokens} global style tokens "
             f"for content token {content_token_idx}",
-            fontsize=12, fontweight="bold",
+            fontsize=12,
+            fontweight="bold",
         )
         for block_i in range(n_blocks):
             attn_block = captured[block_i].squeeze(0)  # (n_heads, Q, K)
@@ -640,14 +696,16 @@ def build_decomposition_figure(
                     ax.set_ylabel(f"Head {head_i}", fontsize=8)
     else:
         fig, axes = plt.subplots(
-            n_heads, n_blocks,
+            n_heads,
+            n_blocks,
             figsize=(3 * n_blocks, 3 * n_heads),
             squeeze=False,
         )
         fig.suptitle(
             f"Per-head, per-block attention maps for content token {content_token_idx}\n"
             f"(averaged across {n_ref} style references)",
-            fontsize=12, fontweight="bold",
+            fontsize=12,
+            fontweight="bold",
         )
         for block_i in range(n_blocks):
             attn_block = captured[block_i].squeeze(0)  # (n_heads, Q, K_total)
@@ -656,16 +714,25 @@ def build_decomposition_figure(
                 attn_head = attn_block[head_i, content_token_idx]  # (K_total,)
                 attn_2d = np.zeros((grid_size, grid_size))
                 for ref_i in range(n_ref):
-                    ref_attn = attn_head[ref_i * Q_per_ref : (ref_i + 1) * Q_per_ref].numpy()
+                    ref_attn = attn_head[
+                        ref_i * Q_per_ref : (ref_i + 1) * Q_per_ref
+                    ].numpy()
                     attn_2d += ref_attn.reshape(grid_size, grid_size)
                 attn_2d /= n_ref
 
-                im = ax.imshow(attn_2d, cmap="hot", aspect="equal", interpolation="nearest")
+                im = ax.imshow(
+                    attn_2d, cmap="hot", aspect="equal", interpolation="nearest"
+                )
                 ax.set_title(
-                    f"Block {block_i}, Head {head_i}" if block_i == 0 and head_i == 0
-                    else f"Head {head_i}" if block_i == 0
-                    else f"Block {block_i}" if head_i == 0
-                    else "",
+                    (
+                        f"Block {block_i}, Head {head_i}"
+                        if block_i == 0 and head_i == 0
+                        else (
+                            f"Head {head_i}"
+                            if block_i == 0
+                            else f"Block {block_i}" if head_i == 0 else ""
+                        )
+                    ),
                     fontsize=8,
                 )
                 ax.set_xticks([])
@@ -684,33 +751,66 @@ def build_decomposition_figure(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Visualize FeatureFusionModule cross-attention weights"
     )
-    p.add_argument("--font-path", type=Path, required=True, help="Path to .ttf/.otf font")
-    p.add_argument("--target-char", type=str, required=True,
-                   help="Single character to generate, e.g. 'A' or 'U+0041'")
+    p.add_argument(
+        "--font-path", type=Path, required=True, help="Path to .ttf/.otf font"
+    )
+    p.add_argument(
+        "--target-char",
+        type=str,
+        required=True,
+        help="Single character to generate, e.g. 'A' or 'U+0041'",
+    )
     p.add_argument("--gtok-model-path", type=Path, required=True)
     p.add_argument("--ar-model-path", type=Path, required=True)
-    p.add_argument("--dataset-path", type=Path, required=True,
-                   help="Path to google-fonts checkout")
-    p.add_argument("--style-glyph-count", type=int, default=8,
-                   help="Number of style reference glyphs (ignored when --style-chars is provided)")
-    p.add_argument("--style-chars", type=str, default=None,
-                   help="Comma-separated style reference codepoints, e.g. 'U+0041,U+0042,A,B'. "
-                        "Overrides the model config's style_codepoints and --style-glyph-count.")
-    p.add_argument("--content-token", type=int, default=None,
-                   help="Highlight a specific content token index (default: auto)")
-    p.add_argument("--output", type=Path, default=None,
-                   help="Output path for the PNG (default: auto-generated name)")
-    p.add_argument("--show", action="store_true",
-                   help="Show figure interactively instead of saving")
-    p.add_argument("--save-decomp", action="store_true",
-                   help="Also save per-head, per-block decomposition plot")
-    p.add_argument("--zero-aggregator", action="store_true",
-                   help="Zero out the FeatureFusionModule cross-attention output, "
-                        "isolating the global style vector + codepoint embedding")
+    p.add_argument(
+        "--dataset-path", type=Path, required=True, help="Path to google-fonts checkout"
+    )
+    p.add_argument(
+        "--style-glyph-count",
+        type=int,
+        default=8,
+        help="Number of style reference glyphs (ignored when --style-chars is provided)",
+    )
+    p.add_argument(
+        "--style-chars",
+        type=str,
+        default=None,
+        help="Comma-separated style reference codepoints, e.g. 'U+0041,U+0042,A,B'. "
+        "Overrides the model config's style_codepoints and --style-glyph-count.",
+    )
+    p.add_argument(
+        "--content-token",
+        type=int,
+        default=None,
+        help="Highlight a specific content token index (default: auto)",
+    )
+    p.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output path for the PNG (default: auto-generated name)",
+    )
+    p.add_argument(
+        "--show",
+        action="store_true",
+        help="Show figure interactively instead of saving",
+    )
+    p.add_argument(
+        "--save-decomp",
+        action="store_true",
+        help="Also save per-head, per-block decomposition plot",
+    )
+    p.add_argument(
+        "--zero-aggregator",
+        action="store_true",
+        help="Zero out the FeatureFusionModule cross-attention output, "
+        "isolating the global style vector + codepoint embedding",
+    )
     return p.parse_args()
 
 
@@ -741,8 +841,8 @@ def _resolve_style_codepoints(
     font,
     target_char: int,
     style_glyph_count: int,
-    cli_chars: Optional[list[int]],
-    config_chars: Optional[list[int]],
+    cli_chars: list[int] | None,
+    config_chars: list[int] | None,
 ) -> list[int]:
     """Resolve style reference codepoints from CLI, config, or font sampling.
 
@@ -751,6 +851,7 @@ def _resolve_style_codepoints(
       2. ``config_chars`` (ARModelConfig.style_codepoints) — model's training style set.
       3. Per-font random sampling from Latin Kernel (legacy fallback).
     """
+
     # ── Helper: filter a candidate list to what the font actually has ──
     def _filter(candidates: list[int]) -> list[int]:
         result: list[int] = []
@@ -774,8 +875,10 @@ def _resolve_style_codepoints(
             raise RuntimeError(
                 "None of the --style-chars codepoints are available in the font"
             )
-        print(f"Style references (from --style-chars, {len(filtered)}/{len(cli_chars)} available): "
-              f"{[f'U+{cp:04X}' for cp in filtered]}")
+        print(
+            f"Style references (from --style-chars, {len(filtered)}/{len(cli_chars)} available): "
+            f"{[f'U+{cp:04X}' for cp in filtered]}"
+        )
         return filtered
 
     # ── 2. Model config's training style set ─────────────────────────
@@ -784,12 +887,16 @@ def _resolve_style_codepoints(
         if filtered:
             # Take up to style_glyph_count, preserving order.
             selected = filtered[:style_glyph_count]
-            print(f"Style references (from model config style_codepoints, "
-                  f"{len(selected)}/{len(config_chars)}): "
-                  f"{[f'U+{cp:04X}' for cp in selected]}")
+            print(
+                f"Style references (from model config style_codepoints, "
+                f"{len(selected)}/{len(config_chars)}): "
+                f"{[f'U+{cp:04X}' for cp in selected]}"
+            )
             return selected
-        print("Model config style_codepoints are all missing from this font; "
-              "falling back to Latin Kernel sampling.")
+        print(
+            "Model config style_codepoints are all missing from this font; "
+            "falling back to Latin Kernel sampling."
+        )
 
     # ── 3. Legacy fallback: sample from Latin Kernel ─────────────────
     from hrothgar.ar.style_sampling import _sample_style_codepoints
@@ -801,8 +908,10 @@ def _resolve_style_codepoints(
         style_glyph_count=style_glyph_count,
         common_style_codepoints=common,
     )
-    print(f"Style references (sampled from Latin Kernel): "
-          f"{[f'U+{cp:04X}' for cp in result]}")
+    print(
+        f"Style references (sampled from Latin Kernel): "
+        f"{[f'U+{cp:04X}' for cp in result]}"
+    )
     return result
 
 
@@ -857,12 +966,16 @@ def main() -> None:
         config_chars=ar_config.style_codepoints,
     )
 
-    style_imgs = np.stack([_render_glyph_codepoint(font, cp, image_size) for cp in style_cps])
+    style_imgs = np.stack(
+        [_render_glyph_codepoint(font, cp, image_size) for cp in style_cps]
+    )
     # style_imgs: (n_ref, 3, H, W)
 
     # ── Prepare tensors ────────────────────────────────────────────────
-    content_t = torch.from_numpy(content_img).unsqueeze(0).to(device)      # (1, 3, H, W)
-    style_t = torch.from_numpy(style_imgs).unsqueeze(0).to(device)          # (1, n_ref, 3, H, W)
+    content_t = torch.from_numpy(content_img).unsqueeze(0).to(device)  # (1, 3, H, W)
+    style_t = (
+        torch.from_numpy(style_imgs).unsqueeze(0).to(device)
+    )  # (1, n_ref, 3, H, W)
     latincore_idx = ar_model._unicode_to_latincore(
         torch.tensor([target_cp], device=device)
     )
