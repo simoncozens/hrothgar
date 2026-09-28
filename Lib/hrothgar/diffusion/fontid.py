@@ -124,11 +124,15 @@ class FontIdConditionalUnet(nn.Module):
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
         # Style is a discrete family identity (collapse-proof, shared across a
         # family's weights) plus an italic one-hot, plus a *continuous* weight
-        # modulation along a single learned direction.  The linear weight keeps
-        # the construction fixed (bold = regular + more along one direction)
-        # rather than letting weight change the skeleton.
+        # modulation along a per-family learned direction.  Each family gets its
+        # own "how does weight move this font" direction, so bold = regular +
+        # more along that family's direction.  This is more expressive than a
+        # single global direction (which had to thicken every glyph of every
+        # family identically) but still does not guarantee a fixed construction
+        # across weights — the skeleton can still flip, just with a gentler
+        # weight signal.
         self.family_emb = nn.Embedding(num_families, time_dim)
-        self.weight_direction = nn.Parameter(torch.randn(time_dim))
+        self.weight_direction = nn.Embedding(num_families, time_dim)
         self.style_emb = nn.Embedding(num_style_buckets, time_dim)
         cond_dim = time_dim * 2  # codepoint + style, concatenated
         # A glyph encoder condenses the *specific* generated glyph (the one the
@@ -241,7 +245,7 @@ class FontIdConditionalUnet(nn.Module):
         style = font_meta[:, 2].long()
         f = (
             self.family_emb(family_id)
-            + weight[:, None] * self.weight_direction[None, :]
+            + weight[:, None] * self.weight_direction(family_id)
             + self.style_emb(style)
         )
         return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)

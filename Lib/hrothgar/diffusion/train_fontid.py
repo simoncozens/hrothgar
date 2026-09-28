@@ -292,7 +292,7 @@ def _parse_strata(spec: str) -> dict[str, float]:
     """Parse a ``'sans:0.25,serif:0.25,...'`` stratum-fraction spec.
 
     An empty spec returns an empty dict, which lets
-    :data:`~hrothgar.diffusion.dataset_fontid.DEFAULT_STRATA` apply.
+    :data:`~hrothgar.dataset.StratifiedFontSampler.DEFAULT_STRATA` apply.
     """
     out: dict[str, float] = {}
     for part in (spec or "").split(","):
