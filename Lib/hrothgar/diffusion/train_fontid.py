@@ -75,7 +75,7 @@ class FontIdTrainingLoop(TrainingLoop):
             json.dump(maker.cp_list, f, indent=2)
             f.write("\n")
         # Persist per-instance identity and factorized conditioning
-        # (family id, weight, style) so inference can reconstruct the exact
+        # (family id, style) so inference can reconstruct the exact
         # training-time conditioning for every font file / variable location.
         with Path(str(train_args.model_path) + ".instances.json").open("w") as f:
             json.dump(maker.instance_sidecar(), f, indent=2)

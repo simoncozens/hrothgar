@@ -122,18 +122,14 @@ class FontIdConditionalUnet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
-        # Style is a discrete family identity (collapse-proof, shared across a
-        # family's weights) plus an italic one-hot, plus a *continuous* weight
-        # modulation along a per-family learned direction.  Each family gets its
-        # own "how does weight move this font" direction, so bold = regular +
-        # more along that family's direction.  This is more expressive than a
-        # single global direction (which had to thicken every glyph of every
-        # family identically) but still does not guarantee a fixed construction
-        # across weights — the skeleton can still flip, just with a gentler
-        # weight signal.
+        # Style is a discrete family identity (shared across roman/italic) plus a
+        # learned per-style embedding (the shared, predictable "italic
+        # convention") plus a per-family italic residual.  The residual lets each
+        # family express *how it does italic* — slant angle, which terminals
+        # change — on top of the shared italic transform.
         self.family_emb = nn.Embedding(num_families, time_dim)
-        self.weight_direction = nn.Embedding(num_families, time_dim)
         self.style_emb = nn.Embedding(num_style_buckets, time_dim)
+        self.italic_family_emb = nn.Embedding(num_families, time_dim)
         cond_dim = time_dim * 2  # codepoint + style, concatenated
         # A glyph encoder condenses the *specific* generated glyph (the one the
         # denoiser actually produced) into a low-dimensional "mode" vector, so
@@ -236,17 +232,17 @@ class FontIdConditionalUnet(nn.Module):
     def _cond(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
         """Concatenated codepoint + factorized style conditioning embedding.
 
-        ``font_meta`` is ``(B, 3)`` float32: ``[family_id, weight, style]`` where
-        ``weight`` is the normalized scalar (regular = 0) and ``family_id`` /
-        ``style`` are integer indices.
+        ``font_meta`` is ``(B, 2)`` float32: ``[family_id, style]`` where
+        ``family_id`` and ``style`` are integer indices (``style`` 0 = roman,
+        1 = italic).
         """
         family_id = font_meta[:, 0].long()
-        weight = font_meta[:, 1]
-        style = font_meta[:, 2].long()
+        style = font_meta[:, 1].long()
+        italic = (style == 1).float().unsqueeze(-1)
         f = (
             self.family_emb(family_id)
-            + weight[:, None] * self.weight_direction(family_id)
             + self.style_emb(style)
+            + self.italic_family_emb(family_id) * italic
         )
         return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
 

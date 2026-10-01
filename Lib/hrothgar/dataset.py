@@ -388,7 +388,6 @@ class SelectedInstance:
     stratum: str
     path: str
     weight: int
-    weight_norm: float
     style: str
     style_bucket: int
     variable: bool
@@ -514,6 +513,40 @@ def _match_instance(unit: Unit, target: int) -> Instance | None:
     statics = [i for i in unit.instances if not i.variable]
     if statics:
         return min(statics, key=lambda i: abs(i.weight - target))
+    return None
+
+
+def _regular_instance(unit: Unit) -> Instance | None:
+    """The instance a unit contributes to the Regular-only dataset.
+
+    A single-static-font family (exactly one static file, no variable file)
+    contributes that file as-is — its declared weight is the family's only
+    weight, so that weight is the output we generate.  Every other unit
+    contributes its weight-400 (Regular) instance: a static file declared at
+    400, or a variable file instantiated at a synthesized weight-400 location
+    (explicitly, regardless of the ``wght`` axis origin/default).
+    """
+    statics = [i for i in unit.instances if not i.variable]
+    variables = [i for i in unit.instances if i.variable]
+    if len(statics) == 1 and not variables:
+        return statics[0]
+    for i in statics:
+        if i.weight == 400:
+            return i
+    for i in variables:
+        axes = i.axes or []
+        wght = next((a for a in axes if a[0] == "wght"), None)
+        if wght and wght[1] <= 400 <= wght[3]:
+            return Instance(
+                path=i.path,
+                weight=400,
+                style=i.style,
+                variable=True,
+                axes=axes,
+                axis_position=_axis_position(axes, 400),
+                has_target=i.has_target,
+                coverage=i.coverage,
+            )
     return None
 
 
@@ -763,13 +796,17 @@ class StratifiedFontSampler:
         prefer_multi_target: bool = False,
         replacement: bool = True,
         min_coverage: int = 0,
+        regular_only: bool = False,
         seed: int = 1234,
     ) -> tuple[list[SelectedInstance], dict]:
         """Select ``n`` stratified training instances.
 
         Returns ``(instances, report)``.  ``min_coverage`` drops units whose
         fonts cover fewer than that many of the needed codepoints (so subset
-        budget is not spent on fonts that cannot train the vocabulary).
+        budget is not spent on fonts that cannot train the vocabulary).  When
+        ``regular_only`` is set, each ``(family, style)`` unit contributes only
+        its Regular instance (weight 400 for multi-weight/variable families; the
+        family's sole weight for single-weight static families).
         """
         strata_fracs = dict(
             strata_fracs if strata_fracs is not None else self.DEFAULT_STRATA
@@ -778,6 +815,23 @@ class StratifiedFontSampler:
         eligible = [
             u for u in units if min_coverage <= 0 or u.max_coverage() >= min_coverage
         ]
+        if regular_only:
+            trimmed: list[Unit] = []
+            for u in eligible:
+                inst = _regular_instance(u)
+                if inst is None:
+                    continue
+                trimmed.append(
+                    Unit(
+                        family=u.family,
+                        style=u.style,
+                        bucket=u.bucket,
+                        classification=u.classification,
+                        tag_category=u.tag_category,
+                        instances=[inst],
+                    )
+                )
+            eligible = trimmed
         by_stratum: dict[str, list[Unit]] = defaultdict(list)
         for unit in eligible:
             by_stratum[unit.stratum()].append(unit)
@@ -895,7 +949,6 @@ class StratifiedFontSampler:
                         stratum=st,
                         path=inst.path,
                         weight=inst.weight,
-                        weight_norm=(inst.weight - 400.0) / 400.0,
                         style=inst.style,
                         style_bucket=0 if inst.style == "normal" else 1,
                         variable=inst.variable,

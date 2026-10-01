@@ -198,8 +198,9 @@ class FontIdDiffusionConfig:
     # Vocabulary sizes (data-derived; set before building the model).
     num_codepoints: int = 0
     num_families: int = 0
-    # Style is upright vs italic (a one-hot).  Weight is a continuous scalar
-    # applied along a single learned direction, not a discrete bucket.
+    # Style is upright vs italic (a one-hot).  There is no weight conditioning:
+    # masters are generated at Regular only and adjusted post-hoc in vector
+    # space.
     num_style_buckets: int = 2
 
     # Denoiser UNet.

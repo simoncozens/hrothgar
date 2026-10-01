@@ -1,17 +1,21 @@
 """Full-dataset maker for the factorized (codepoint, font-instance) diffusion model.
 
 Each training item is a ``(glyph image, codepoint index, font instance)`` triple.
-A font instance is a ``(file, weight, style, axis_position)`` row — for a static
-family this is one weight file; for a variable family it may be a synthesised
-``wght`` location on a single file.
+A font instance is a Regular ``(file, style, axis_position)`` row — for a
+multi-weight or variable family this is the weight-400 instance (a synthesized
+weight-400 location on a variable file); a single-weight static family
+contributes its one file, whose declared weight is the family's only weight.
+Weight is not a conditioning input: masters are generated at Regular only and
+adjusted post-hoc in vector space.
 
 The subset of font instances used for training is chosen by a **stratified
 sampler** (see :class:`~hrothgar.dataset.StratifiedFontSampler`) rather than by
 truncating the load order.  The :class:`RupeeFontSampler` subclass prefers
 families that contain the acceptance glyph (₹), balancing text (sans/serif)
-against fancy (display/script/handwriting) instances, keeping a spread of
-in-family *contrast* (e.g. 100 + 900, never 400 + 500), and synthesising
-variable-font locations.
+against fancy (display/script/handwriting) instances.  With ``regular_only`` the
+sampler contributes exactly one instance per ``(family, style)`` unit — the
+Regular for multi-weight/variable families, or the family's sole weight for
+single-weight static families.
 
 The sampling unit is a ``(family, style)`` pair, so roman and italic are sampled
 independently — an italic construction may legitimately differ from its roman
@@ -49,9 +53,9 @@ from hrothgar.dataset import (
     Instance,
     StratifiedFontSampler,
     Unit,
-    _axis_position,
     _has_non_empty_outline,
     _hb_font_for_face,
+    _regular_instance,
     units_from_dicts,
     units_to_dicts,
 )
@@ -76,16 +80,6 @@ class RupeeFontSampler(StratifiedFontSampler):
 # ---------------------------------------------------------------------------
 
 
-def _master_weights(inst: Instance) -> list[int]:
-    """Weight master locations for a variable instance: the ``wght`` axis's
-    min/default/max (the interpolation endpoints plus the default).  A variable
-    instance without a ``wght`` axis yields just its declared weight."""
-    wght = next((a for a in (inst.axes or []) if a[0] == "wght"), None)
-    if wght is None:
-        return [inst.weight]
-    return sorted({int(wght[1]), int(wght[2]), int(wght[3])})
-
-
 def _instance_record(
     unit: Unit, inst: Instance, family_id: int | None, weight: int, axis_position
 ) -> dict:
@@ -99,7 +93,6 @@ def _instance_record(
         "family": unit.family,
         "family_id": family_id,
         "weight": weight,
-        "weight_norm": (weight - 400.0) / 400.0,
         "style": inst.style,
         "style_bucket": 0 if inst.style == "normal" else 1,
         "variable": inst.variable,
@@ -110,12 +103,15 @@ def _instance_record(
 def inference_jobs(
     units: Sequence[Unit], family_to_id: dict[str, int], skip_re: str | None = None
 ) -> list[dict]:
-    """Runtime generation jobs for every weight/style of a *known* family.
+    """Runtime generation jobs for the Regular instance of each known
+    ``(family, style)`` unit.
 
-    Weight/style conditioning is computed here, not read from a precomputed
-    sidecar: static files generate at their own weight, and variable files
-    generate at their ``wght`` master locations (axis min/default/max).
-    Families absent from ``family_to_id`` are skipped.
+    Weight is not a conditioning input (masters are generated at Regular only
+    and adjusted post-hoc in vector space), so each unit yields at most one
+    job: a single-weight static family contributes its one file, while a
+    multi-weight or variable family contributes its weight-400 instance (a
+    synthesized weight-400 location on a variable file).  Families absent from
+    ``family_to_id`` are skipped.
     """
     jobs: list[dict] = []
     for unit in units:
@@ -125,26 +121,12 @@ def inference_jobs(
         family_id = family_to_id.get(unit.family)
         if family_id is None:
             continue
-        statics = [i for i in unit.instances if not i.variable]
-        variables = [i for i in unit.instances if i.variable]
-        covered = {i.weight for i in statics}
-        for inst in statics:
-            jobs.append(
-                _instance_record(unit, inst, family_id, inst.weight, None)
-            )
-        for inst in variables:
-            for weight in _master_weights(inst):
-                if weight in covered:
-                    continue
-                jobs.append(
-                    _instance_record(
-                        unit,
-                        inst,
-                        family_id,
-                        weight,
-                        _axis_position(inst.axes or [], weight),
-                    )
-                )
+        inst = _regular_instance(unit)
+        if inst is None:
+            continue
+        jobs.append(
+            _instance_record(unit, inst, family_id, inst.weight, inst.axis_position)
+        )
     return jobs
 
 
@@ -155,7 +137,8 @@ def inference_jobs(
 
 @dataclass
 class TrainInstance:
-    """A unique training instance: a font file at a specific weight/style."""
+    """A unique training instance: a font file at the family's Regular (or sole)
+    weight."""
 
     path: str  # repo-relative
     font: StandaloneFont
@@ -163,7 +146,6 @@ class TrainInstance:
     family: str
     family_id: int
     weight: int
-    weight_norm: float
     style: str
     style_bucket: int
     variable: bool
@@ -171,8 +153,8 @@ class TrainInstance:
     codepoints: list[int]  # codepoints with a non-empty outline
 
     @property
-    def font_meta(self) -> tuple[int, float, int]:
-        return (self.family_id, self.weight_norm, self.style_bucket)
+    def font_meta(self) -> tuple[int, int]:
+        return (self.family_id, self.style_bucket)
 
 
 class _PairDataset(TorchDataset):
@@ -220,7 +202,7 @@ def _collate_fn(batch: list[dict]) -> dict:
         "instance_ids": torch.tensor(
             [b["instance_id"] for b in batch], dtype=torch.long
         ),
-        "font_meta": torch.stack([b["font_meta"] for b in batch]),  # (B, 3)
+        "font_meta": torch.stack([b["font_meta"] for b in batch]),  # (B, 2)
     }
 
 
@@ -293,6 +275,7 @@ class FontIdDatasetMaker:
             replacement=replacement,
             min_coverage=min_train_fonts_per_codepoint + 1,
             seed=subset_seed,
+            regular_only=True,
         )
 
         # --- Materialise unique instances (collapse replacement copies). ----
@@ -320,7 +303,6 @@ class FontIdDatasetMaker:
                     family=s.family,
                     family_id=self.family_to_id[s.family],
                     weight=s.weight,
-                    weight_norm=s.weight_norm,
                     style=s.style,
                     style_bucket=s.style_bucket,
                     variable=s.variable,
@@ -444,7 +426,6 @@ class FontIdDatasetMaker:
                 "family": inst.family,
                 "family_id": inst.family_id,
                 "weight": inst.weight,
-                "weight_norm": inst.weight_norm,
                 "style": inst.style,
                 "style_bucket": inst.style_bucket,
                 "variable": inst.variable,
