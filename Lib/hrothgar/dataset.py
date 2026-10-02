@@ -525,6 +525,10 @@ def _regular_instance(unit: Unit) -> Instance | None:
     contributes its weight-400 (Regular) instance: a static file declared at
     400, or a variable file instantiated at a synthesized weight-400 location
     (explicitly, regardless of the ``wght`` axis origin/default).
+
+    The synthesized variable location is returned as a *fixed point*
+    (``variable=False``, ``axes=None``) while keeping ``axis_position`` at 400,
+    so downstream contrast logic cannot re-expand it back into a weight ladder.
     """
     statics = [i for i in unit.instances if not i.variable]
     variables = [i for i in unit.instances if i.variable]
@@ -541,8 +545,8 @@ def _regular_instance(unit: Unit) -> Instance | None:
                 path=i.path,
                 weight=400,
                 style=i.style,
-                variable=True,
-                axes=axes,
+                variable=False,
+                axes=None,
                 axis_position=_axis_position(axes, 400),
                 has_target=i.has_target,
                 coverage=i.coverage,
