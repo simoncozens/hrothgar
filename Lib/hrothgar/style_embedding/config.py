@@ -57,6 +57,7 @@ class FontStyleEmbedderConfig:
 
     # Regularization.
     encoder_dropout: float = 0.3
+    projection_dropout: float = 0.1
 
     # Text conditioning — frozen text encoder provides a training signal
     # via multi-positive contrastive loss.  Not needed at inference.

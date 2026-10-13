@@ -21,6 +21,11 @@ from hrothgar.style_embedding.config import (
     FontStyleEmbeddingLossWeights,
 )
 from hrothgar.style_embedding.dataset import FontStyleDatasetMaker
+from hrothgar.style_embedding.evaluation import (
+    build_eval_panel,
+    flatten_metrics,
+    run_suite,
+)
 from hrothgar.style_embedding.losses import compute_losses
 from hrothgar.style_embedding.model import FontStyleEmbedder
 from hrothgar.utils import TrainingLoop, progress_values
@@ -30,7 +35,7 @@ from hrothgar.utils import TrainingLoop, progress_values
 LEARNING_RATE = 1e-4
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.999
-WEIGHT_DECAY = 1e-4
+WEIGHT_DECAY = 1e-3
 GRAD_CLIP_NORM = 1.0
 
 
@@ -106,6 +111,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             use_category_head=train_args.use_category_head,
             text_encoder_name=text_encoder_name,
             family_positive_weight=family_positive_weight,
+            encoder_dropout=getattr(train_args, "encoder_dropout", 0.3),
+            projection_dropout=getattr(train_args, "projection_dropout", 0.1),
         )
         if getattr(train_args, "input_glyphs", None):
             config.input_codepoints = [ord(c) for c in train_args.input_glyphs]
@@ -134,13 +141,34 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             f"Test batches: {len(self.test_loader)}"
         )
 
-        # ── Optimiser ───────────────────────────────────────────────────
+        # Fixed similarity-eval panel over the held-out fonts.  Images are
+        # cached once so each validation only pays for encoder forward passes.
+        self.val_space = getattr(train_args, "val_space", "summary")
+        self.val_membership_codepoints = getattr(
+            train_args, "val_membership_codepoints", 0
+        )
+        self.eval_panel = None
+        val_fonts = getattr(train_args, "val_embed_fonts", 0)
+        if val_fonts and maker.test_fonts:
+            self.eval_panel = build_eval_panel(
+                maker.test_fonts,
+                config,
+                max_fonts=val_fonts,
+                seed=maker.split_seed,
+                stability_fonts=getattr(train_args, "val_stability_fonts", 0),
+                cache_images=True,
+                with_descriptors=True,
+            )
+            axes = ", ".join(self.eval_panel.axis_specs) or "no variable axes"
+            print(f"Similarity eval panel: {len(self.eval_panel.fonts)} fonts ({axes})")
+
+        # ── Optimiser ─────────────────────────────────────────────────
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         self.optimizer = torch.optim.AdamW(
             trainable_params,
             lr=LEARNING_RATE,
             betas=(ADAM_BETA1, ADAM_BETA2),
-            weight_decay=WEIGHT_DECAY,
+            weight_decay=getattr(train_args, "weight_decay", WEIGHT_DECAY),
         )
 
         # ── Loss ────────────────────────────────────────────────────────
@@ -153,7 +181,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         self.model = model
         self.target_steps = train_args.target_steps
         self.num_epochs = getattr(train_args, "num_epochs", 100)
-        self.validation_direction = "lower"
+        # Checkpoint on family-sibling MRR (higher) when the panel is available,
+        # else the cross-view proxy (lower is better).
+        self.validation_direction = "higher" if self.eval_panel is not None else "lower"
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
 
@@ -438,12 +468,38 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 "Validation/per_tag_metrics", "".join(lines), self.global_step
             )
 
-        # Checkpoint on retrieval accuracy — temperature-independent so
-        # comparable across runs with different hyper-parameters.
-        if retrieval_top1:
-            self.checkpoint_if_best(-torch.mean(torch.stack(retrieval_top1)))
+        # Full retrieval suite over the held-out panel (see evaluation.py).
+        # Uses whole-glyph-set embeddings, which is what inference sees, so it
+        # measures the actual "similar font" task rather than view consistency.
+        similarity = None
+        if self.eval_panel is not None:
+            similarity = run_suite(
+                self.model,
+                self.eval_panel,
+                self.device,
+                space=self.val_space,
+                membership_codepoints=self.val_membership_codepoints,
+            )
+            for key, value in flatten_metrics(similarity):
+                self.write_scalar(f"Validation/Similarity/{key}", torch.tensor(value))
+
+        # Checkpoint on the deliverable: family-sibling MRR, which is what the
+        # model is for.  Fall back to the cross-view proxy only when the panel
+        # is missing or has no sibling pairs.
+        family = (similarity or {}).get("family_sibling", {})
+        if family.get("n_queries", 0) > 0:
+            self.checkpoint_if_best(torch.tensor(family["mrr"]))
+        elif retrieval_top1:
+            top1 = torch.mean(torch.stack(retrieval_top1))
+            self.checkpoint_if_best(
+                top1 if self.validation_direction == "higher" else -top1
+            )
         else:
-            self.checkpoint_if_best(avg_contrastive)
+            self.checkpoint_if_best(
+                -avg_contrastive
+                if self.validation_direction == "higher"
+                else avg_contrastive
+            )
 
         # Visualize tags (when active).
         if self.model.config.tag_names:
@@ -606,6 +662,24 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--contrastive-temperature", type=float, default=0.07)
     p.add_argument(
+        "--weight-decay",
+        type=float,
+        default=WEIGHT_DECAY,
+        help="AdamW weight decay (mild regularisation).",
+    )
+    p.add_argument(
+        "--encoder-dropout",
+        type=float,
+        default=0.3,
+        help="Dropout on the pooled style summary.",
+    )
+    p.add_argument(
+        "--projection-dropout",
+        type=float,
+        default=0.1,
+        help="Dropout in the contrastive projection head (train-time only).",
+    )
+    p.add_argument(
         "--glyph-size", type=int, default=64, help="Rendered glyph size (square)."
     )
     p.add_argument(
@@ -680,6 +754,35 @@ def _parse_args() -> argparse.Namespace:
         help="HuggingFace model for frozen text conditioning "
         "(e.g. 'sentence-transformers/all-MiniLM-L6-v2').  "
         "Enables multi-positive contrastive loss.",
+    )
+    p.add_argument(
+        "--val-embed-fonts",
+        type=int,
+        default=256,
+        help="Size of the held-out similarity-eval panel logged each validation "
+        "(0 disables the suite).  Fixed and seeded, so runs compare cleanly.",
+    )
+    p.add_argument(
+        "--val-space",
+        type=str,
+        default="summary",
+        choices=["summary", "projection"],
+        help="Embedding space for the validation suite.  'summary' is what the "
+        "shipped index uses; 'projection' is the contrastive space.",
+    )
+    p.add_argument(
+        "--val-membership-codepoints",
+        type=int,
+        default=4,
+        help="Glyph slots per font for the set-membership eval (does a single "
+        "glyph rank its own font first?).  0 disables it.",
+    )
+    p.add_argument(
+        "--val-stability-fonts",
+        type=int,
+        default=0,
+        help="Fonts in the panel to score for glyph-sampling stability "
+        "(0 disables; costs an extra pair of forward passes per font).",
     )
     p.add_argument(
         "--family-positive-weight",

@@ -138,12 +138,14 @@ class FontStyleEmbedder(SaveLoadModel):
 
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
 
-        # Projection head for contrastive loss.
+        # Projection head for contrastive loss.  Dropout is applied to the
+        # output so the sequential's parameter names do not shift.
         self.projection = nn.Sequential(
             nn.Linear(config.encoder_feature_dim, config.encoder_feature_dim),
             nn.SiLU(),
             nn.Linear(config.encoder_feature_dim, config.projection_dim),
         )
+        self.projection_dropout = nn.Dropout(config.projection_dropout)
 
         # Tag prediction heads.
         self.tag_heads: nn.ModuleDict | None = None
@@ -280,7 +282,9 @@ class FontStyleEmbedder(SaveLoadModel):
         Returns ``(embedding, projection, tags, category_logits)``.
         """
         embedding = self.encode(images, glyph_mask)
-        projection = F.normalize(self.projection(embedding), p=2, dim=-1)
+        projection = F.normalize(
+            self.projection_dropout(self.projection(embedding)), p=2, dim=-1
+        )
 
         tags: dict[str, torch.Tensor] | None = None
         if self.tag_heads is not None:

@@ -1,8 +1,10 @@
 """Style-embedding glyph rendering (greyscale) on top of the shared renderer.
 
 Both the training dataset (``FontStyleDatasetMaker.collate_fn``) and
-``FontStyleEmbedder.compute_embedding`` use these functions.  The actual
-render-to-tensor logic lives in ``hrothgar.render``.
+``FontStyleEmbedder.compute_embedding`` use these functions, so training and
+inference cannot drift apart.  Glyphs are rendered onto the fixed square canvas
+with the baseline pinned to the bottom, so the image keeps the font's
+proportions (and clips descenders).
 """
 
 from __future__ import annotations
@@ -30,12 +32,7 @@ def render_input_set(
     size: int,
     axis_position: Sequence[float] | None = None,
 ) -> torch.Tensor:
-    """Render the full input glyph set as ``(G, 1, size, size)`` greyscale.
-
-    This is the exact input tensor shape ``FontStyleEmbedder.encode`` /
-    ``encode_with_tokens`` expect (``(B, G, 1, H, W)``) without the batch
-    dimension.
-    """
+    """Render the full input glyph set as ``(G, 1, size, size)`` greyscale."""
     glyphs = [
         render_glyph(font, cp, size, axis_position=axis_position) for cp in codepoints
     ]
