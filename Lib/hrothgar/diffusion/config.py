@@ -204,10 +204,16 @@ class FontIdDiffusionConfig:
     num_style_buckets: int = 2
 
     # Denoiser UNet.
-    dim: int = 64
+    dim: int = 128
     dim_mults: tuple[int, ...] = (1, 2, 4, 8)
     attn_dim_head: int = 32
     attn_heads: int = 4
+    # Width of the style conditioning embeddings (family / style bucket / italic
+    # residual).  Decoupled from ``dim`` (and therefore from the time embedding
+    # width ``dim * 4``) so style capacity can be tuned independently of the
+    # denoiser width.  Defaults to 2x the content (codepoint) embedding, which
+    # stays at ``dim * 4``.
+    style_emb_dim: int = 1024
 
     # Diffusion process.
     timesteps: int = 1000

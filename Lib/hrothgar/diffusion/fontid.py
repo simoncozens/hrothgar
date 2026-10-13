@@ -85,6 +85,7 @@ class FontIdConditionalUnet(nn.Module):
         channels: int = 1,
         attn_dim_head: int = 32,
         attn_heads: int = 4,
+        style_emb_dim: int = 1024,
         self_condition: bool = False,
         geometry_std: tuple[float, ...] | None = None,
     ) -> None:
@@ -127,10 +128,15 @@ class FontIdConditionalUnet(nn.Module):
         # convention") plus a per-family italic residual.  The residual lets each
         # family express *how it does italic* — slant angle, which terminals
         # change — on top of the shared italic transform.
-        self.family_emb = nn.Embedding(num_families, time_dim)
-        self.style_emb = nn.Embedding(num_style_buckets, time_dim)
-        self.italic_family_emb = nn.Embedding(num_families, time_dim)
-        cond_dim = time_dim * 2  # codepoint + style, concatenated
+        #
+        # The style embeddings are wider than the content embedding and decoupled
+        # from ``time_dim``: content stays at ``time_dim`` (part of the diffusion
+        # conditioning), while style gets its own ``style_emb_dim`` so fine family
+        # identity isn't squeezed through the time-embedding bottleneck.
+        self.family_emb = nn.Embedding(num_families, style_emb_dim)
+        self.style_emb = nn.Embedding(num_style_buckets, style_emb_dim)
+        self.italic_family_emb = nn.Embedding(num_families, style_emb_dim)
+        cond_dim = time_dim + style_emb_dim  # codepoint + style, concatenated
         # A glyph encoder condenses the *specific* generated glyph (the one the
         # denoiser actually produced) into a low-dimensional "mode" vector, so
         # the geometry head can answer "what bbox/advance does THIS glyph need
@@ -537,6 +543,7 @@ class FontIdDiffusionModel(SaveLoadModel):
             channels=config.channels,
             attn_dim_head=config.attn_dim_head,
             attn_heads=config.attn_heads,
+            style_emb_dim=config.style_emb_dim,
             self_condition=config.self_condition,
             geometry_std=config.geometry_std,
         )

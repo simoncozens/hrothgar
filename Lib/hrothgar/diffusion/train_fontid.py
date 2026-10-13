@@ -61,6 +61,7 @@ class FontIdTrainingLoop(TrainingLoop):
             num_families=maker.num_families,
             num_style_buckets=maker.num_style_buckets,
             dim=train_args.dim,
+            style_emb_dim=train_args.style_emb_dim,
             timesteps=train_args.timesteps,
             sampling_timesteps=train_args.sampling_timesteps,
             learning_rate=train_args.learning_rate,
@@ -431,7 +432,13 @@ if __name__ == "__main__":
         default=0.1,
         help="Weight of the geometry regression objective (unit variance labels)",
     )
-    parser.add_argument("--dim", type=int, default=64)
+    parser.add_argument("--dim", type=int, default=128)
+    parser.add_argument(
+        "--style-emb-dim",
+        type=int,
+        default=1024,
+        help="Width of the family/style conditioning embeddings (decoupled from --dim)",
+    )
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--sampling-timesteps", type=int, default=100)
     parser.add_argument(
