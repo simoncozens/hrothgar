@@ -17,10 +17,10 @@ from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset_constants import CAPS_ONLY  # pyright: ignore[reportUnusedImport]
-from hrothgar.dataset_constants import (
-    LATIN_KERNEL,
-)  # pyright: ignore[reportUnusedImport]
 from hrothgar.dataset_constants import LATIN_CORE  # noqa: F401
+from hrothgar.dataset_constants import (  # pyright: ignore[reportUnusedImport]
+    LATIN_KERNEL,
+)
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
 
 _T = TypeVar("_T")
@@ -93,6 +93,13 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
 
         class_cursor = self._rng.randrange(num_classes)
 
+        # With more classes than the batch size we walk the classes round-robin;
+        # shuffling that walk stops consecutive batches being alphabetical runs
+        # of the sorted class list.
+        walk = self.classes[:]
+        if num_classes > self.batch_size:
+            self._rng.shuffle(walk)
+
         for _ in range(num_batches):
             batch_indices: list[int] = []
 
@@ -111,7 +118,7 @@ class ClassBalancedBatchSampler(BatchSampler, Generic[_T]):
                     batch_indices.append(self._rng.choice(self.class_to_indices[cls]))
             else:
                 selected_classes = [
-                    self.classes[(class_cursor + i) % num_classes]
+                    walk[(class_cursor + i) % num_classes]
                     for i in range(self.batch_size)
                 ]
                 class_cursor = (class_cursor + self.batch_size) % num_classes
@@ -204,11 +211,18 @@ class DatasetMaker:
         train_family_set = set(train_families)
         test_family_set = set(test_families)
 
+        # Iterate the families in sorted order: set iteration order varies with
+        # the process hash seed, which would otherwise make the font order (and
+        # therefore the eval panel and the sampler) differ run to run.
         train_fonts = [
-            font for family in train_family_set for font in family_to_fonts[family]
+            font
+            for family in sorted(train_family_set)
+            for font in family_to_fonts[family]
         ]
         test_fonts = [
-            font for family in test_family_set for font in family_to_fonts[family]
+            font
+            for family in sorted(test_family_set)
+            for font in family_to_fonts[family]
         ]
         return train_fonts, test_fonts
 
@@ -974,9 +988,7 @@ class StratifiedFontSampler:
         per_family = Counter(s.family for s in distinct)
         fam_names = set(per_family)
         target_fams = {
-            f
-            for f in fam_names
-            if any(s.has_target for s in distinct if s.family == f)
+            f for f in fam_names if any(s.has_target for s in distinct if s.family == f)
         }
         multi_units = {u: c for u, c in per_unit.items() if c >= 2}
         unit_family = {s.unit: s.family for s in distinct}
@@ -1001,14 +1013,12 @@ class StratifiedFontSampler:
             "unit_k_histogram": dict(sorted(Counter(per_unit.values()).items())),
             "family_k_histogram": dict(sorted(Counter(per_family.values()).items())),
             "families_with_target": len(target_fams),
-            "target_family_frac": len(target_fams) / len(fam_names)
-            if fam_names
-            else 0.0,
+            "target_family_frac": (
+                len(target_fams) / len(fam_names) if fam_names else 0.0
+            ),
             "variable_instances": sum(s.variable for s in distinct),
             "style_counts": dict(style_counts),
             "multi_instance_units": len(multi_units),
             "families_with_both_styles": sum(1 for c in fam_units.values() if c >= 2),
-            "mean_multi_unit_weight_span": (
-                sum(spans) / len(spans) if spans else 0.0
-            ),
+            "mean_multi_unit_weight_span": (sum(spans) / len(spans) if spans else 0.0),
         }
