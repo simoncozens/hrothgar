@@ -15,7 +15,7 @@ the instance actually draws, it:
     ``--save-mid`` / ``--save-bad``).
 
 It deliberately uses the **sidecar** (not the stratified sampler) so the
-conditioning ``(family_id, weight_norm, style_bucket)`` and the per-instance
+conditioning ``(family_id, style_bucket)`` and the per-instance
 ``axis_position`` match the exact training-time values, regardless of how the
 local Google Fonts checkout has drifted relative to the training server.
 """
@@ -32,9 +32,8 @@ from pathlib import Path
 
 import torch
 import tqdm
-from hrothgar.dataset import _has_non_empty_outline, _hb_font_for_face
+from hrothgar.dataset import _has_non_empty_outline, _hb_font_for_face, style_bucket
 from hrothgar.diffusion.config import FontIdDiffusionConfig
-from hrothgar.diffusion.dataset_fontid import style_bucket
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
 from hrothgar.llamagen_lpips import LPIPS
@@ -268,7 +267,7 @@ def main() -> None:
         stratum = stratum_for(family, inst["path"])
 
         meta = torch.tensor(
-            [[inst["family_id"], inst["weight_norm"], inst["style_bucket"]]],
+            [[inst["family_id"], inst["style_bucket"]]],
             device=device, dtype=torch.float32,
         ).repeat(len(available), 1)
         cp_t = torch.tensor([cp_to_idx[cp] for cp in available],

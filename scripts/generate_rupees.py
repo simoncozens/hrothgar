@@ -3,9 +3,9 @@
 was trained on.
 
 Given a trained factorized (codepoint, font-instance) diffusion checkpoint, this
-walks every repo instance whose family is in the checkpoint's vocabulary (each
-static weight, and each variable font's ``wght`` master locations), skips
-instances whose font already contains the rupee, and for the rest:
+walks every repo instance whose family is in the checkpoint's vocabulary (the
+Regular-weight instance of each family/style), skips instances whose font
+already contains the rupee, and for the rest:
 
   * samples a rupee glyph and predicts its geometry (the five em-unit labels), then
   * writes **three** images per rupee:
@@ -23,9 +23,9 @@ The checkpoint needs the ``.codepoints.json`` and ``.instances.json`` sidecars
 written by the training loop (``.instances.json`` supplies the family -> id
 vocabulary), plus ``--repo`` to resolve the repo-relative font paths (defaults
 to ``$GOOGLE_FONTS_REPO``).  At runtime it enumerates the repo and generates
-the rupee for every static weight and for each variable font's ``wght`` master
-locations, for every family in the model's vocabulary.  ``--upscaler-path`` is
-the super-resolution checkpoint (with its ``.conf.json`` sidecar).
+the rupee for the Regular-weight instance of every family in the model's
+vocabulary.  ``--upscaler-path`` is the super-resolution checkpoint (with its
+``.conf.json`` sidecar).
 """
 
 from __future__ import annotations
@@ -233,9 +233,8 @@ def main() -> None:
     rupee_idx = codepoints.index(RUPEE)
     glyph_size = config.image_size
 
-    # Enumerate the repo at runtime and derive weight/style conditioning on the
-    # fly — static weights plus each variable font's wght master locations —
-    # rather than reading a precomputed manifest.
+    # Enumerate the repo at runtime and derive the Regular-weight style
+    # conditioning on the fly, rather than reading a precomputed manifest.
     units = load_or_build_units(repo, set(codepoints), args.cache, args.rebuild_cache)
     jobs = inference_jobs(units, family_to_id, args.skip_regex)
     out_of_vocab = sum(1 for u in units if u.family not in family_to_id)
@@ -286,7 +285,7 @@ def main() -> None:
             continue
 
         meta = torch.tensor(
-            [[inst["family_id"], inst["weight_norm"], inst["style_bucket"]]],
+            [[inst["family_id"], inst["style_bucket"]]],
             device=device,
             dtype=torch.float32,
         )
