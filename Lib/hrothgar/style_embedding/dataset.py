@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
-from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker
+from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker, fvar_axes
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import ALL_CATEGORIES, GoogleFont
 from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
@@ -74,16 +74,59 @@ ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + STYLE_PARENT_TAGS + THEME_TAGS
 
 
 class _FontDataset(TorchDataset):
-    """Yields one font per item (no per-glyph expansion)."""
+    """Yields one font per item, optionally at a sampled variable-axis position."""
 
-    def __init__(self, fonts: Sequence[GoogleFont]):
+    def __init__(
+        self,
+        fonts: Sequence[GoogleFont],
+        axes_by_path: dict | None = None,
+        sample_axis: bool = False,
+    ):
         self.fonts = list(fonts)
+        self._axes_by_path = axes_by_path or {}
+        self._sample_axis = sample_axis
 
     def __len__(self) -> int:
         return len(self.fonts)
 
     def __getitem__(self, idx: int) -> dict:
-        return {"font": self.fonts[idx]}
+        font = self.fonts[idx]
+        position = None
+        if self._sample_axis:
+            axes = self._axes_by_path.get(str(font.path))
+            if axes:
+                position = _sample_axis_position(axes, random)
+        return {"font": font, "axis_position": position}
+
+
+_AXIS_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
+
+
+def _sample_axis_position(axes: list[list], rng) -> list[float]:
+    """Sample design coordinates in fvar order for a variable font.
+
+    Half the time the font's default instance; otherwise one randomly chosen
+    axis is moved to a grid point.  Perturbing a single axis avoids implausible
+    multi-axis combinations, and the small grid (rather than continuous
+    sampling) keeps the renderer's FreeType face cache effective.
+    """
+    default = [a[2] for a in axes]
+    if rng.random() < 0.5:
+        return default
+    tag, lo, _default, hi = axes[rng.randrange(len(axes))]
+    if hi <= lo:
+        return default
+    value = lo + rng.choice(_AXIS_GRID) * (hi - lo)
+    return [value if a[0] == tag else a[2] for a in axes]
+
+
+def _balance_key(name: str):
+    """Batch-sampler grouping key: ``"family"``, ``"category"`` or neither."""
+    if name == "family":
+        return lambda font: font.family
+    if name == "category":
+        return lambda font: font.category()
+    return None
 
 
 class FontStyleDatasetMaker(DatasetMaker):
@@ -101,7 +144,8 @@ class FontStyleDatasetMaker(DatasetMaker):
         canary_size: int | None = None,
         tag_names: list[str] | None = None,
         tag_num_classes: int = 0,
-        class_balanced: bool = True,
+        balance_by: str = "family",
+        sample_axis: bool = False,
         text_encoder_name: str | None = None,
         text_embedding_dim: int = 384,
     ):
@@ -126,7 +170,17 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
         self._tag_names = tag_names or []
         self._tag_num_classes = tag_num_classes
-        self._class_balanced = class_balanced
+        self._balance_by = balance_by
+
+        # Variable fonts contribute many instances: record their axes so each
+        # item can be rendered at a sampled design position.
+        self._axes_by_path: dict[str, list] = {}
+        self._sample_axis = sample_axis
+        if sample_axis:
+            for font in (*self.train_fonts, *self.test_fonts):
+                axes = fvar_axes(font.path)
+                if axes:
+                    self._axes_by_path[str(font.path)] = axes
 
         if self._text_encoder_name:
             self._precompute_text_embeddings()
@@ -208,19 +262,22 @@ class FontStyleDatasetMaker(DatasetMaker):
         )
 
     def train_set(self):
-        return _FontDataset(self.train_fonts)
+        return _FontDataset(self.train_fonts, self._axes_by_path, self._sample_axis)
 
     def test_set(self):
-        return _FontDataset(self.test_fonts)
+        # Validation renders on the default instance so the metric is stable
+        # and comparable across runs; axis sampling is a training augmentation.
+        return _FontDataset(self.test_fonts, self._axes_by_path, sample_axis=False)
 
     def train_loader(self):
         dataset = self.train_set()
-        if self._class_balanced:
+        key = _balance_key(self._balance_by)
+        if key is not None:
             return DataLoader(
                 dataset,
                 batch_sampler=ClassBalancedBatchSampler(
                     self.train_fonts,
-                    key=lambda font: font.category(),
+                    key=key,
                     batch_size=self.batch_size,
                     drop_last=True,
                 ),
@@ -248,6 +305,7 @@ class FontStyleDatasetMaker(DatasetMaker):
               B fonts (duplicated to 2B by the training loop).
         """
         fonts: list[GoogleFont] = [item["font"] for item in batch]
+        positions = [item.get("axis_position") for item in batch]
         b = len(fonts)
         g = len(self._input_codepoints)  # full glyph vocabulary
         s = self._glyph_sample_size
@@ -268,7 +326,12 @@ class FontStyleDatasetMaker(DatasetMaker):
             half_b = perm[half:]
 
             for j, cp_idx in enumerate(idx):
-                glyph = render_glyph(font, self._input_codepoints[cp_idx], size)
+                glyph = render_glyph(
+                    font,
+                    self._input_codepoints[cp_idx],
+                    size,
+                    axis_position=positions[i],
+                )
                 glyphs[i, j, 0] = glyph
 
             mask_a[i, half_a] = True
