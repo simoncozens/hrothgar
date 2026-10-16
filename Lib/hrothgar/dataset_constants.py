@@ -48,5 +48,6 @@ LGC_ALL = _without_combining(
 )
 
 CAPS_ONLY = [ord(x) for x in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$₹"]
+UCLC_ONLY = [ord(x) for x in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$₹"]
 
-__all__ = ["CAPS_ONLY", "LATIN_CORE", "LATIN_KERNEL", "LGC_ALL"]
+__all__ = ["CAPS_ONLY", "LATIN_CORE", "LATIN_KERNEL", "LGC_ALL", "UCLC_ONLY"]
