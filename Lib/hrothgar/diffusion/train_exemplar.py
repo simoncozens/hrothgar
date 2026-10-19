@@ -26,7 +26,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.diffusion.config import ExemplarDiffusionConfig
 from hrothgar.diffusion.dataset_exemplar import ExemplarDatasetMaker
-from hrothgar.diffusion.exemplar import build_exemplar_model
+from hrothgar.diffusion.exemplar import build_exemplar_model, q_var_of
 from hrothgar.llamagen_lpips import LPIPS
 from hrothgar.render import GEOMETRY_NAMES, place_glyph
 from hrothgar.utils import TrainingLoop, apply_cli_defaults, load_cli_defaults
@@ -198,9 +198,24 @@ class ExemplarTrainingLoop(TrainingLoop):
                 self.write_scalar(f"Validation/geometry_{name}", value)
 
             self.checkpoint_if_best(lpips)
+            self._log_attention_q_var()
             self.visualize()
 
         self.model.train()
+
+    def _log_attention_q_var(self):
+        """Log per-layer cross-attention position-selectivity.
+
+        ``q_var`` is the variance of the attention weights across query
+        positions; ~0 means the cross-attention has collapsed to a global style
+        vector.  Logged from the most recent sampling pass (the validation loop
+        just ran), so it reflects inference-time attention.
+        """
+        weights = self.model.attention_weights()
+        if not weights:
+            return
+        for i, w in enumerate(weights):
+            self.write_scalar(f"Attention/q_var_{i}", q_var_of(w))
 
     def visualize(self):
         batch = self.maker.random_val_batch(8)

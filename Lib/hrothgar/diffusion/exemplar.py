@@ -186,6 +186,20 @@ class _IdentityCross(nn.Module):
         return x
 
 
+def q_var_of(attn: torch.Tensor) -> torch.Tensor:
+    """Position-selectivity of cross-attention weights (collapse diagnostic).
+
+    ``attn`` is a ``(B, H, nq, M)`` post-softmax cross-attention tensor (batch,
+    heads, query positions, context tokens).  Returns the variance of the
+    attention across *query* positions, averaged over batch, heads and context
+    tokens.  ``~0`` means every query position attends identically — the
+    attention has collapsed to a single global style vector (the v2/v3 failure);
+    a spatially selective attention has q_var comfortably above zero.
+    """
+    mean_over_q = attn.mean(dim=2, keepdim=True)  # (B, H, 1, M)
+    return ((attn - mean_over_q) ** 2).mean()
+
+
 # ---------------------------------------------------------------------------
 # Denoiser UNet
 # ---------------------------------------------------------------------------
