@@ -99,7 +99,9 @@ def build_eval_panel(
     with_descriptors: bool = False,
 ) -> EvalPanel:
     """Select a seeded panel, dropping fonts that render a blank glyph."""
-    selected = list(fonts)
+    # Sort before sampling so the panel is reproducible regardless of the order
+    # the caller's font list arrives in.
+    selected = sorted(fonts, key=lambda f: str(f.path))
     if max_fonts is not None and len(selected) > max_fonts:
         selected = random.Random(seed).sample(selected, max_fonts)
         selected.sort(key=lambda f: str(f.path))

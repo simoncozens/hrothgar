@@ -30,7 +30,11 @@ import torch.nn.functional as F
 from PIL import Image
 
 from hrothgar.googlefonts import GoogleFont
-from hrothgar.render import geometry_tensor, render_glyph_with_geometry
+from hrothgar.render import (
+    denormalize_uniform,
+    geometry_tensor,
+    render_glyph_with_geometry,
+)
 from hrothgar.set_membership.config import SetMembershipConfig
 from hrothgar.set_membership.model import SetMembershipModel
 from hrothgar.utils import pick_device
@@ -149,21 +153,25 @@ def main() -> int:
         except Exception as exc:
             print(f"!! {inst['family']}: {exc}")
             continue
-        axis = inst.get("axis_position")
+        # axis = inst.get("axis_position")
 
-        geom_cache: dict[int, torch.Tensor] = {}
-        for cp in list(good_cps) + list(bad_cps):
-            try:
-                _, g = render_glyph_with_geometry(font, cp, size, axis_position=axis)
-                geom_cache[cp] = geometry_tensor(g).to(device)
-            except Exception:
-                geom_cache[cp] = torch.zeros(5, device=device)
+        # Generated images are now framed correctly
+
+        # geom_cache: dict[int, torch.Tensor] = {}
+        # for cp in list(good_cps) + list(bad_cps):
+        #     try:
+        #         _, g = render_glyph_with_geometry(font, cp, size, axis_position=axis)
+        #         geom_cache[cp] = geometry_tensor(g).to(device)
+        #     except Exception:
+        #         geom_cache[cp] = torch.zeros(5, device=device)
 
         def embed(cp: int, path: Path) -> torch.Tensor:
-            img = load_glyph(path, size, device).unsqueeze(0)
-            geo = geom_cache[cp].unsqueeze(0)
+            img = load_glyph(path, size, device).cpu().numpy()[0]  # (size, size)
+            framed = torch.tensor(img).unsqueeze(0).unsqueeze(0).to(device)  # (1,1,size,size)
+            # framed = denormalize_uniform(img, geom_cache[cp].cpu().tolist(), size)
+            # framed = framed.to(device).unsqueeze(0).unsqueeze(0)  # (1,1,size,size)
             with torch.no_grad():
-                return model(img, geo)[0]
+                return model(framed)[0]
 
         good_emb = torch.stack([embed(cp, gen_map[cp]) for cp in good_cps])
         bad_emb = torch.stack([embed(cp, gen_map[cp]) for cp in bad_cps])
@@ -208,7 +216,10 @@ def main() -> int:
         for i, r in enumerate(rows):
             ax = axes_flat[i]
             arr = np.asarray(Image.open(r["path"]).convert("L"), dtype=np.float32) / 255.0
-            ax.imshow(arr, cmap="gray", vmin=0.0, vmax=1.0, interpolation="nearest")
+            # framed = denormalize_uniform(arr, geom_cache[r["cp"]].cpu().tolist(), size)
+            ax.imshow(
+                arr, cmap="gray", vmin=0.0, vmax=1.0, interpolation="nearest"
+            )
             border = BAD_COLOR if r["is_bad"] else GOOD_COLOR
             for spine in ax.spines.values():
                 spine.set_visible(True)

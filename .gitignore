@@ -2,7 +2,6 @@
 vecfusion
 output/
 outputs/
-*.md
 *.txt
 *finetuned*pth
 *.png

@@ -33,10 +33,11 @@ import numpy as np
 import torch
 import tqdm
 from hrothgar.dataset import style_bucket
+from hrothgar.dataset_constants import UCLC_ONLY
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.fontid import build_fontid_model
-from hrothgar.dataset_constants import UCLC_ONLY
 from hrothgar.googlefonts import GoogleFont
+from hrothgar.render import place_glyph
 from hrothgar.utils import pick_device
 
 
@@ -174,8 +175,10 @@ def main() -> None:
             )
             with torch.no_grad():
                 glyphs = model.sample(cp_t, meta.repeat(len(chunk), 1))
-            for cp, glyph in zip(chunk, glyphs):
+                geometry = model.predict_geometry(cp_t, meta.repeat(len(chunk),1), glyphs).cpu().tolist()
+            for cp, glyph, geom in zip(chunk, glyphs, geometry):
                 arr = glyph[0].cpu().numpy()  # (H, W) crop-to-ink, [0, 1]
+                arr = place_glyph(arr, geom)[0]
                 _save_grayscale(
                     arr, out_dir / f"{family_key}{style_suffix}-U+{cp:04X}.png"
                 )

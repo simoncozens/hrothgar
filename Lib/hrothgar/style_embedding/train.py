@@ -121,6 +121,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         print(f"Trainable parameters: {sum(p.numel() for p in model.parameters()):,}")
 
         # ── Data ────────────────────────────────────────────────────────
+        balance_by = getattr(train_args, "balance_by", "family")
+        if getattr(train_args, "no_class_balance", False):
+            balance_by = "none"
         maker = FontStyleDatasetMaker(
             repo_url=str(train_args.dataset_path),
             batch_size=train_args.batch_size,
@@ -130,9 +133,10 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             canary_size=train_args.limit_dataset_size,
             tag_names=tag_names or [],
             tag_num_classes=config.tag_num_classes,
+            balance_by=balance_by,
+            sample_axis=getattr(train_args, "sample_axis_instances", False),
             text_encoder_name=config.text_encoder_name or None,
             text_embedding_dim=config.text_embedding_dim,
-            class_balanced=not getattr(train_args, "no_class_balance", False),
         )
         self.train_loader = maker.train_loader()
         self.test_loader = maker.test_loader()
@@ -794,14 +798,23 @@ def _parse_args() -> argparse.Namespace:
         "pull same-family fonts closer together.",
     )
     p.add_argument(
+        "--balance-by",
+        choices=["family", "category", "none"],
+        default="family",
+        help="Batch-sampler grouping: each batch draws at most one item per "
+        "group.  'family' (default) stops large multi-weight families "
+        "dominating; 'category' is the old 6-way behaviour; 'none' shuffles.",
+    )
+    p.add_argument(
+        "--sample-axis-instances",
+        action="store_true",
+        help="Render variable fonts at sampled axis positions instead of only "
+        "the default instance, so each variable file contributes many instances.",
+    )
+    p.add_argument(
         "--no-class-balance",
         action="store_true",
-        help="Disable class-balanced batch sampling.  Without this, "
-        "each batch is guaranteed to contain fonts from all 6 "
-        "categories, creating only trivially-easy negatives.  "
-        "Disabling it allows harder within-category contrasts "
-        "(e.g. Garamond vs Caslon) at the cost of potential "
-        "category imbalance.",
+        help="Deprecated alias for --balance-by none.",
     )
     p.add_argument(
         "--tag-positive-weight",

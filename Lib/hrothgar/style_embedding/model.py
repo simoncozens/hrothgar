@@ -14,51 +14,10 @@ from torch import nn
 
 from hrothgar.googlefonts import Font
 from hrothgar.style_embedding.config import FontStyleEmbedderConfig
+from hrothgar.glyph_encoder import GlyphEncoder
 from hrothgar.utils import SaveLoadModel
 
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
-
-
-class GlyphEncoder(nn.Module):
-    """Small shared CNN: (1, H, W) -> (out_dim, H/ds, W/ds)."""
-
-    def __init__(
-        self,
-        base_channels: int = 32,
-        out_dim: int = 256,
-        downsample: int = 4,
-    ) -> None:
-        super().__init__()
-        if downsample not in (2, 4, 8):
-            raise ValueError(f"downsample must be 2, 4, or 8, got {downsample}")
-
-        layers: list[nn.Module] = []
-        c = 1
-        # Initial block (no downsampling).
-        layers.extend(self._block(c, base_channels, stride=1))
-        c = base_channels
-
-        # Strided blocks until the requested spatial reduction is reached.
-        while downsample >= 2:
-            layers.extend(self._block(c, c * 2, stride=2))
-            c *= 2
-            downsample //= 2
-
-        # Final projection to the target channel count.
-        layers.append(nn.Conv2d(c, out_dim, 3, padding=1))
-        self.net = nn.Sequential(*layers)
-
-    @staticmethod
-    def _block(in_c: int, out_c: int, stride: int) -> list[nn.Module]:
-        groups = min(8, out_c)
-        return [
-            nn.Conv2d(in_c, out_c, 3, stride=stride, padding=1),
-            nn.GroupNorm(groups, out_c),
-            nn.SiLU(),
-        ]
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
 
 
 class TagPredictionHead(nn.Module):

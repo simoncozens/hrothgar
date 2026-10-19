@@ -1,13 +1,16 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import uharfbuzz as hb
 from hrothgar.render import (
     _paste_bitmap_onto_canvas,
+    denormalize_uniform,
     geometry_tensor,
     normalize_bitmap,
     place_glyph,
     render_gid,
+    render_gid_uniform,
 )
 
 
@@ -177,3 +180,192 @@ def test_place_glyph_blank_glyph_preserves_advance() -> None:
 
     assert canvas.max() == 1.0  # stays white
     assert advance_x == origin_x + round(0.3 * 128)
+
+
+def _roboto_font():
+    from hrothgar.googlefonts import Font
+
+    font = Font()
+    font.path = Path("tests/dummy_repo/ofl/roboto/Roboto[wdth,wght].ttf")
+    font.hb_face = hb.Face(hb.Blob.from_file_path(str(font.path)))
+    return font
+
+
+def test_render_gid_uniform_square_image_and_geometry() -> None:
+    import torch
+
+    font = _roboto_font()
+    gid = hb.Font(font.hb_face).get_nominal_glyph(ord("g"))
+
+    image, geometry = render_gid_uniform(font, gid, size=128)
+
+    assert image.shape == (128, 128)
+    assert image.dtype == torch.float32
+    assert 0.0 <= float(image.min()) and float(image.max()) <= 1.0
+    assert float(image.min()) < 1.0  # some ink
+    assert set(geometry) == {
+        "scale_x",
+        "scale_y",
+        "left_sidebearing",
+        "descender_depth",
+        "advance",
+    }
+
+
+def test_render_gid_uniform_preserves_descender() -> None:
+    font = _roboto_font()
+    hbfont = hb.Font(font.hb_face)
+    g_img, _ = render_gid_uniform(font, hbfont.get_nominal_glyph(ord("g")), size=128)
+    a_img, _ = render_gid_uniform(font, hbfont.get_nominal_glyph(ord("A")), size=128)
+
+    baseline_row = int(round(0.75 * 128))
+    g_below = int((g_img[baseline_row:, :] < 1.0).sum())
+    a_below = int((a_img[baseline_row:, :] < 1.0).sum())
+    assert g_below > 0  # 'g' has a descender below the baseline
+    assert a_below < g_below  # 'A' sits above the baseline
+
+
+def test_denormalize_uniform_places_onto_square() -> None:
+    # A fully-inked 32x32 crop-to-ink square with 0.5em x 0.5em ink, no LSB,
+    # no descender.  At size=128 (1em == 64px), the ink should be 32x32 px
+    # starting at x=32 (origin) and y=64 (baseline - ascent).
+    image = np.zeros((32, 32), dtype=np.float32)
+    canvas = denormalize_uniform(image, [0.5, 0.5, 0.0, 0.0, 0.6], size=128)
+
+    assert canvas.shape == (128, 128)
+    assert float(canvas[64:96, 32:64].min()) == 0.0
+    assert float(canvas[:64, :].max()) == 1.0
+    assert float(canvas[96:, :].max()) == 1.0
+    assert float(canvas[:, :32].max()) == 1.0
+    assert float(canvas[:, 64:].max()) == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Framing
+# --------------------------------------------------------------------------- #
+
+
+def test_frame_defaults_are_the_legacy_uniform_framing() -> None:
+    from hrothgar.render import UNIFORM_FRAME, Frame
+
+    assert UNIFORM_FRAME == Frame(-0.5, 1.5, -0.5, 1.5)
+    assert (UNIFORM_FRAME.width, UNIFORM_FRAME.height) == (2.0, 2.0)
+    assert UNIFORM_FRAME.em_span == 2.0
+
+
+def test_frame_rejects_inverted_edges() -> None:
+    from hrothgar.render import Frame
+
+    with pytest.raises(ValueError):
+        Frame(left=1.0, right=0.0)
+    with pytest.raises(ValueError):
+        Frame(bottom=1.0, top=0.0)
+
+
+def test_frame_from_extents_grows_by_margin_and_floors_min_size() -> None:
+    from hrothgar.render import Frame
+
+    frame = Frame.from_extents(-0.1, -0.2, 0.7, 0.8)  # 0.8 x 1.0 em
+    assert (frame.left, frame.right) == pytest.approx((-0.1, 0.7))
+    assert (frame.bottom, frame.top) == pytest.approx((-0.2, 0.8))
+
+    # A margin grows each dimension about the centre by that fraction.
+    grown = Frame.from_extents(-0.1, -0.2, 0.7, 0.8, margin=0.25)
+    assert (grown.width, grown.height) == pytest.approx((1.0, 1.25))
+    assert (grown.left, grown.right) == pytest.approx((-0.2, 0.8))
+    assert (grown.bottom, grown.top) == pytest.approx((-0.325, 0.925))
+
+    # A degenerate box is floored, so the renderer never divides by a tiny span.
+    dot = Frame.from_extents(0.3, 0.4, 0.3, 0.4, min_size=0.2)
+    assert (dot.width, dot.height) == pytest.approx((0.2, 0.2))
+    assert (dot.left, dot.top) == pytest.approx((0.2, 0.5))
+
+
+def _ink_height(image) -> int:
+    return int((image < 0.5).any(dim=1).sum())
+
+
+def _ink_width(image) -> int:
+    return int((image < 0.5).any(dim=0).sum())
+
+
+def _ink_centre_row(image) -> float:
+    rows = (image < 0.5).any(dim=1).nonzero().flatten().float()
+    return float(rows.mean())
+
+
+def test_tighter_frame_makes_the_glyph_proportionally_bigger() -> None:
+    from hrothgar.render import Frame, render_glyph_uniform
+
+    font = _roboto_font()
+    default, geometry = render_glyph_uniform(font, ord("x"), size=128)
+    # A frame half the linear size covers half the em, so the glyph doubles.
+    tight, tight_geometry = render_glyph_uniform(
+        font, ord("x"), size=128, frame=Frame(-0.25, 0.75, -0.25, 0.75)
+    )
+
+    # The geometry labels are em units and do not see the frame, so the ink in
+    # pixels is exactly ``scale_y`` at the frame's own px/em.
+    assert _ink_height(default) == pytest.approx(geometry["scale_y"] * 64, abs=2)
+    assert _ink_height(tight) == pytest.approx(geometry["scale_y"] * 128, abs=2)
+    assert tight_geometry["scale_y"] == pytest.approx(geometry["scale_y"], abs=0.02)
+
+
+def test_non_square_frame_keeps_aspect_ratio_and_centres_the_glyph() -> None:
+    from hrothgar.render import Frame, render_glyph_uniform
+
+    font = _roboto_font()
+    default, _ = render_glyph_uniform(font, ord("o"), size=128)
+    # 2.0 em wide but only 1.0 em tall: same em_span, so the same scale, but the
+    # frame now sits centred in the canvas and the glyph moves with it.
+    wide, _ = render_glyph_uniform(
+        font, ord("o"), size=128, frame=Frame(-0.5, 1.5, -0.25, 0.75)
+    )
+
+    assert _ink_height(wide) == _ink_height(default)  # not stretched vertically
+    assert _ink_width(wide) == _ink_width(default)  # nor horizontally
+    # The frame's centre moved 0.25em down (-0.25 of the 2em canvas) ...
+    assert _ink_centre_row(wide) - _ink_centre_row(default) == pytest.approx(-16, abs=2)
+
+
+def test_envelope_frame_contains_the_glyphs_it_was_measured_from() -> None:
+    from hrothgar.render import frame_for_codepoints, render_glyph_uniform
+
+    font = _roboto_font()
+    codepoints = [ord(c) for c in "AEGOFCSafgo"]
+    frame = frame_for_codepoints(font, codepoints)
+    assert 0.0 < frame.em_span < 2.0  # tighter than the legacy window
+
+    for codepoint in codepoints:
+        image, _ = render_glyph_uniform(font, codepoint, size=128, frame=frame)
+        ink = image < 0.5
+        assert ink.any()
+        assert not (
+            ink[0].any() or ink[-1].any() or ink[:, 0].any() or ink[:, -1].any()
+        ), f"{chr(codepoint)} touches the canvas edge in its own envelope frame"
+
+
+def test_frame_for_codepoints_falls_back_when_nothing_has_ink() -> None:
+    from hrothgar.render import UNIFORM_FRAME, frame_for_codepoints
+
+    assert frame_for_codepoints(_roboto_font(), [0x20, 0x0A]) == UNIFORM_FRAME
+
+
+def test_denormalize_uniform_honours_a_tighter_frame() -> None:
+    from hrothgar.render import Frame, denormalize_uniform
+
+    # 0.5em of ink at 1em == 128px is 64px, and the 1.0em-span frame puts the
+    # baseline at row 96 with the origin at column 32.
+    image = np.zeros((32, 32), dtype=np.float32)
+    canvas = denormalize_uniform(
+        image,
+        [0.5, 0.5, 0.0, 0.0, 0.6],
+        size=128,
+        frame=Frame(-0.25, 0.75, -0.25, 0.75),
+    )
+
+    assert canvas.shape == (128, 128)
+    assert float(canvas[32:96, 32:96].min()) == 0.0
+    assert float(canvas[:32, :].max()) == 1.0
+    assert float(canvas[96:, :].max()) == 1.0
+    assert float(canvas[:, :32].max()) == 1.0
