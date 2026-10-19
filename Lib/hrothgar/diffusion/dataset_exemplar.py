@@ -175,14 +175,17 @@ class ExemplarDatasetMaker(FontIdDatasetMaker):
         return _collate_exemplar([dataset[i] for i in range(len(pairs))])
 
     def instance_sidecar(self) -> list[dict]:
-        """Instance records for inference: where to render each font's evidence.
+        """Instance records for inference.
 
-        Unlike fontid there is no ``(family_id, style_bucket)`` lookup — the style
-        is read from the evidence glyphs themselves — so the sidecar records only
-        the source file and axis position.
+        The per-font memory bank is keyed by ``instance_id`` (the index into
+        ``self.instances``), so each record carries that index; inference looks
+        up ``memory[instance_id]`` rather than re-reading evidence glyphs.
+        ``family_id`` is included for reference / joins with the fontid model.
         """
         return [
             {
+                "instance_id": i,
+                "family_id": inst.family_id,
                 "path": inst.path,
                 "family": inst.family,
                 "weight": inst.weight,
@@ -190,5 +193,5 @@ class ExemplarDatasetMaker(FontIdDatasetMaker):
                 "variable": inst.variable,
                 "axis_position": inst.axis_position,
             }
-            for inst in self.instances
+            for i, inst in enumerate(self.instances)
         ]

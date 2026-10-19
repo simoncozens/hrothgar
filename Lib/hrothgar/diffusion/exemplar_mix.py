@@ -118,8 +118,10 @@ def draw_exemplars(
     excluded by default (an exemplar set must not leak the answer for the
     "incomplete font" task).  Counts are allocated across categories by the
     largest-remainder method from :func:`exemplar_mix`, then sampled within each
-    category (with replacement if a category is under-supplied).  The result is
-    shuffled so the mix is interleaved rather than grouped by class.
+    category *without replacement* so a single category never contributes the
+    same glyph twice (only a category that is genuinely under-supplied relative
+    to its allocation is topped up with replacement).  The result is shuffled so
+    the mix is interleaved rather than grouped by class.
 
     ``rng`` may be a ``random.Random`` instance (so callers can seed it); by
     default the module-level ``random`` is used.
@@ -152,7 +154,16 @@ def draw_exemplars(
 
     out: list[int] = []
     for i, cat in enumerate(cats):
-        if counts[i] > 0:
-            out.extend(rng.choices(by_cat[cat], k=counts[i]))
+        if counts[i] <= 0:
+            continue
+        cat_pool = by_cat[cat]
+        if counts[i] <= len(cat_pool):
+            out.extend(rng.sample(cat_pool, k=counts[i]))
+        else:
+            # Category under-supplied relative to its allocation: take every
+            # glyph once, then top up with replacement.  Duplicates are only
+            # possible here, not when the category has enough distinct glyphs.
+            out.extend(cat_pool)
+            out.extend(rng.choices(cat_pool, k=counts[i] - len(cat_pool)))
     rng.shuffle(out)
     return out

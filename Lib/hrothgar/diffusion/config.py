@@ -120,31 +120,39 @@ class DiffusionLossWeights:
 class ExemplarDiffusionConfig:
     """Configuration for the Phase 2 exemplar-conditional diffusion model.
 
-    Instead of a class id, the denoiser is conditioned on (a) a set of *evidence
-    glyph images* (the font's style references) encoded into a coarse spatial
-    feature map, and (b) the *target codepoint* as a learned embedding added to
-    the time embedding.  Cross-attention in the UNet lets each spatial location
-    query the style feature map — the mechanism Phase 1 lacked.
+    The denoiser is conditioned on (a) a *flat per-font style vector* — a set
+    of evidence glyphs encoded by a shared CNN and globally pooled — and (b) the
+    *target codepoint* as a learned embedding.  The style vector comes from a
+    **per-font memory bank** (one learned vector per font instance) that is
+    warm-started from the evidence encoder, trained by the diffusion gradient,
+    and held near the encoder by a coupling loss (see ``exemplar.py``).
     """
 
     image_size: int = 128
     channels: int = 1
 
-    # Codepoint vocabulary size (data-derived; set before building the model).
+    # Vocabulary sizes (data-derived; set before building the model).
     num_codepoints: int = 0
+    num_instances: int = 0
 
-    # Style encoder: evidence glyphs -> (context_dim, style_out_res, style_out_res).
+    # Style encoder: evidence glyphs -> (context_dim,) flat style vector.  The
+    # encoder downsamples through a ``style_out_res`` grid before globally
+    # pooling, so it still has spatial structure to detect features (a serif
+    # *here*) before summarising into a placement-invariant vector.
     context_dim: int = 256
     style_out_res: int = 8
     style_encoder_base_channels: int = 64
     num_evidence_glyphs: int = 8
+    # Weight of the memory↔encoder coupling loss (``‖memory[f] − encoder(e)‖²``),
+    # which keeps the per-font memory exemplar-derived and trains the encoder.
+    memory_coupling_weight: float = 0.1
 
     # Denoiser UNet.
     dim: int = 64
     dim_mults: tuple[int, ...] = (1, 2, 4, 8)
     attn_dim_head: int = 32
     attn_heads: int = 4
-    # Feature-map resolutions (side length) where self- + cross-attention run.
+    # Feature-map resolutions (side length) where self-attention runs.
     attn_resolutions: tuple[int, ...] = (8, 16)
 
     # Diffusion process.

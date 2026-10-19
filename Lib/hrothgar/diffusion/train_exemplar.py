@@ -1,9 +1,12 @@
 """Training loop for the exemplar-conditional diffusion model.
 
 Like the fontid loop, this trains on a full Google Fonts dataset with a
-codepoint-based train/val split, but the style conditioning is a set of
-*evidence glyphs* (selected content-aware, see ``dataset_exemplar.py``) encoded
-into a style context map that the UNet cross-attends to — no per-font lookup.
+codepoint-based train/val split, but the style conditioning is a **flat
+per-font style vector** from a per-font memory bank: the evidence glyphs are
+encoded by a shared CNN into a single vector, accumulated into one learned
+vector per font instance, and injected (concatenated with the codepoint
+embedding) into the denoiser.  A coupling loss keeps the memory tied to what
+the encoder reads from the evidence glyphs each step.
 
 Run ``python -m hrothgar.diffusion.train_exemplar --dataset-path <checkout>
 --num-instances N --model-path models/exemplar_diffusion.pth``.
@@ -26,7 +29,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from hrothgar.diffusion.config import ExemplarDiffusionConfig
 from hrothgar.diffusion.dataset_exemplar import ExemplarDatasetMaker
-from hrothgar.diffusion.exemplar import build_exemplar_model, q_var_of
+from hrothgar.diffusion.exemplar import build_exemplar_model
 from hrothgar.llamagen_lpips import LPIPS
 from hrothgar.render import GEOMETRY_NAMES, place_glyph
 from hrothgar.utils import TrainingLoop, apply_cli_defaults, load_cli_defaults
@@ -62,10 +65,12 @@ class ExemplarTrainingLoop(TrainingLoop):
         config = ExemplarDiffusionConfig(
             image_size=train_args.image_size,
             num_codepoints=maker.num_codepoints,
+            num_instances=len(maker.instances),
             context_dim=train_args.context_dim,
             style_out_res=train_args.style_out_res,
             style_encoder_base_channels=train_args.style_encoder_base_channels,
             num_evidence_glyphs=train_args.num_evidence_glyphs,
+            memory_coupling_weight=train_args.memory_coupling_weight,
             dim=train_args.dim,
             timesteps=train_args.timesteps,
             sampling_timesteps=train_args.sampling_timesteps,
@@ -87,6 +92,11 @@ class ExemplarTrainingLoop(TrainingLoop):
             f.write("\n")
 
         self.model = build_exemplar_model(config).to(self.device)
+        self.memory_coupling_weight = train_args.memory_coupling_weight
+        # Warm-start the per-font memory bank from the style encoder over a
+        # broad probe glyph set, so training begins from exemplar-derived style
+        # vectors rather than random rows.
+        self.model.warm_start_memory(maker.instances)
         self.geometry_weight = train_args.geometry_weight
         self.base_lr = train_args.learning_rate
         self.warmup_steps = train_args.warmup_steps
@@ -134,21 +144,29 @@ class ExemplarTrainingLoop(TrainingLoop):
         images = batch["images"].to(self.device)
         evidence = batch["evidence"].to(self.device)
         codepoints = batch["codepoints"].to(self.device)
+        instance_ids = batch["instance_ids"].to(self.device)
         geometry = batch["geometry"].to(self.device)
 
         with self._autocast_context():
-            context = self.model.encode_context(evidence)
+            style_live = self.model.encode_style(evidence)
+            style_mem = self.model.lookup_style(instance_ids)
             diffusion_loss, x0_pred = self.model.forward_with_x0(
-                images, context, codepoints
+                images, style_mem, codepoints
             )
             geometry_loss = self.model.geometry_loss(
-                codepoints, context, x0_pred, geometry
+                codepoints, style_mem, x0_pred, geometry
             )
-            loss = diffusion_loss + self.geometry_weight * geometry_loss
+            coupling_loss = self.model.coupling_loss(style_mem, style_live)
+            loss = (
+                diffusion_loss
+                + self.geometry_weight * geometry_loss
+                + self.memory_coupling_weight * coupling_loss
+            )
         return loss, {
             "loss": loss.detach().float(),
             "diffusion": diffusion_loss.detach().float(),
             "geometry": geometry_loss.detach().float(),
+            "coupling": coupling_loss.detach().float(),
         }
 
     def post_train_step(self):
@@ -160,16 +178,16 @@ class ExemplarTrainingLoop(TrainingLoop):
             l1s, lpipss, ssims = [], [], []
             geo_mses, geo_per_value = [], []
             for batch in itertools.islice(self.val_loader, self.validation_batches):
-                evidence = batch["evidence"].to(self.device)
                 codepoints = batch["codepoints"].to(self.device)
+                instance_ids = batch["instance_ids"].to(self.device)
                 gts = batch["images"].to(self.device).float()
                 geometry = batch["geometry"].to(self.device).float()
 
                 with self._autocast_context():
-                    context = self.model.encode_context(evidence)
-                    recs = self.model.sample(context, codepoints)
+                    style = self.model.lookup_style(instance_ids)
+                    recs = self.model.sample(style, codepoints)
                     pred_geometry = self.model.predict_geometry(
-                        codepoints, context, recs
+                        codepoints, style, recs
                     )
                 recs = recs.float().clamp(0.0, 1.0)
                 pred_geometry = pred_geometry.float()
@@ -198,24 +216,9 @@ class ExemplarTrainingLoop(TrainingLoop):
                 self.write_scalar(f"Validation/geometry_{name}", value)
 
             self.checkpoint_if_best(lpips)
-            self._log_attention_q_var()
             self.visualize()
 
         self.model.train()
-
-    def _log_attention_q_var(self):
-        """Log per-layer cross-attention position-selectivity.
-
-        ``q_var`` is the variance of the attention weights across query
-        positions; ~0 means the cross-attention has collapsed to a global style
-        vector.  Logged from the most recent sampling pass (the validation loop
-        just ran), so it reflects inference-time attention.
-        """
-        weights = self.model.attention_weights()
-        if not weights:
-            return
-        for i, w in enumerate(weights):
-            self.write_scalar(f"Attention/q_var_{i}", q_var_of(w))
 
     def visualize(self):
         batch = self.maker.random_val_batch(8)
@@ -228,9 +231,9 @@ class ExemplarTrainingLoop(TrainingLoop):
         geometry = batch["geometry"][:n]
 
         with torch.no_grad(), self._autocast_context():
-            context = self.model.encode_context(evidence)
-            recs = self.model.sample(context, codepoints)
-            pred_geometry = self.model.predict_geometry(codepoints, context, recs)
+            style = self.model.lookup_style(instance_ids)
+            recs = self.model.sample(style, codepoints)
+            pred_geometry = self.model.predict_geometry(codepoints, style, recs)
         recs = recs.float().clamp(0.0, 1.0)
         pred_geometry = pred_geometry.float()
 
@@ -398,6 +401,7 @@ if __name__ == "__main__":
     parser.add_argument("--style-out-res", type=int, default=8)
     parser.add_argument("--style-encoder-base-channels", type=int, default=64)
     parser.add_argument("--num-evidence-glyphs", type=int, default=8)
+    parser.add_argument("--memory-coupling-weight", type=float, default=0.1)
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--sampling-timesteps", type=int, default=100)
     parser.add_argument("--min-snr-gamma", type=float, default=5.0)

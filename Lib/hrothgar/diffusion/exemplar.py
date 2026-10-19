@@ -1,22 +1,39 @@
 """Phase 2: exemplar-conditional diffusion glyph generator.
 
-Phase 1 conditioned on a class id (codepoint x ROND) and, as we found, could not
-localize fine style detail — the conditioning was a single global embedding and
-the reconstruction objective was swamped.  Phase 2 replaces that with the
-VecFusion / latent-diffusion recipe:
+The style conditioning is a **flat per-font style vector** produced by a shared
+*style encoder* over the font's evidence glyphs.  Rather than re-reading the
+ever-changing evidence set afresh every shot (the original exemplar design) or
+training a raw per-font free parameter from scratch (the fontid design), we
+combine both:
 
 * **Style encoder** — a set of *evidence glyphs* (the font's style references)
-  is encoded into a coarse spatial feature map ``(context_dim, H', W')`` by
-  mean-pooling a shared CNN over the evidence set (permutation-invariant).
-* **Cross-attention** — the denoiser UNet's spatial features attend to that
-  feature map, so each location of the output can query "what is the style
-  *here*?" instead of reading one global vector.
+  is encoded by a shared CNN and **globally pooled** (over both the evidence set
+  *and* space) into a single ``(context_dim,)`` style vector.  Global pooling is
+  deliberate: style properties (serif shape, terminal angle, stroke modulation,
+  flicks) are placement-invariant — *where* a flick lands is the codepoint's
+  job, not the style's — so the style representation must not try to carry
+  spatial coordinates (the v1-v5 collapse history).
+
+* **Per-font memory bank** — a learned ``nn.Embedding(num_instances,
+  context_dim)``, one flat vector per font *instance*.  It is **warm-started**
+  from the style encoder over a broad, fixed probe glyph set, then trained by
+  the diffusion gradient (so each font accumulates a rich, well-determined
+  vector over training, like fontid's ``family_emb``) while a **coupling loss**
+  ``‖memory[f] − encoder(evidence_f)‖²`` keeps it tied to what the shared
+  encoder actually reads from glyphs.  The coupling is what stops the memory
+  drifting into pure memoization (the fontid disease) and lets rare fonts
+  borrow the shared encoder's strength.
+
 * **Codepoint conditioning** — the target codepoint is a learned embedding
-  concatenated with the time embedding (VecFusion's recipe).
+  concatenated with the style vector (the "class" embedding injected into the
+  denoiser's ResNet blocks), mirroring the fontid model.  There is no
+  cross-attention in this step; a bag-of-per-glyph vectors (the "step two"
+  cross-attention variant) can be layered on later if a single flat vector
+  proves insufficient for fine-detail placement.
 
 The diffusion process is reimplemented here (training + DDIM sampling) rather
 than reusing ``GaussianDiffusion``, because that class threads a single
-``classes`` tensor and we now thread ``(context, codepoint)``.  The math is the
+``classes`` tensor and we now thread ``(style, codepoint)``.  The math is the
 standard cosine-schedule / v- or noise-prediction DDPM; only ``pred_noise`` is
 implemented for the scaffold.
 """
@@ -43,14 +60,14 @@ from denoising_diffusion_pytorch.classifier_free_guidance import (
     normalize_to_neg_one_to_one,
     unnormalize_to_zero_to_one,
 )
-from einops import rearrange
-from torch import einsum, nn
+from torch import nn
 
 from hrothgar.diffusion.config import ExemplarDiffusionConfig
 from hrothgar.render import (
     DESCENDER_SNAP_EPSILON,
     GEOMETRY_NAMES,
     GEOMETRY_SPEC,
+    render_glyph_uniform,
 )
 from hrothgar.utils import SaveLoadModel
 
@@ -67,17 +84,27 @@ def _decode_geometry(raw: torch.Tensor) -> torch.Tensor:
         cols.append(_apply_activation(raw[:, i], activation) * scale)
     return torch.stack(cols, dim=1)
 
+
 # ---------------------------------------------------------------------------
 # Style encoder
 # ---------------------------------------------------------------------------
 
+# A broad, category-spanning probe glyph set used to warm-start the per-font
+# memory bank.  It deliberately covers upper/lower/digit so the warm-start
+# summarises a wide variety of glyphs (not just one case), which is what lets a
+# font with an idiosyncratic flick (e.g. Autour One's rightward l/m/n/h/f/d
+# flicks) be captured even if the evidence for a single target codepoint misses
+# the glyphs that carry it.
+WARM_START_PROBE = "Hamburgefonstiv0123"
+
 
 class StyleEncoder(nn.Module):
-    """Encode a set of evidence glyphs into a coarse spatial style feature map.
+    """Encode a set of evidence glyphs into a single flat style vector.
 
-    Each evidence glyph passes through the same CNN, then the results are
-    mean-pooled across the evidence set (so the order of evidence glyphs is
-    irrelevant).  Output shape: ``(B, context_dim, out_res, out_res)``.
+    Each evidence glyph passes through the same CNN; the resulting per-glyph
+    feature maps are mean-pooled across the evidence set (so the order of
+    evidence glyphs is irrelevant) and then globally pooled over space, giving
+    a placement-invariant ``(B, context_dim)`` summary.
     """
 
     def __init__(
@@ -111,93 +138,13 @@ class StyleEncoder(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, evidence: torch.Tensor) -> torch.Tensor:
-        """``evidence`` is ``(B, N, C, H, W)``; returns ``(B, C_ctx, H', W')``."""
+        """``evidence`` is ``(B, N, C, H, W)``; returns ``(B, context_dim)``."""
         b, n, c, h, w = evidence.shape
         x = evidence.reshape(b * n, c, h, w)
         x = self.net(x)  # (B*N, context_dim, out_res, out_res)
         x = x.reshape(b, n, self.context_dim, self.out_res, self.out_res)
-        return x.mean(dim=1)  # (B, context_dim, out_res, out_res)
-
-
-# ---------------------------------------------------------------------------
-# Cross attention
-# ---------------------------------------------------------------------------
-
-
-class CrossAttention(nn.Module):
-    """Multi-head cross-attention from UNet tokens to style tokens."""
-
-    def __init__(
-        self, query_dim: int, context_dim: int, heads: int = 4, dim_head: int = 32
-    ) -> None:
-        super().__init__()
-        self.scale = dim_head**-0.5
-        self.heads = heads
-        inner_dim = dim_head * heads
-        self.to_q = nn.Linear(query_dim, inner_dim, bias=False)
-        self.to_k = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_v = nn.Linear(context_dim, inner_dim, bias=False)
-        self.to_out = nn.Linear(inner_dim, query_dim, bias=False)
-        # Post-softmax attention weights from the most recent forward pass
-        # (detached), for collapse diagnostics.
-        self.last_attn: torch.Tensor | None = None
-
-    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        # x: (B, N, query_dim); context: (B, M, context_dim)
-        q = self.to_q(x)
-        k = self.to_k(context)
-        v = self.to_v(context)
-        q, k, v = map(
-            lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads),
-            (q, k, v),
-        )
-        q = q * self.scale
-        sim = einsum("b h i d, b h j d -> b h i j", q, k)
-        attn = sim.softmax(dim=-1)
-        self.last_attn = attn.detach()
-        out = einsum("b h i j, b h j d -> b h i d", attn, v)
-        out = rearrange(out, "b h n d -> b n (h d)")
-        return self.to_out(out)
-
-
-class CrossAttentionBlock(nn.Module):
-    """LayerNorm -> cross-attention -> residual, over a 4D feature map."""
-
-    def __init__(
-        self, dim: int, context_dim: int, heads: int = 4, dim_head: int = 32
-    ) -> None:
-        super().__init__()
-        self.norm = nn.LayerNorm(dim)
-        self.attn = CrossAttention(dim, context_dim, heads=heads, dim_head=dim_head)
-
-    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        # x: (B, C, H, W); context: (B, M, context_dim)
-        b, c, h, w = x.shape
-        x_flat = rearrange(x, "b c h w -> b (h w) c")
-        out = self.attn(self.norm(x_flat), context)
-        out = rearrange(out, "b (h w) c -> b c h w", h=h, w=w)
-        return out + x
-
-
-class _IdentityCross(nn.Module):
-    """Placeholder cross-attention for resolutions without attention."""
-
-    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        return x
-
-
-def q_var_of(attn: torch.Tensor) -> torch.Tensor:
-    """Position-selectivity of cross-attention weights (collapse diagnostic).
-
-    ``attn`` is a ``(B, H, nq, M)`` post-softmax cross-attention tensor (batch,
-    heads, query positions, context tokens).  Returns the variance of the
-    attention across *query* positions, averaged over batch, heads and context
-    tokens.  ``~0`` means every query position attends identically — the
-    attention has collapsed to a single global style vector (the v2/v3 failure);
-    a spatially selective attention has q_var comfortably above zero.
-    """
-    mean_over_q = attn.mean(dim=2, keepdim=True)  # (B, H, 1, M)
-    return ((attn - mean_over_q) ** 2).mean()
+        x = x.mean(dim=1)  # (B, context_dim, out_res, out_res) — pool over evidence
+        return x.mean(dim=(2, 3))  # (B, context_dim) — global pool over space
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +153,13 @@ def q_var_of(attn: torch.Tensor) -> torch.Tensor:
 
 
 class ExemplarConditionalUnet(nn.Module):
-    """Denoiser UNet conditioned on a style context map and a codepoint.
+    """Denoiser UNet conditioned on a flat style vector and a codepoint.
 
-    Structure mirrors the library's class-conditional UNet (ResNet blocks with
-    time/class embeddings), but adds cross-attention to the style context at a
-    chosen set of resolutions.
+    Mirrors the factorized (fontid) UNet: the codepoint embedding and the style
+    vector are concatenated into a single "class" embedding injected into every
+    ResNet block, alongside the time embedding.  Self-attention runs at the
+    configured resolutions; there is no cross-attention (a flat style vector has
+    nothing to cross-attend to — a future bag-of-vectors variant would add it).
     """
 
     def __init__(
@@ -255,14 +204,17 @@ class ExemplarConditionalUnet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
+        # Codepoint (time_dim) + flat style vector (context_dim), concatenated
+        # and injected as the "class" conditioning.  Decoupled from ``dim`` the
+        # same way fontid decouples its style embedding width.
+        cond_dim = time_dim + context_dim
+        self.cond_dim = cond_dim
 
         # Geometry head: predicts the five em-unit labels so the crop-to-ink
-        # glyph can be placed back on the baseline.  Conditioning = codepoint
-        # embedding + a globally-pooled style summary (mean over the context
-        # feature map) + the glyph's own "mode" vector.  Global pooling is the
-        # right call here: the geometry labels (scale / advance / lsb) are
-        # global properties, unlike the rendering, which needs the spatial
-        # context via cross-attention.
+        # glyph can be placed back on the baseline.  Conditioning = the full
+        # (codepoint, style) vector + the glyph's own "mode" vector.  These
+        # labels are global properties, so the style enters as the (already
+        # global) flat vector.
         self.mode_dim = time_dim
         self.glyph_encoder = nn.Sequential(
             nn.Conv2d(channels, 32, 3, stride=2, padding=1),
@@ -278,28 +230,18 @@ class ExemplarConditionalUnet(nn.Module):
             nn.Linear(self.mode_dim, self.mode_dim),
         )
         self.geometry_head = nn.Sequential(
-            nn.Linear(time_dim + context_dim + self.mode_dim, time_dim),
+            nn.Linear(cond_dim + self.mode_dim, time_dim),
             nn.GELU(),
             nn.Linear(time_dim, len(GEOMETRY_SPEC)),
         )
 
         attn_res = set(attn_resolutions)
-        self._cross_blocks: list[CrossAttentionBlock] = []
 
         self.downs = nn.ModuleList([])
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
             res = image_size // (2**ind)
             has_attn = res in attn_res
-            cross = (
-                CrossAttentionBlock(
-                    dim_in, context_dim, heads=attn_heads, dim_head=attn_dim_head
-                )
-                if has_attn
-                else _IdentityCross()
-            )
-            if has_attn:
-                self._cross_blocks.append(cross)
             self.downs.append(
                 nn.ModuleList(
                     [
@@ -307,13 +249,13 @@ class ExemplarConditionalUnet(nn.Module):
                             dim_in,
                             dim_in,
                             time_emb_dim=time_dim,
-                            classes_emb_dim=time_dim,
+                            classes_emb_dim=cond_dim,
                         ),
                         ResnetBlock(
                             dim_in,
                             dim_in,
                             time_emb_dim=time_dim,
-                            classes_emb_dim=time_dim,
+                            classes_emb_dim=cond_dim,
                         ),
                         (
                             Residual(
@@ -327,7 +269,6 @@ class ExemplarConditionalUnet(nn.Module):
                             if has_attn
                             else nn.Identity()
                         ),
-                        cross,
                         (
                             Downsample(dim_in, dim_out)
                             if not is_last
@@ -339,19 +280,15 @@ class ExemplarConditionalUnet(nn.Module):
 
         mid_dim = dims[-1]
         self.mid_block1 = ResnetBlock(
-            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=cond_dim
         )
         self.mid_attn = Residual(
             PreNorm(
                 mid_dim, Attention(mid_dim, heads=attn_heads, dim_head=attn_dim_head)
             )
         )
-        self.mid_cross = CrossAttentionBlock(
-            mid_dim, context_dim, heads=attn_heads, dim_head=attn_dim_head
-        )
-        self._cross_blocks.append(self.mid_cross)
         self.mid_block2 = ResnetBlock(
-            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+            mid_dim, mid_dim, time_emb_dim=time_dim, classes_emb_dim=cond_dim
         )
 
         self.ups = nn.ModuleList([])
@@ -359,15 +296,6 @@ class ExemplarConditionalUnet(nn.Module):
             is_last = ind == (len(in_out) - 1)
             res = image_size // (2 ** (num_resolutions - 1 - ind))
             has_attn = res in attn_res
-            cross = (
-                CrossAttentionBlock(
-                    dim_out, context_dim, heads=attn_heads, dim_head=attn_dim_head
-                )
-                if has_attn
-                else _IdentityCross()
-            )
-            if has_attn:
-                self._cross_blocks.append(cross)
             self.ups.append(
                 nn.ModuleList(
                     [
@@ -375,13 +303,13 @@ class ExemplarConditionalUnet(nn.Module):
                             dim_out + dim_in,
                             dim_out,
                             time_emb_dim=time_dim,
-                            classes_emb_dim=time_dim,
+                            classes_emb_dim=cond_dim,
                         ),
                         ResnetBlock(
                             dim_out + dim_in,
                             dim_out,
                             time_emb_dim=time_dim,
-                            classes_emb_dim=time_dim,
+                            classes_emb_dim=cond_dim,
                         ),
                         (
                             Residual(
@@ -397,7 +325,6 @@ class ExemplarConditionalUnet(nn.Module):
                             if has_attn
                             else nn.Identity()
                         ),
-                        cross,
                         (
                             Upsample(dim_out, dim_in)
                             if not is_last
@@ -408,37 +335,29 @@ class ExemplarConditionalUnet(nn.Module):
             )
 
         self.final_res_block = ResnetBlock(
-            dim * 2, dim, time_emb_dim=time_dim, classes_emb_dim=time_dim
+            dim * 2, dim, time_emb_dim=time_dim, classes_emb_dim=cond_dim
         )
         self.final_conv = nn.Conv2d(dim, channels, 1)
 
-    def attention_weights(self) -> list[torch.Tensor]:
-        """Return post-softmax cross-attention weights from the last forward.
-
-        One ``(B, heads, nq, M)`` tensor per cross-attention layer (down, mid,
-        up), in forward order.  Empty if no forward has run yet.
-        """
-        ws = [b.attn.last_attn for b in self._cross_blocks]
-        return [w for w in ws if w is not None]
+    def _cond(self, codepoint: torch.Tensor, style: torch.Tensor) -> torch.Tensor:
+        """Concatenated ``(codepoint, style)`` conditioning ``(B, cond_dim)``."""
+        return torch.cat([self.codepoint_emb(codepoint), style], dim=-1)
 
     def predict_geometry(
         self,
         codepoint: torch.Tensor,
-        context: torch.Tensor,
+        style: torch.Tensor,
         glyph: torch.Tensor,
         snap: bool = True,
     ) -> torch.Tensor:
         """Predict the five geometry labels (em units) for ``glyph``.
 
         ``glyph`` is the crop-to-ink normalized glyph ``(B, 1, H, W)`` in
-        ``[0, 1]``; ``context`` is the style feature map ``(B, C, h, w)``.  The
-        context is globally pooled, because the geometry labels are global
-        properties of the glyph-in-font, not localized detail.
+        ``[0, 1]``; ``style`` is the flat ``(B, context_dim)`` style vector.
         """
-        c = self.codepoint_emb(codepoint)
-        style = context.mean(dim=1)  # (B, context_dim), pooled over tokens
+        cond = self._cond(codepoint, style)
         mode = self.glyph_encoder(glyph)  # (B, mode_dim)
-        raw = self.geometry_head(torch.cat([c, style, mode], dim=-1))
+        raw = self.geometry_head(torch.cat([cond, mode], dim=-1))
         out = _decode_geometry(raw)
         if snap:
             idx = GEOMETRY_NAMES.index("descender_depth")
@@ -452,12 +371,12 @@ class ExemplarConditionalUnet(nn.Module):
     def geometry_loss(
         self,
         codepoint: torch.Tensor,
-        context: torch.Tensor,
+        style: torch.Tensor,
         glyph: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         """Per-label variance-normalised MSE in em units (see ``fontid``)."""
-        pred = self.predict_geometry(codepoint, context, glyph, snap=False)
+        pred = self.predict_geometry(codepoint, style, glyph, snap=False)
         se = (pred - gt_geometry) ** 2
         return (se / self.geometry_std.square()).mean()
 
@@ -465,7 +384,7 @@ class ExemplarConditionalUnet(nn.Module):
         self,
         x: torch.Tensor,
         time: torch.Tensor,
-        context: torch.Tensor,
+        style: torch.Tensor,
         codepoint: torch.Tensor,
         x_self_cond: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -476,30 +395,27 @@ class ExemplarConditionalUnet(nn.Module):
         r = x.clone()
 
         t = self.time_mlp(time)
-        c = self.codepoint_emb(codepoint)
+        c = self._cond(codepoint, style)
 
         h = []
-        for block1, block2, attn, cross, downsample in self.downs:
+        for block1, block2, attn, downsample in self.downs:
             x = block1(x, time_emb=t, class_emb=c)
             h.append(x)
             x = block2(x, time_emb=t, class_emb=c)
             x = attn(x)
-            x = cross(x, context)
             h.append(x)
             x = downsample(x)
 
         x = self.mid_block1(x, time_emb=t, class_emb=c)
         x = self.mid_attn(x)
-        x = self.mid_cross(x, context)
         x = self.mid_block2(x, time_emb=t, class_emb=c)
 
-        for block1, block2, attn, cross, upsample in self.ups:
+        for block1, block2, attn, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim=1)
             x = block1(x, time_emb=t, class_emb=c)
             x = torch.cat((x, h.pop()), dim=1)
             x = block2(x, time_emb=t, class_emb=c)
             x = attn(x)
-            x = cross(x, context)
             x = upsample(x)
 
         x = torch.cat((x, r), dim=1)
@@ -513,7 +429,7 @@ class ExemplarConditionalUnet(nn.Module):
 
 
 class ExemplarDiffusion(nn.Module):
-    """Standard DDPM/DDIM process threading ``(context, codepoint)`` to the UNet."""
+    """Standard DDPM/DDIM process threading ``(style, codepoint)`` to the UNet."""
 
     def __init__(
         self,
@@ -582,11 +498,11 @@ class ExemplarDiffusion(nn.Module):
             - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
 
-    def p_losses(self, x_start, t, context, codepoint, noise=None):
+    def p_losses(self, x_start, t, style, codepoint, noise=None):
         """Return just the diffusion loss (convenience over ``p_losses_with_x0``)."""
-        return self.p_losses_with_x0(x_start, t, context, codepoint, noise)[0]
+        return self.p_losses_with_x0(x_start, t, style, codepoint, noise)[0]
 
-    def p_losses_with_x0(self, x_start, t, context, codepoint, noise=None):
+    def p_losses_with_x0(self, x_start, t, style, codepoint, noise=None):
         """Return ``(diffusion_loss, predicted_x0)`` (see ``fontid``)."""
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
@@ -594,14 +510,14 @@ class ExemplarDiffusion(nn.Module):
         x_self_cond = None
         if self.self_condition and random() < 0.5:
             with torch.no_grad():
-                first_pred = self.model(x, t, context, codepoint)
+                first_pred = self.model(x, t, style, codepoint)
                 x_self_cond = (
                     self.predict_start_from_noise(x, t, first_pred)
                     .clamp(-1.0, 1.0)
                     .detach()
                 )
 
-        pred = self.model(x, t, context, codepoint, x_self_cond=x_self_cond)
+        pred = self.model(x, t, style, codepoint, x_self_cond=x_self_cond)
         x0_pred = self.predict_start_from_noise(x, t, pred).detach()
 
         if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
@@ -615,10 +531,10 @@ class ExemplarDiffusion(nn.Module):
 
         return loss, unnormalize_to_zero_to_one(x0_pred).clamp(0.0, 1.0)
 
-    def forward(self, img, context, codepoint, times=None):
-        return self.forward_with_x0(img, context, codepoint, times)[0]
+    def forward(self, img, style, codepoint, times=None):
+        return self.forward_with_x0(img, style, codepoint, times)[0]
 
-    def forward_with_x0(self, img, context, codepoint, times=None):
+    def forward_with_x0(self, img, style, codepoint, times=None):
         b = img.shape[0]
         img = normalize_to_neg_one_to_one(img)
         times = default(
@@ -627,16 +543,16 @@ class ExemplarDiffusion(nn.Module):
                 0, self.num_timesteps, (b,), device=img.device
             ).long(),
         )
-        return self.p_losses_with_x0(img, times, context, codepoint)
+        return self.p_losses_with_x0(img, times, style, codepoint)
 
     @torch.no_grad()
-    def sample(self, context, codepoint):
+    def sample(self, style, codepoint):
         b = codepoint.shape[0]
         shape = (b, self.channels, self.image_size, self.image_size)
-        return self.ddim_sample(context, codepoint, shape)
+        return self.ddim_sample(style, codepoint, shape)
 
     @torch.no_grad()
-    def ddim_sample(self, context, codepoint, shape):
+    def ddim_sample(self, style, codepoint, shape):
         b = shape[0]
         device = self.device
         total = self.num_timesteps
@@ -652,7 +568,7 @@ class ExemplarDiffusion(nn.Module):
         for time, time_next in time_pairs:
             time_cond = torch.full((b,), time, device=device, dtype=torch.long)
             pred_noise = self.model(
-                img, time_cond, context, codepoint, x_self_cond=x_start
+                img, time_cond, style, codepoint, x_self_cond=x_start
             )
             x_start = self.predict_start_from_noise(img, time_cond, pred_noise)
             x_start = x_start.clamp(-1.0, 1.0)
@@ -676,15 +592,17 @@ class ExemplarDiffusion(nn.Module):
 class ExemplarDiffusionModel(SaveLoadModel):
     """Facade for the exemplar-conditional diffusion model.
 
-    Owns the style encoder (evidence glyphs -> style context map) plus the
-    denoiser/diffusion process, mirroring :class:`FontIdDiffusionModel`'s
-    surface so the training loop and generator can treat the two models alike.
+    Owns the style encoder (evidence glyphs -> flat style vector), the per-font
+    **memory bank** (one learned flat vector per font instance, warm-started
+    from the encoder and coupled to it), and the denoiser/diffusion process.
     """
 
     def __init__(self, config: ExemplarDiffusionConfig) -> None:
         super().__init__()
         if config.num_codepoints <= 0:
             raise ValueError("ExemplarDiffusionConfig.num_codepoints must be set.")
+        if config.num_instances <= 0:
+            raise ValueError("ExemplarDiffusionConfig.num_instances must be set.")
         self.config = config
 
         self.style_encoder = StyleEncoder(
@@ -694,6 +612,12 @@ class ExemplarDiffusionModel(SaveLoadModel):
             image_size=config.image_size,
             out_res=config.style_out_res,
         )
+        # The per-font memory bank: one flat style vector per font *instance*
+        # (roman and italic are distinct instances with distinct evidence, so
+        # each gets its own vector).  Warm-started from the encoder, trained by
+        # the diffusion gradient, and held near the encoder by the coupling loss.
+        self.memory = nn.Embedding(config.num_instances, config.context_dim)
+
         unet = ExemplarConditionalUnet(
             dim=config.dim,
             num_codepoints=config.num_codepoints,
@@ -718,53 +642,96 @@ class ExemplarDiffusionModel(SaveLoadModel):
             min_snr_gamma=config.min_snr_gamma,
         )
 
-    def encode_context(self, evidence: torch.Tensor) -> torch.Tensor:
-        """Encode evidence glyphs ``(B, N, C, H, W)`` to style context tokens.
+    def encode_style(self, evidence: torch.Tensor) -> torch.Tensor:
+        """Encode evidence glyphs ``(B, N, C, H, W)`` to a flat ``(B, context_dim)``
+        style vector (the *live* read, used for the coupling loss)."""
+        return self.style_encoder(evidence)
 
-        Returns ``(B, H'*W', context_dim)`` — the style encoder's spatial feature
-        map flattened into tokens, which is the form the cross-attention consumes.
+    def lookup_style(self, instance_ids: torch.Tensor) -> torch.Tensor:
+        """Look up the per-font memory vector(s) ``(B, context_dim)``.
+
+        This is the conditioning used for both training and inference."""
+        return self.memory(instance_ids)
+
+    def coupling_loss(self, style_mem: torch.Tensor, style_live: torch.Tensor) -> torch.Tensor:
+        """Pull the memory vector and the live encoder read toward each other.
+
+        Symmetric MSE: the memory is nudged toward what the shared encoder reads
+        from the glyphs (so it stays exemplar-derived and rare fonts inherit the
+        encoder), and the encoder is nudged toward the memory (so it learns to
+        produce the diffusion-useful summary).  Without this term the memory is
+        just a fontid-style free parameter and the encoder receives no gradient.
         """
-        feat = self.style_encoder(evidence)  # (B, context_dim, H', W')
-        return rearrange(feat, "b c h w -> b (h w) c")
-
-    def attention_weights(self) -> list[torch.Tensor]:
-        """Cross-attention weights from the most recent forward/sample pass."""
-        return self.diffusion.model.attention_weights()
-
-    def forward(
-        self, img: torch.Tensor, context: torch.Tensor, codepoint: torch.Tensor
-    ) -> torch.Tensor:
-        return self.diffusion(img, context, codepoint)
-
-    def forward_with_x0(
-        self, img: torch.Tensor, context: torch.Tensor, codepoint: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.diffusion.forward_with_x0(img, context, codepoint)
+        return F.mse_loss(style_mem, style_live.to(style_mem.dtype))
 
     @torch.no_grad()
-    def sample(self, context: torch.Tensor, codepoint: torch.Tensor) -> torch.Tensor:
-        return self.diffusion.sample(context, codepoint)
+    def warm_start_memory(self, instances, probe: str = WARM_START_PROBE) -> None:
+        """Initialise the memory bank from the style encoder.
+
+        Each instance's memory row is set to the encoder's flat summary of a
+        broad, fixed probe glyph set (``WARM_START_PROBE``), so training starts
+        from exemplar-derived style vectors rather than random rows.  This is a
+        one-time, cheap pass over the (already materialised) instances.
+        """
+        probe_cps = [ord(c) for c in probe]
+        device = self.memory.weight.device
+        image_size = self.config.image_size
+        self.eval()
+        for i, inst in enumerate(instances):
+            cps = [cp for cp in probe_cps if cp in inst.codepoints]
+            if not cps:
+                # Fall back to whatever the instance can draw (rare symbol/guide
+                # fonts); the memory still gets *a* style summary.
+                cps = inst.codepoints[: self.config.num_evidence_glyphs]
+            if not cps:
+                continue
+            evidence = []
+            for cp in cps:
+                ev_img, _ = render_glyph_uniform(
+                    inst.font,
+                    cp,
+                    image_size,
+                    axis_position=inst.axis_position,
+                )
+                evidence.append(ev_img.unsqueeze(0))  # (1, H, W)
+            evidence = torch.stack(evidence).unsqueeze(0)  # (1, N, 1, H, W)
+            style = self.style_encoder(evidence.to(device))  # (1, context_dim)
+            self.memory.weight.data[i] = style[0].to(self.memory.weight.dtype)
+
+    def forward(
+        self, img: torch.Tensor, style: torch.Tensor, codepoint: torch.Tensor
+    ) -> torch.Tensor:
+        return self.diffusion(img, style, codepoint)
+
+    def forward_with_x0(
+        self, img: torch.Tensor, style: torch.Tensor, codepoint: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.diffusion.forward_with_x0(img, style, codepoint)
+
+    @torch.no_grad()
+    def sample(self, style: torch.Tensor, codepoint: torch.Tensor) -> torch.Tensor:
+        return self.diffusion.sample(style, codepoint)
 
     def predict_geometry(
         self,
         codepoint: torch.Tensor,
-        context: torch.Tensor,
+        style: torch.Tensor,
         glyph: torch.Tensor,
         snap: bool = True,
     ) -> torch.Tensor:
         return self.diffusion.model.predict_geometry(
-            codepoint, context, glyph, snap=snap
+            codepoint, style, glyph, snap=snap
         )
 
     def geometry_loss(
         self,
         codepoint: torch.Tensor,
-        context: torch.Tensor,
+        style: torch.Tensor,
         glyph: torch.Tensor,
         gt_geometry: torch.Tensor,
     ) -> torch.Tensor:
         return self.diffusion.model.geometry_loss(
-            codepoint, context, glyph, gt_geometry
+            codepoint, style, glyph, gt_geometry
         )
 
 
