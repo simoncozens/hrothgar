@@ -152,10 +152,17 @@ class ExemplarDiffusionConfig:
     sampling_timesteps: int | None = 50
     beta_schedule: str = "cosine"
     ddim_sampling_eta: float = 0.0
+    # Self-conditioning + min-SNR weighting, matching the fontid model.
+    self_condition: bool = True
+    min_snr_gamma: float = 5.0
 
     # Training.
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
+    warmup_steps: int = 2000
+    # Geometry regression (em-unit labels), mirroring the fontid head.
+    geometry_loss_weight: float = 1.0
+    geometry_std: tuple[float, ...] | None = None
 
     def save_sidecar(self, model_path) -> None:
         """Save config as a JSON sidecar alongside the model weights."""
@@ -227,6 +234,13 @@ class FontIdDiffusionConfig:
     # Self-conditioning: condition the denoiser on its own predicted x0 from the
     # previous sampling step (and ~50% of the time during training).
     self_condition: bool = True
+    # Classifier-free guidance.  ``cond_drop_prob`` is the fraction of training
+    # samples whose (codepoint, style) conditioning is replaced with a learned
+    # null embedding; ``cond_scale`` is the guidance scale used at sampling.
+    # Defaults of 0.0 / 1.0 leave CFG disabled, so old sidecars (which lack
+    # these keys) load with identical behaviour.
+    cond_drop_prob: float = 0.0
+    cond_scale: float = 1.0
 
     # Training.
     learning_rate: float = 3.24e-5

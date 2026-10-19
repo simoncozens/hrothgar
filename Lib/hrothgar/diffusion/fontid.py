@@ -137,6 +137,10 @@ class FontIdConditionalUnet(nn.Module):
         self.style_emb = nn.Embedding(num_style_buckets, style_emb_dim)
         self.italic_family_emb = nn.Embedding(num_families, style_emb_dim)
         cond_dim = time_dim + style_emb_dim  # codepoint + style, concatenated
+        self.cond_dim = cond_dim
+        # Learned null conditioning for classifier-free guidance: replaces the
+        # whole (codepoint, style) conditioning on dropped samples.
+        self.null_cond = nn.Parameter(torch.randn(cond_dim))
         # A glyph encoder condenses the *specific* generated glyph (the one the
         # denoiser actually produced) into a low-dimensional "mode" vector, so
         # the geometry head can answer "what bbox/advance does THIS glyph need
@@ -235,12 +239,21 @@ class FontIdConditionalUnet(nn.Module):
         self.final_res_block = resnet_block(dim * 2, dim)
         self.final_conv = nn.Conv2d(dim, channels, 1)
 
-    def _cond(self, codepoint: torch.Tensor, font_meta: torch.Tensor) -> torch.Tensor:
+    def _cond(
+        self,
+        codepoint: torch.Tensor,
+        font_meta: torch.Tensor,
+        cond_drop: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Concatenated codepoint + factorized style conditioning embedding.
 
         ``font_meta`` is ``(B, 2)`` float32: ``[family_id, style]`` where
         ``family_id`` and ``style`` are integer indices (``style`` 0 = roman,
         1 = italic).
+
+        ``cond_drop`` is an optional ``(B,)`` bool mask; where ``True`` the
+        entire conditioning is replaced with the learned null embedding (used
+        for classifier-free guidance).
         """
         family_id = font_meta[:, 0].long()
         style = font_meta[:, 1].long()
@@ -250,7 +263,10 @@ class FontIdConditionalUnet(nn.Module):
             + self.style_emb(style)
             + self.italic_family_emb(family_id) * italic
         )
-        return torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
+        c = torch.cat([self.codepoint_emb(codepoint), f], dim=-1)
+        if cond_drop is not None:
+            c = torch.where(cond_drop.unsqueeze(-1), self.null_cond, c)
+        return c
 
     def predict_geometry(
         self,
@@ -310,6 +326,7 @@ class FontIdConditionalUnet(nn.Module):
         codepoint: torch.Tensor,
         font_meta: torch.Tensor,
         x_self_cond: torch.Tensor | None = None,
+        cond_drop: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.self_condition:
             x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
@@ -319,7 +336,7 @@ class FontIdConditionalUnet(nn.Module):
         r = x.clone()
 
         t = self.time_mlp(time)
-        c = self._cond(codepoint, font_meta)
+        c = self._cond(codepoint, font_meta, cond_drop=cond_drop)
 
         h = []
         for block1, block2, attn, downsample in self.downs:
@@ -361,6 +378,8 @@ class FontIdDiffusion(nn.Module):
         ddim_sampling_eta: float = 0.0,
         self_condition: bool = False,
         min_snr_gamma: float = 5.0,
+        cond_drop_prob: float = 0.0,
+        cond_scale: float = 1.0,
     ) -> None:
         super().__init__()
         assert model.channels == model.out_dim
@@ -369,6 +388,8 @@ class FontIdDiffusion(nn.Module):
         self.image_size = image_size
         self.self_condition = self_condition
         self.min_snr_gamma = min_snr_gamma
+        self.cond_drop_prob = cond_drop_prob
+        self.cond_scale = cond_scale
 
         if beta_schedule == "linear":
             betas = linear_beta_schedule(timesteps)
@@ -432,20 +453,29 @@ class FontIdDiffusion(nn.Module):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
 
+        # Classifier-free guidance dropout: the *same* mask is used for the
+        # self-conditioning estimate and the main pass, so the denoiser never
+        # mixes a conditional self-cond with an unconditional prediction.
+        cond_drop = (
+            torch.rand(x_start.shape[0], device=x_start.device) < self.cond_drop_prob
+        )
+
         # Self-conditioning: ~50% of the time run a first pass under no_grad to
         # estimate x0, then feed it back as a conditioning channel.  This slows
         # training ~25% but improves sample quality.
         x_self_cond = None
         if self.self_condition and random() < 0.5:
             with torch.no_grad():
-                first_pred = self.model(x, t, codepoint, font_meta)
+                first_pred = self.model(x, t, codepoint, font_meta, cond_drop=cond_drop)
                 x_self_cond = (
                     self.predict_start_from_noise(x, t, first_pred)
                     .clamp(-1.0, 1.0)
                     .detach()
                 )
 
-        pred = self.model(x, t, codepoint, font_meta, x_self_cond=x_self_cond)
+        pred = self.model(
+            x, t, codepoint, font_meta, x_self_cond=x_self_cond, cond_drop=cond_drop
+        )
         x0_pred = self.predict_start_from_noise(x, t, pred).detach()
 
         if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
@@ -504,6 +534,16 @@ class FontIdDiffusion(nn.Module):
             pred_noise = self.model(
                 img, time_cond, codepoint, font_meta, x_self_cond=x_start
             )
+            if self.cond_scale != 1.0:
+                uncond = self.model(
+                    img,
+                    time_cond,
+                    codepoint,
+                    font_meta,
+                    x_self_cond=x_start,
+                    cond_drop=torch.ones(b, dtype=torch.bool, device=device),
+                )
+                pred_noise = uncond + self.cond_scale * (pred_noise - uncond)
             x_start = self.predict_start_from_noise(img, time_cond, pred_noise)
             x_start = x_start.clamp(-1.0, 1.0)
 
@@ -556,6 +596,8 @@ class FontIdDiffusionModel(SaveLoadModel):
             ddim_sampling_eta=config.ddim_sampling_eta,
             self_condition=config.self_condition,
             min_snr_gamma=config.min_snr_gamma,
+            cond_drop_prob=config.cond_drop_prob,
+            cond_scale=config.cond_scale,
         )
 
     def forward(

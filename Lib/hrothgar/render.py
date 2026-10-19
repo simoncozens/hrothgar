@@ -7,9 +7,12 @@ Single source of truth for everything that turns a font into a glyph image:
 * the shared crop-to-ink normalization policy (:func:`crop_to_ink`,
   :func:`normalize_bitmap`) and its geometry labels (``GEOMETRY_SPEC`` /
   ``GEOMETRY_NAMES``)
-* the model-facing renderers used by the diffusion generator, the upscaler and
-  the style embedder (:func:`render_glyph`,
-  :func:`render_glyph_with_geometry`, :func:`render_gid_with_geometry`)
+* the model-facing renderers used by the diffusion generator, the upscaler,
+  the style embedder and the set-membership model (:func:`render_glyph`,
+  :func:`render_glyph_with_geometry`, :func:`render_gid_with_geometry`,
+  :func:`render_glyph_uniform`, :func:`render_gid_uniform`)
+* the em-space :class:`Frame` those uniform renderers draw into, and
+  :func:`frame_for_codepoints` for framing a font by its own ink envelope
 
 Glyphs are rendered as ink-on-white: ink near 0.0 on a white (1.0) background.
 The crop-to-ink convention deliberately discards aspect ratio — the generator
@@ -441,6 +444,51 @@ def geometry_tensor(geometry: dict[str, float]) -> torch.Tensor:
     )
 
 
+def _geometry_from_raw(raw: RawGlyph, ppem: int) -> dict[str, float]:
+    """Compute the five em-unit geometry labels from a raw FreeType bitmap.
+
+    Shared by the crop-to-ink path (:func:`normalize_bitmap`) and the
+    uniform-scale path (:func:`render_gid_uniform`), so the labels stay
+    identical no matter which framing the image uses.  ``ppem`` is the
+    resolution the glyph was rendered at (1 em == ``ppem`` pixels), so dividing
+    pixel offsets by it yields em units.
+    """
+    if raw.bitmap.size == 0:
+        # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
+        return {
+            "scale_x": 0.0,
+            "scale_y": 0.0,
+            "left_sidebearing": 0.0,
+            "descender_depth": 0.0,
+            "advance": raw.advance_px / ppem,
+        }
+
+    coverage = np.asarray(raw.bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
+    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches crop_to_ink's threshold
+
+    if not ink.any():
+        return {
+            "scale_x": 0.0,
+            "scale_y": 0.0,
+            "left_sidebearing": float(raw.bitmap_left) / ppem,
+            "descender_depth": -float(raw.bitmap_top) / ppem,
+            "advance": raw.advance_px / ppem,
+        }
+
+    ys, xs = ink.nonzero()
+    y0, y1 = int(ys.min()), int(ys.max())
+    x0, x1 = int(xs.min()), int(xs.max())
+    scale_y = (y1 - y0 + 1) / ppem
+    baseline_offset = (raw.bitmap_top - y0) / ppem
+    return {
+        "scale_x": (x1 - x0 + 1) / ppem,
+        "scale_y": scale_y,
+        "left_sidebearing": (raw.bitmap_left + x0) / ppem,
+        "descender_depth": scale_y - baseline_offset,
+        "advance": raw.advance_px / ppem,
+    }
+
+
 def normalize_bitmap(
     bitmap: np.ndarray,
     bitmap_left: int,
@@ -468,30 +516,24 @@ def normalize_bitmap(
         ``descender_depth``, ``advance`` in em units.
     """
     ppem = ppem if ppem is not None else size
-    if bitmap.size == 0:
+    raw = RawGlyph(
+        bitmap=np.asarray(bitmap, dtype=np.uint8),
+        bitmap_left=int(bitmap_left),
+        bitmap_top=int(bitmap_top),
+        advance_px=float(advance_px),
+    )
+    geometry = _geometry_from_raw(raw, ppem)
+
+    if raw.bitmap.size == 0:
         # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
         image = torch.ones((1, size, size), dtype=torch.float32)
-        geometry = {
-            "scale_x": 0.0,
-            "scale_y": 0.0,
-            "left_sidebearing": 0.0,
-            "descender_depth": 0.0,
-            "advance": advance_px / ppem,
-        }
         return image, geometry
 
-    coverage = np.asarray(bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
+    coverage = np.asarray(raw.bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
     ink = coverage > (1.0 - _INK_THRESHOLD)  # matches crop_to_ink's threshold
 
     if not ink.any():
         image = torch.ones((1, size, size), dtype=torch.float32)
-        geometry = {
-            "scale_x": 0.0,
-            "scale_y": 0.0,
-            "left_sidebearing": float(bitmap_left) / ppem,
-            "descender_depth": -float(bitmap_top) / ppem,
-            "advance": advance_px / ppem,
-        }
         return image, geometry
 
     ys, xs = ink.nonzero()
@@ -509,15 +551,6 @@ def normalize_bitmap(
         0
     ]  # (1, size, size)
 
-    scale_y = (y1 - y0 + 1) / ppem
-    baseline_offset = (bitmap_top - y0) / ppem
-    geometry = {
-        "scale_x": (x1 - x0 + 1) / ppem,
-        "scale_y": scale_y,
-        "left_sidebearing": (bitmap_left + x0) / ppem,
-        "descender_depth": scale_y - baseline_offset,
-        "advance": advance_px / ppem,
-    }
     return image, geometry
 
 
@@ -632,6 +665,287 @@ def render_glyph_with_geometry(
     """
     gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
     return render_gid_with_geometry(font, gid, size, axis_position=axis_position)
+
+
+# ── Framing ──────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Frame:
+    """The em-space rectangle a uniform render draws into the square canvas.
+
+    The four values are the frame's edges as signed em offsets from the glyph
+    origin (x = 0) and the baseline (y = 0, positive up), so the frame spans
+    ``x in [left, right]`` and ``y in [bottom, top]``.  The legacy 2em framing
+    (:data:`UNIFORM_FRAME`) is ``Frame(-0.5, 1.5, -0.5, 1.5)``: 0.5em of left
+    margin, 1.5em of ascender room, 0.5em of descender room, and a right edge
+    1.5em to the right of the origin.
+
+    A frame need not be square.  The renderer keeps a single uniform scale (so
+    the aspect ratio that content distinctions such as ``o``/``O`` depend on
+    survives), fitted to the frame's larger dimension, and centres the frame in
+    the canvas.
+    """
+
+    left: float = -0.5
+    right: float = 1.5
+    bottom: float = -0.5
+    top: float = 1.5
+
+    def __post_init__(self) -> None:
+        if not self.left < self.right or not self.bottom < self.top:
+            raise ValueError(
+                "Frame needs left < right and bottom < top, got "
+                f"left={self.left} right={self.right} "
+                f"bottom={self.bottom} top={self.top}"
+            )
+
+    @property
+    def width(self) -> float:
+        return self.right - self.left
+
+    @property
+    def height(self) -> float:
+        return self.top - self.bottom
+
+    @property
+    def em_span(self) -> float:
+        """Em covered by one canvas side: the frame's larger dimension."""
+        return max(self.width, self.height)
+
+    @classmethod
+    def from_extents(
+        cls,
+        x_min: float,
+        y_min: float,
+        x_max: float,
+        y_max: float,
+        *,
+        margin: float = 0.0,
+        min_size: float = 0.0,
+    ) -> Frame:
+        """The frame enclosing an ink box in em, optionally grown and floored.
+
+        ``margin`` grows each dimension by that fraction (so 0.08 gives 8% more
+        room); ``min_size`` floors each dimension in em, so a degenerate box —
+        a blank glyph, a single inkless codepoint — cannot hand the renderer a
+        zero span.
+        """
+        width = max(x_max - x_min, min_size)
+        height = max(y_max - y_min, min_size)
+        centre_x = (x_min + x_max) / 2.0
+        centre_y = (y_min + y_max) / 2.0
+        half_x = width * (1.0 + margin) / 2.0
+        half_y = height * (1.0 + margin) / 2.0
+        return cls(
+            centre_x - half_x,
+            centre_x + half_x,
+            centre_y - half_y,
+            centre_y + half_y,
+        )
+
+
+# The canonical 2em framing, and what every existing caller gets.
+UNIFORM_FRAME = Frame()
+
+# How much to grow a font's ink envelope when framing that font.  The measured
+# outlines are the *default instance* (``glyf``/``CFF`` store one), so a render
+# at an axis extreme (``wght``/``opsz``/``GRAD``) grows past the envelope.
+ENVELOPE_FRAME_MARGIN = 0.08
+
+
+# Smaller than this (em) and a frame cannot hold a legible glyph anyway; it
+# only guards the division in the renderer against degenerate envelopes.
+MIN_FRAME_SIZE = 0.2
+
+
+def frame_for_codepoints(
+    font,
+    codepoints: Sequence[int],
+    *,
+    margin: float = ENVELOPE_FRAME_MARGIN,
+    min_size: float = MIN_FRAME_SIZE,
+) -> Frame:
+    """The ink envelope of ``codepoints`` in ``font``, as a :class:`Frame` (em).
+
+    This is the per-font frame that makes a letter occupy comparable pixels in
+    every font.  It is measured once from the font's **default instance**, so it
+    is a per-font *constant*: every glyph of the font is drawn into the same
+    rectangle, which is what preserves the within-font relative sizes that
+    content distinctions depend on.  Unlike crop-to-ink it is not per-glyph.
+
+    Fonts whose codepoints render blank fall back to :data:`UNIFORM_FRAME`.
+    """
+    hb_face = font.hb_face
+    upem = hb_face.upem or 1000
+    hb_font = hb.Font(hb_face)
+    hb_font.scale = (upem, upem)  # extents in font units
+
+    x_min = y_min = float("inf")
+    x_max = y_max = float("-inf")
+    for codepoint in codepoints:
+        gid = hb_font.get_nominal_glyph(codepoint)
+        if gid is None:
+            continue
+        extents = hb_font.get_glyph_extents(gid)
+        if extents is None or (extents.width == 0 and extents.height == 0):
+            continue  # blank glyph (space, missing ink): nothing to frame
+        x = extents.x_bearing / upem
+        y = extents.y_bearing / upem
+        x_min = min(x_min, x)
+        x_max = max(x_max, x + extents.width / upem)
+        y_max = max(y_max, y)
+        y_min = min(y_min, y + extents.height / upem)  # hb heights are negative
+
+    if x_min > x_max:
+        return UNIFORM_FRAME
+    return Frame.from_extents(
+        x_min, y_min, x_max, y_max, margin=margin, min_size=min_size
+    )
+
+
+# ── Uniform-scale renderers ────────────────────────────────────────────────
+
+
+def render_gid_uniform(
+    font,
+    gid: int,
+    size: int,
+    axis_position: Sequence[float] | None = None,
+    *,
+    frame: Frame = UNIFORM_FRAME,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Render a glyph by GID at a uniform scale into a fixed square.
+
+    The canvas shows exactly the em rectangle ``frame`` (default
+    :data:`UNIFORM_FRAME`, the 2em window this function has always used: the
+    baseline 1.5em from the top, the X origin 0.5em from the left, ``1 em ==
+    size // 2`` pixels).  That default is the window :func:`place_glyph` and
+    :func:`denormalize_uniform` invert, so generation and set-membership keep
+    round-tripping — a caller using a custom frame must denormalize with the
+    same one.  A tighter frame makes every glyph *larger* at the same
+    output ``size`` — the frame is the only lever on how many pixels a given em
+    extent gets — which is why a caller with a per-font ink envelope
+    (:func:`frame_for_codepoints`) passes it here: the same letter then occupies
+    comparable pixels in every font, instead of shrinking with the design's
+    x-height.
+
+    Aspect ratio and absolute em extent are kept, and ink outside the frame is
+    clipped, unlike crop-to-ink.  A non-square frame keeps the one uniform scale
+    (fitted to its larger dimension) and is centred in the canvas.
+
+    The glyph is rendered supersampled (:func:`render_size`) and downscaled so
+    corners survive the AA.
+
+    Returns:
+        ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
+        tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is the same
+        five em-unit labels as :func:`render_gid_with_geometry` — always in the
+        font's own em units, whatever the frame.
+    """
+    rsize = render_size(size)
+    span = frame.em_span  # em covered by one canvas side
+    ppm = max(1, round(rsize / span))  # 1 em == ppm pixels
+    raw = render_gid_raw(font.path, gid, ppm, axis_position=axis_position)
+    geometry = _geometry_from_raw(raw, ppm)
+
+    # Centre the frame in the square canvas (a no-op for a square frame).
+    pad_x = (span - frame.width) / 2.0
+    pad_y = (span - frame.height) / 2.0
+    baseline_y = round((frame.top + pad_y) * ppm)
+    origin_x = round((pad_x - frame.left) * ppm)
+    canvas = np.full((rsize, rsize), 255, dtype=np.uint8)
+    _paste_bitmap_onto_canvas(
+        canvas=canvas,
+        bitmap_array=raw.bitmap,
+        bitmap_left=origin_x + raw.bitmap_left,
+        bitmap_top=raw.bitmap_top,
+        baseline_y=baseline_y,
+    )
+
+    # Ink as 0.0 on a white 1.0 background, downscaled from the supersampled canvas.
+    out = torch.from_numpy(canvas.astype(np.float32) / 255.0)  # (rsize, rsize)
+    image = F.interpolate(
+        out[None, None], size=(size, size), mode="bilinear", align_corners=False
+    )[0, 0]  # (size, size)
+    return image, geometry
+
+
+def render_glyph_uniform(
+    font,
+    codepoint: int,
+    size: int,
+    axis_position: Sequence[float] | None = None,
+    *,
+    frame: Frame = UNIFORM_FRAME,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """Render + uniform-scale a glyph by codepoint, returning its geometry labels.
+
+    See :func:`render_gid_uniform` for the framing.
+    """
+    gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
+    return render_gid_uniform(font, gid, size, axis_position=axis_position, frame=frame)
+
+
+def denormalize_uniform(
+    image: np.ndarray,
+    geometry: Sequence[float],
+    size: int,
+    *,
+    frame: Frame = UNIFORM_FRAME,
+) -> torch.Tensor:
+    """Denormalize a crop-to-ink glyph into the uniform square framing.
+
+    Inverse of :func:`render_gid_uniform`: un-squares a crop-to-ink normalized
+    glyph back to its true em extent and places it onto a ``size``-square canvas
+    showing exactly the em rectangle ``frame`` (default :data:`UNIFORM_FRAME`:
+    baseline 1.5em from the top, X origin 0.5em from the left, ``1 em ==
+    size / 2`` pixels).  Used to frame generated glyphs the same way the
+    set-membership model's training images are framed; a caller using a
+    per-font frame must pass the same one it rendered that font with.
+
+    Args:
+        image: ``(H, W)`` float32 array in [0, 1], ink = 0, white = 1 — a
+            crop-to-ink normalized square.
+        geometry: the five em-unit labels in canonical order
+            ``(scale_x, scale_y, left_sidebearing, descender_depth, advance)``.
+        size: output square side length.
+
+    Returns:
+        ``(size, size)`` float32 tensor in [0, 1] (ink = 0, white = 1).
+    """
+    ppm = size / frame.em_span  # pixels per em
+    scale_x, scale_y, lsb, descender_depth, _advance = (float(v) for v in geometry)
+    baseline_offset = scale_y - descender_depth
+
+    h_px = max(1, round(scale_y * ppm))
+    w_px = max(1, round(scale_x * ppm))
+    src = (
+        torch.from_numpy(np.ascontiguousarray(image, dtype=np.float32))
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+    glyph = F.interpolate(
+        src, size=(h_px, w_px), mode="bilinear", align_corners=False
+    )[0, 0].numpy()  # (h_px, w_px)
+
+    # Centre the frame in the square canvas (a no-op for a square frame).
+    pad_x = (frame.em_span - frame.width) / 2.0
+    pad_y = (frame.em_span - frame.height) / 2.0
+    origin_x = round((pad_x - frame.left) * ppm)
+    baseline_y = round((frame.top + pad_y) * ppm)
+    canvas = np.ones((size, size), dtype=np.float32)
+    x0 = origin_x + round(lsb * ppm)
+    y0 = baseline_y - round(baseline_offset * ppm)
+
+    gy1 = glyph.shape[0]
+    gx1 = glyph.shape[1]
+    cy0, cy1 = max(0, y0), min(size, y0 + gy1)
+    cx0, cx1 = max(0, x0), min(size, x0 + gx1)
+    if cy1 > cy0 and cx1 > cx0:
+        canvas[cy0:cy1, cx0:cx1] = glyph[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
+
+    return torch.from_numpy(canvas)
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────

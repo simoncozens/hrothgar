@@ -69,6 +69,8 @@ class FontIdTrainingLoop(TrainingLoop):
             geometry_loss_weight=train_args.geometry_weight,
             geometry_std=maker.geometry_std,
             min_snr_gamma=train_args.min_snr_gamma,
+            cond_drop_prob=train_args.cond_drop_prob,
+            cond_scale=train_args.cond_scale,
         )
         config.save_sidecar(train_args.model_path)
         # Persist the codepoint ordering so inference can map a codepoint to its id.
@@ -446,6 +448,19 @@ if __name__ == "__main__":
         type=float,
         default=5.0,
         help="Min-SNR loss weighting gamma (<= 0 disables, uniform)",
+    )
+    parser.add_argument(
+        "--cond-drop-prob",
+        type=float,
+        default=0.1,
+        help="Classifier-free guidance: fraction of training samples whose "
+        "conditioning is dropped (0 disables CFG)",
+    )
+    parser.add_argument(
+        "--cond-scale",
+        type=float,
+        default=3.0,
+        help="Classifier-free guidance scale at sampling (1.0 = no guidance)",
     )
     parser.add_argument(
         "--precision",

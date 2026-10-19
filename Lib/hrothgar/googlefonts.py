@@ -108,6 +108,22 @@ class Font:
         return hbfont.get_glyph_h_advance(gid)
 
 
+def load_family_tags(repo_path) -> dict[str, dict[str, float]]:
+    """Parse ``tags/all/families.csv`` into ``{family: {tag: centile}}``.
+
+    Shared by :meth:`GoogleFonts._init_tags` and the content-error audit, which
+    needs the ``/Special use/*`` tags without loading every font.
+    """
+    import csv
+
+    tag_csv = Path(repo_path) / "tags" / "all" / "families.csv"
+    tags: dict[str, dict[str, float]] = {}
+    with tag_csv.open() as f:
+        for family, _variation, tag, value in csv.reader(f):
+            tags.setdefault(family, {})[tag] = float(value)
+    return tags
+
+
 class GoogleFonts:
     """A class for interacting with the Google Fonts repository.
     It loads all the fonts and their metadata, and provides methods for accessing them.
@@ -154,23 +170,18 @@ class GoogleFonts:
                 break
 
     def _init_tags(self):
-        # Need a proper csv decoder to handle quoted values, etc.
-        import csv
-
-        tag_csv = self.repo_path / "tags" / "all" / "families.csv"
-
-        with tag_csv.open() as f:
-            reader = csv.reader(f)
-            for line in reader:
-                family, _variation, tag, value = line
-                self.tags[family] = self.tags.get(family, {})
-                self.tags[family][tag] = float(value)
+        for family, family_tags in load_family_tags(self.repo_path).items():
+            self.tags.setdefault(family, {}).update(family_tags)
 
     def should_skip(self, font: GoogleFont) -> bool:
         if font.path.parts[-2].startswith("noto"):
             return True
-        # Ban all small-caps / guideline fonts, they mess everything up
-        if "SC" in str(font.path) or "Guides" in str(font.path):
+        # Ban all small-caps / guideline fonts, they mess everything up.
+        # Match "guide" case-insensitively: the family is spelled "Guides",
+        # "Guideline" or "GuideLine" depending on the source, and the older
+        # exact "Guides" check let e.g. Betania Patmos Guide Line (a diagram
+        # font) through.
+        if "SC" in str(font.path) or "guide" in str(font.path).lower():
             return True
         if (
             font.tags().get("/Special use/Symbols", 0)

@@ -24,6 +24,7 @@ implemented for the scaffold.
 from __future__ import annotations
 
 import math
+from random import random
 
 import torch
 import torch.nn.functional as F
@@ -46,6 +47,25 @@ from einops import rearrange
 from torch import einsum, nn
 
 from hrothgar.diffusion.config import ExemplarDiffusionConfig
+from hrothgar.render import (
+    DESCENDER_SNAP_EPSILON,
+    GEOMETRY_NAMES,
+    GEOMETRY_SPEC,
+)
+from hrothgar.utils import SaveLoadModel
+
+
+def _apply_activation(raw: torch.Tensor, activation: str) -> torch.Tensor:
+    """Apply the geometry head's per-output activation (mirrors ``fontid``)."""
+    return torch.sigmoid(raw) if activation == "sigmoid" else torch.tanh(raw)
+
+
+def _decode_geometry(raw: torch.Tensor) -> torch.Tensor:
+    """Decode ``(B, 5)`` raw head logits to em-unit geometry values."""
+    cols = []
+    for i, (_, activation, scale) in enumerate(GEOMETRY_SPEC):
+        cols.append(_apply_activation(raw[:, i], activation) * scale)
+    return torch.stack(cols, dim=1)
 
 # ---------------------------------------------------------------------------
 # Style encoder
@@ -190,13 +210,24 @@ class ExemplarConditionalUnet(nn.Module):
         attn_dim_head: int = 32,
         attn_heads: int = 4,
         attn_resolutions: tuple[int, ...] = (8, 16),
+        self_condition: bool = False,
+        geometry_std: tuple[float, ...] | None = None,
     ) -> None:
         super().__init__()
+        if geometry_std is not None:
+            self.register_buffer(
+                "geometry_std", torch.tensor(geometry_std, dtype=torch.float32)
+            )
+        else:
+            self.register_buffer(
+                "geometry_std", torch.ones(len(GEOMETRY_SPEC), dtype=torch.float32)
+            )
         self.channels = channels
         self.out_dim = channels
-        self.self_condition = False
+        self.self_condition = self_condition
 
-        self.init_conv = nn.Conv2d(channels, dim, 7, padding=3)
+        input_channels = channels * (2 if self_condition else 1)
+        self.init_conv = nn.Conv2d(input_channels, dim, 7, padding=3)
 
         dims = [dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -210,6 +241,33 @@ class ExemplarConditionalUnet(nn.Module):
             nn.Linear(time_dim, time_dim),
         )
         self.codepoint_emb = nn.Embedding(num_codepoints, time_dim)
+
+        # Geometry head: predicts the five em-unit labels so the crop-to-ink
+        # glyph can be placed back on the baseline.  Conditioning = codepoint
+        # embedding + a globally-pooled style summary (mean over the context
+        # feature map) + the glyph's own "mode" vector.  Global pooling is the
+        # right call here: the geometry labels (scale / advance / lsb) are
+        # global properties, unlike the rendering, which needs the spatial
+        # context via cross-attention.
+        self.mode_dim = time_dim
+        self.glyph_encoder = nn.Sequential(
+            nn.Conv2d(channels, 32, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.GELU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(128, self.mode_dim),
+            nn.GELU(),
+            nn.Linear(self.mode_dim, self.mode_dim),
+        )
+        self.geometry_head = nn.Sequential(
+            nn.Linear(time_dim + context_dim + self.mode_dim, time_dim),
+            nn.GELU(),
+            nn.Linear(time_dim, len(GEOMETRY_SPEC)),
+        )
 
         attn_res = set(attn_resolutions)
         self._cross_blocks: list[CrossAttentionBlock] = []
@@ -349,13 +407,57 @@ class ExemplarConditionalUnet(nn.Module):
         ws = [b.attn.last_attn for b in self._cross_blocks]
         return [w for w in ws if w is not None]
 
+    def predict_geometry(
+        self,
+        codepoint: torch.Tensor,
+        context: torch.Tensor,
+        glyph: torch.Tensor,
+        snap: bool = True,
+    ) -> torch.Tensor:
+        """Predict the five geometry labels (em units) for ``glyph``.
+
+        ``glyph`` is the crop-to-ink normalized glyph ``(B, 1, H, W)`` in
+        ``[0, 1]``; ``context`` is the style feature map ``(B, C, h, w)``.  The
+        context is globally pooled, because the geometry labels are global
+        properties of the glyph-in-font, not localized detail.
+        """
+        c = self.codepoint_emb(codepoint)
+        style = context.mean(dim=1)  # (B, context_dim), pooled over tokens
+        mode = self.glyph_encoder(glyph)  # (B, mode_dim)
+        raw = self.geometry_head(torch.cat([c, style, mode], dim=-1))
+        out = _decode_geometry(raw)
+        if snap:
+            idx = GEOMETRY_NAMES.index("descender_depth")
+            dd = out[:, idx : idx + 1]
+            snapped = torch.where(
+                torch.abs(dd) < DESCENDER_SNAP_EPSILON, torch.zeros_like(dd), dd
+            )
+            out = torch.cat([out[:, :idx], snapped, out[:, idx + 1 :]], dim=1)
+        return out
+
+    def geometry_loss(
+        self,
+        codepoint: torch.Tensor,
+        context: torch.Tensor,
+        glyph: torch.Tensor,
+        gt_geometry: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-label variance-normalised MSE in em units (see ``fontid``)."""
+        pred = self.predict_geometry(codepoint, context, glyph, snap=False)
+        se = (pred - gt_geometry) ** 2
+        return (se / self.geometry_std.square()).mean()
+
     def forward(
         self,
         x: torch.Tensor,
         time: torch.Tensor,
         context: torch.Tensor,
         codepoint: torch.Tensor,
+        x_self_cond: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if self.self_condition:
+            x_self_cond = default(x_self_cond, lambda: torch.zeros_like(x))
+            x = torch.cat((x_self_cond, x), dim=1)
         x = self.init_conv(x)
         r = x.clone()
 
@@ -408,12 +510,16 @@ class ExemplarDiffusion(nn.Module):
         sampling_timesteps: int | None = 50,
         beta_schedule: str = "cosine",
         ddim_sampling_eta: float = 0.0,
+        self_condition: bool = False,
+        min_snr_gamma: float = 5.0,
     ) -> None:
         super().__init__()
         assert model.channels == model.out_dim
         self.model = model
         self.channels = model.channels
         self.image_size = image_size
+        self.self_condition = self_condition
+        self.min_snr_gamma = min_snr_gamma
 
         if beta_schedule == "linear":
             betas = linear_beta_schedule(timesteps)
@@ -463,12 +569,42 @@ class ExemplarDiffusion(nn.Module):
         )
 
     def p_losses(self, x_start, t, context, codepoint, noise=None):
+        """Return just the diffusion loss (convenience over ``p_losses_with_x0``)."""
+        return self.p_losses_with_x0(x_start, t, context, codepoint, noise)[0]
+
+    def p_losses_with_x0(self, x_start, t, context, codepoint, noise=None):
+        """Return ``(diffusion_loss, predicted_x0)`` (see ``fontid``)."""
         noise = default(noise, lambda: torch.randn_like(x_start))
         x = self.q_sample(x_start, t, noise)
-        pred = self.model(x, t, context, codepoint)
-        return F.mse_loss(pred, noise)
+
+        x_self_cond = None
+        if self.self_condition and random() < 0.5:
+            with torch.no_grad():
+                first_pred = self.model(x, t, context, codepoint)
+                x_self_cond = (
+                    self.predict_start_from_noise(x, t, first_pred)
+                    .clamp(-1.0, 1.0)
+                    .detach()
+                )
+
+        pred = self.model(x, t, context, codepoint, x_self_cond=x_self_cond)
+        x0_pred = self.predict_start_from_noise(x, t, pred).detach()
+
+        if self.min_snr_gamma is None or self.min_snr_gamma <= 0:
+            loss = F.mse_loss(pred, noise)
+        else:
+            loss = F.mse_loss(pred, noise, reduction="none")
+            loss = loss.mean(dim=(1, 2, 3))
+            snr = self.alphas_cumprod[t] / (1.0 - self.alphas_cumprod[t])
+            weight = snr.clamp(max=self.min_snr_gamma) / snr
+            loss = (loss * weight).mean()
+
+        return loss, unnormalize_to_zero_to_one(x0_pred).clamp(0.0, 1.0)
 
     def forward(self, img, context, codepoint, times=None):
+        return self.forward_with_x0(img, context, codepoint, times)[0]
+
+    def forward_with_x0(self, img, context, codepoint, times=None):
         b = img.shape[0]
         img = normalize_to_neg_one_to_one(img)
         times = default(
@@ -477,7 +613,7 @@ class ExemplarDiffusion(nn.Module):
                 0, self.num_timesteps, (b,), device=img.device
             ).long(),
         )
-        return self.p_losses(img, times, context, codepoint)
+        return self.p_losses_with_x0(img, times, context, codepoint)
 
     @torch.no_grad()
     def sample(self, context, codepoint):
@@ -498,9 +634,12 @@ class ExemplarDiffusion(nn.Module):
         time_pairs = list(zip(times[:-1], times[1:]))
 
         img = torch.randn(shape, device=device)
+        x_start = None
         for time, time_next in time_pairs:
             time_cond = torch.full((b,), time, device=device, dtype=torch.long)
-            pred_noise = self.model(img, time_cond, context, codepoint)
+            pred_noise = self.model(
+                img, time_cond, context, codepoint, x_self_cond=x_start
+            )
             x_start = self.predict_start_from_noise(img, time_cond, pred_noise)
             x_start = x_start.clamp(-1.0, 1.0)
 
@@ -520,13 +659,13 @@ class ExemplarDiffusion(nn.Module):
         return unnormalize_to_zero_to_one(img)
 
 
-# ---------------------------------------------------------------------------
-# Facade
-# ---------------------------------------------------------------------------
+class ExemplarDiffusionModel(SaveLoadModel):
+    """Facade for the exemplar-conditional diffusion model.
 
-
-class ExemplarDiffusionModel(nn.Module):
-    """StyleEncoder + ExemplarDiffusion facade for training/sampling."""
+    Owns the style encoder (evidence glyphs -> style context map) plus the
+    denoiser/diffusion process, mirroring :class:`FontIdDiffusionModel`'s
+    surface so the training loop and generator can treat the two models alike.
+    """
 
     def __init__(self, config: ExemplarDiffusionConfig) -> None:
         super().__init__()
@@ -551,6 +690,8 @@ class ExemplarDiffusionModel(nn.Module):
             attn_dim_head=config.attn_dim_head,
             attn_heads=config.attn_heads,
             attn_resolutions=config.attn_resolutions,
+            self_condition=config.self_condition,
+            geometry_std=config.geometry_std,
         )
         self.diffusion = ExemplarDiffusion(
             unet,
@@ -559,30 +700,58 @@ class ExemplarDiffusionModel(nn.Module):
             sampling_timesteps=config.sampling_timesteps,
             beta_schedule=config.beta_schedule,
             ddim_sampling_eta=config.ddim_sampling_eta,
+            self_condition=config.self_condition,
+            min_snr_gamma=config.min_snr_gamma,
         )
 
-    def encode_style(self, evidence: torch.Tensor) -> torch.Tensor:
-        """``evidence`` ``(B, N, C, H, W)`` -> flattened context ``(B, M, D)``."""
-        ctx = self.style_encoder(evidence)  # (B, D, h, w)
-        return rearrange(ctx, "b d h w -> b (h w) d")
+    def encode_context(self, evidence: torch.Tensor) -> torch.Tensor:
+        """Encode evidence glyphs ``(B, N, C, H, W)`` to style context tokens.
+
+        Returns ``(B, H'*W', context_dim)`` — the style encoder's spatial feature
+        map flattened into tokens, which is the form the cross-attention consumes.
+        """
+        feat = self.style_encoder(evidence)  # (B, context_dim, H', W')
+        return rearrange(feat, "b c h w -> b (h w) c")
 
     def attention_weights(self) -> list[torch.Tensor]:
         """Cross-attention weights from the most recent forward/sample pass."""
         return self.diffusion.model.attention_weights()
 
     def forward(
-        self,
-        img: torch.Tensor,
-        evidence: torch.Tensor,
-        codepoint: torch.Tensor,
+        self, img: torch.Tensor, context: torch.Tensor, codepoint: torch.Tensor
     ) -> torch.Tensor:
-        context = self.encode_style(evidence)
         return self.diffusion(img, context, codepoint)
 
+    def forward_with_x0(
+        self, img: torch.Tensor, context: torch.Tensor, codepoint: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.diffusion.forward_with_x0(img, context, codepoint)
+
     @torch.no_grad()
-    def sample(self, evidence: torch.Tensor, codepoint: torch.Tensor) -> torch.Tensor:
-        context = self.encode_style(evidence)
+    def sample(self, context: torch.Tensor, codepoint: torch.Tensor) -> torch.Tensor:
         return self.diffusion.sample(context, codepoint)
+
+    def predict_geometry(
+        self,
+        codepoint: torch.Tensor,
+        context: torch.Tensor,
+        glyph: torch.Tensor,
+        snap: bool = True,
+    ) -> torch.Tensor:
+        return self.diffusion.model.predict_geometry(
+            codepoint, context, glyph, snap=snap
+        )
+
+    def geometry_loss(
+        self,
+        codepoint: torch.Tensor,
+        context: torch.Tensor,
+        glyph: torch.Tensor,
+        gt_geometry: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.diffusion.model.geometry_loss(
+            codepoint, context, glyph, gt_geometry
+        )
 
 
 def build_exemplar_model(config: ExemplarDiffusionConfig) -> ExemplarDiffusionModel:
