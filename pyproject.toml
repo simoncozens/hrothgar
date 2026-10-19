@@ -45,7 +45,10 @@ where = ["Lib"]
 # [tool.basedpyright] (not [tool.pyright]) and rejects a pyproject.toml that
 # defines both sections.
 [tool.basedpyright]
+include = ["Lib", "scripts", "tests"]
+exclude = ["venv", ".venv"]
 venvPath = "."
+useLibraryCodeForTypes = false
 venv = ".venv"
 # Hand-written stubs for C extensions that ship without type information.
 stubPath = "typings"
