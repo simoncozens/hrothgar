@@ -620,6 +620,59 @@ def place_glyph(
     return canvas, origin_x, baseline_y, advance_x
 
 
+def crop_placed_to_frame(
+    placed,
+    frame: Frame,
+    *,
+    size: int = 256,
+    ppm: int = 128,
+    ascender_em: float = 1.5,
+    origin_x_em: float = 0.5,
+) -> np.ndarray:
+    """Re-frame a :func:`place_glyph` canvas into ``frame``, resized to ``size``.
+
+    A placed canvas is already in em space — baseline ``ascender_em`` em from
+    the top, X origin ``origin_x_em`` em from the left, ``1 em == ppm`` pixels —
+    so a tighter frame is just a crop of that canvas, no re-render.  The result
+    lines up with :func:`render_gid_uniform` for the same glyph and ``size``, so
+    a generated glyph re-framed here matches GT rendered there (up to the
+    geometry predictor's error).  Frames that extend past the placed canvas are
+    clipped; for the tight 1.40em frame that never happens (it sits inside the
+    2em window).
+
+    Args:
+        placed: ``(H, W)`` float32 array in [0, 1] (ink = 0, white = 1), a
+            :func:`place_glyph` output.
+        frame: the em rectangle to show, as a :class:`Frame`.
+        size: output square side length (matches ``render_gid_uniform``).
+        ppm / ascender_em / origin_x_em: the ``place_glyph`` conventions the
+            canvas was produced with.
+    """
+    span = frame.em_span
+    pad_x = (span - frame.width) / 2.0
+    pad_y = (span - frame.height) / 2.0
+    origin_x = origin_x_em * ppm
+    baseline_y = ascender_em * ppm
+    x0 = origin_x + (frame.left - pad_x) * ppm
+    x1 = origin_x + (frame.right + pad_x) * ppm
+    y0 = baseline_y - (frame.top + pad_y) * ppm
+    y1 = baseline_y - (frame.bottom - pad_y) * ppm
+
+    arr = np.asarray(placed, dtype=np.float32)
+    h, w = arr.shape
+    l = max(0, int(round(x0)))
+    r = min(w, int(round(x1)))
+    t = max(0, int(round(y0)))
+    b = min(h, int(round(y1)))
+    if r <= l or b <= t:  # degenerate: frame entirely outside the canvas
+        return np.ones((size, size), dtype=np.float32)
+
+    crop = arr[t:b, l:r]
+    src = torch.from_numpy(np.ascontiguousarray(crop, dtype=np.float32))[None, None]
+    out = F.interpolate(src, size=(size, size), mode="bilinear", align_corners=False)
+    return out[0, 0].numpy()
+
+
 # ── Model-facing crop-to-ink renderers ──────────────────────────────────────
 
 

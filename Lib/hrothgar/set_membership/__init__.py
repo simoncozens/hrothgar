@@ -1,6 +1,6 @@
 """Instance-membership model: "does this glyph belong to this font instance?".
 
-Given a crop-to-ink glyph (and its geometry), ``SetMembershipModel`` produces an
+Given a uniform scale-and-pad glyph image, ``SetMembershipModel`` produces an
 L2-normalized embedding; an instance's reference is the mean of its evidence
 glyphs' embeddings, and membership is the cosine between a query glyph and the
 instance reference.  It is used to evaluate the *style* part of glyph

@@ -28,10 +28,9 @@ class SetMembershipTrainingLoop(TrainingLoop):
 
     def post_init(self, train_args) -> None:
         config = SetMembershipConfig(
-            glyph_size=getattr(train_args, "glyph_size", 64),
+            glyph_size=getattr(train_args, "glyph_size", 128),
             codepoints_per_instance=getattr(train_args, "codepoints_per_instance", 8),
             instances_per_family=getattr(train_args, "instances_per_family", 2),
-            use_geometry=not getattr(train_args, "no_geometry", False),
         )
         self.config = config
         self.model = SetMembershipModel(config).to(self.device)
@@ -116,12 +115,9 @@ class SetMembershipTrainingLoop(TrainingLoop):
 
     def train_step(self, batch):
         images = batch["images"].to(self.device)
-        geometry = batch.get("geometry")
-        if geometry is not None:
-            geometry = geometry.to(self.device)
         ids = batch["instance_ids"].to(self.device)
 
-        z = self.model(images, geometry)
+        z = self.model(images)
         loss = glyph_contrastive_loss(
             z, ids, temperature=self.model.config.contrastive_temperature
         )
@@ -151,12 +147,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--num-epochs", type=int, default=100)
     p.add_argument("--validation-every", type=int, default=500)
     p.add_argument("--validation-batches", type=int, default=10)
-    p.add_argument("--glyph-size", type=int, default=64)
+    p.add_argument("--glyph-size", type=int, default=128)
     p.add_argument("--codepoints-per-instance", type=int, default=8)
     p.add_argument("--instances-per-family", type=int, default=2)
-    p.add_argument(
-        "--no-geometry", action="store_true", help="disable geometry conditioning"
-    )
     p.add_argument(
         "--val-embed-instances",
         type=int,

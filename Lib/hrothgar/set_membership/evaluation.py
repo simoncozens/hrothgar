@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from hrothgar.render import geometry_tensor, render_glyph_with_geometry
+from hrothgar.render import geometry_tensor, render_glyph_uniform
 from hrothgar.set_membership.config import SetMembershipConfig
 
 
@@ -70,7 +70,7 @@ def build_membership_panel(
     for instance in selected:
         ri, rg, qi, qg = [], [], [], []
         for cp in ref_cps:
-            image, geom = render_glyph_with_geometry(
+            image, geom = render_glyph_uniform(
                 instance.font,
                 cp,
                 config.glyph_size,
@@ -79,7 +79,7 @@ def build_membership_panel(
             ri.append(image.unsqueeze(0))
             rg.append(geometry_tensor(geom))
         for cp in query_cps:
-            image, geom = render_glyph_with_geometry(
+            image, geom = render_glyph_uniform(
                 instance.font,
                 cp,
                 config.glyph_size,
@@ -105,15 +105,12 @@ def build_membership_panel(
 
 
 def embed_glyphs(
-    model, images: torch.Tensor, geometry: torch.Tensor, device, chunk: int = 32
+    model, images: torch.Tensor, device, chunk: int = 32
 ) -> torch.Tensor:
     out = []
     for start in range(0, images.shape[0], chunk):
         with torch.no_grad():
-            z = model(
-                images[start : start + chunk].to(device),
-                geometry[start : start + chunk].to(device),
-            )
+            z = model(images[start : start + chunk].to(device))
         out.append(z.cpu())
     return torch.cat(out)
 
@@ -199,7 +196,6 @@ def membership_breakdown(model, panel: MembershipEvalPanel, device) -> dict:
     reference = embed_glyphs(
         model,
         panel.reference_images.flatten(0, 1),
-        panel.reference_geometry.flatten(0, 1),
         device,
     )
     r = panel.reference_images.shape[1]
@@ -209,7 +205,6 @@ def membership_breakdown(model, panel: MembershipEvalPanel, device) -> dict:
     query = embed_glyphs(
         model,
         panel.query_images.flatten(0, 1),
-        panel.query_geometry.flatten(0, 1),
         device,
     )
     q = panel.query_images.shape[1]

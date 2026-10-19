@@ -9,22 +9,19 @@ generated glyph is scored against the instance it was asked to match.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-# Same Latin core the similarity model uses, so the two share a glyph vocabulary.
-DEFAULT_INPUT_CODEPOINTS = [
-    ord(c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789&?"
-]
-
+from hrothgar.dataset_constants import LATIN_CORE
 
 @dataclass
 class SetMembershipConfig:
     """Configuration for the instance-membership model."""
 
-    # Input rendering (crop-to-ink + geometry, matching the glyph generator).
+    # Input rendering: uniform scale-and-pad glyph images (see
+    # ``hrothgar.render.render_glyph_uniform``), matching the framing the
+    # generator will denormalize to.
     input_codepoints: list[int] = field(
-        default_factory=lambda: list(DEFAULT_INPUT_CODEPOINTS)
+        default_factory=lambda: list(LATIN_CORE)
     )
-    glyph_size: int = 64
+    glyph_size: int = 128
     # Glyphs rendered per instance per batch (>=2, so positives exist).
     codepoints_per_instance: int = 8
     # Instances drawn per family per batch (same-family hard negatives).
@@ -40,7 +37,9 @@ class SetMembershipConfig:
     # L2-normalized embedding space shared by glyphs and instance prototypes.
     embedding_dim: int = 128
 
-    # Per-glyph geometry conditioning (scale/width/weight signal).
+    # Geometry labels are kept in the data pipeline for easy revert, but the
+    # model currently ignores them (image-only).  ``use_geometry`` /
+    # ``geometry_hidden_dim`` are retained for that reason and are unused.
     use_geometry: bool = True
     geometry_hidden_dim: int = 32
 
