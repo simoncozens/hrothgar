@@ -29,7 +29,7 @@ from hrothgar.diffusion.dataset_exemplar import ExemplarDatasetMaker
 from hrothgar.diffusion.exemplar import build_exemplar_model
 from hrothgar.llamagen_lpips import LPIPS
 from hrothgar.render import GEOMETRY_NAMES, place_glyph
-from hrothgar.utils import TrainingLoop
+from hrothgar.utils import TrainingLoop, apply_cli_defaults, load_cli_defaults
 
 
 class ExemplarTrainingLoop(TrainingLoop):
@@ -75,7 +75,10 @@ class ExemplarTrainingLoop(TrainingLoop):
             geometry_std=maker.geometry_std,
             min_snr_gamma=train_args.min_snr_gamma,
         )
-        config.save_sidecar(train_args.model_path)
+        config.save_sidecar(
+            train_args.model_path,
+            extra={"cli_args": getattr(train_args, "cli_args", {})},
+        )
         with Path(str(train_args.model_path) + ".codepoints.json").open("w") as f:
             json.dump(maker.cp_list, f, indent=2)
             f.write("\n")
@@ -298,6 +301,9 @@ def _parse_strata(spec: str) -> dict[str, float]:
 
 if __name__ == "__main__":
     import argparse
+    import sys
+
+    DEFAULT_MODEL_PATH = "models/exemplar_diffusion.pth"
 
     parser = argparse.ArgumentParser(
         description="Train exemplar-conditional diffusion model"
@@ -390,12 +396,25 @@ if __name__ == "__main__":
     parser.add_argument("--validation-every", type=int, default=1000)
     parser.add_argument("--validation-batches", type=int, default=20)
     parser.add_argument(
-        "--model-path", type=str, default="models/exemplar_diffusion.pth"
+        "--model-path", type=str, default=DEFAULT_MODEL_PATH
     )
 
-    args = parser.parse_args()
+    argv = sys.argv[1:]
+
+    # Resolve --model-path first so we can read any previous run's sidecar and
+    # use its recorded command-line arguments as defaults for this invocation.
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument("--model-path", type=str, default=DEFAULT_MODEL_PATH)
+    probe_args, _ = probe.parse_known_args(argv)
+    apply_cli_defaults(parser, load_cli_defaults(probe_args.model_path))
+
+    args = parser.parse_args(argv)
     if not args.dataset_path:
         raise ValueError("GOOGLE_FONTS_REPO not set and --dataset-path not given")
+
+    # Record the raw (pre-transform) command-line arguments so the training loop
+    # can persist them to the sidecar and a later resume can reload them.
+    args.cli_args = vars(args).copy()
 
     import hrothgar.dataset as ds
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import random
 import subprocess
 from pathlib import Path
@@ -51,6 +52,39 @@ def git_short_sha() -> str | None:
         return None
     sha = result.stdout.strip()
     return sha or None
+
+
+def load_cli_defaults(model_path) -> dict[str, object]:
+    """Load the ``cli_args`` record from a model's ``.conf.json`` sidecar.
+
+    Returns an empty dict when there is no sidecar, when the sidecar predates the
+    ``cli_args`` field, or when it can't be parsed — in which case the caller
+    falls back to requiring the flags on the command line.
+    """
+    sidecar = Path(str(model_path)).with_suffix(".conf.json")
+    if not sidecar.exists():
+        return {}
+    try:
+        with sidecar.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return dict(data.get("cli_args") or {})
+
+
+def apply_cli_defaults(parser, defaults: dict[str, object]) -> None:
+    """Set argparse defaults from a sidecar so a resumed run reproduces its
+    original hyperparameters without re-specifying every flag.
+
+    ``defaults`` maps argument *dest* names to values.  Mutating ``action.default``
+    (and clearing ``required``) makes argparse fill in the value for any argument
+    not given on the command line, while an explicitly-passed flag still wins.
+    """
+    for action in parser._actions:
+        dest = getattr(action, "dest", None)
+        if dest in defaults:
+            action.default = defaults[dest]
+            action.required = False
 
 
 def check_git_clean_and_get_commit_hash(train_args) -> str:

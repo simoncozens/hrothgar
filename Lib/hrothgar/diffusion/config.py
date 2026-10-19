@@ -164,13 +164,20 @@ class ExemplarDiffusionConfig:
     geometry_loss_weight: float = 1.0
     geometry_std: tuple[float, ...] | None = None
 
-    def save_sidecar(self, model_path) -> None:
-        """Save config as a JSON sidecar alongside the model weights."""
+    def save_sidecar(self, model_path, extra: dict | None = None) -> None:
+        """Save config as a JSON sidecar alongside the model weights.
+
+        ``extra`` holds additional keys to persist alongside the config fields
+        (the training loop passes the full command-line arguments here) so a
+        resumed run can reproduce its original hyperparameters.
+        """
         import hrothgar.utils as u
 
         config_path = Path(str(model_path)).with_suffix(".conf.json")
         data = dataclasses.asdict(self)
         data["git_sha"] = u.git_short_sha()
+        if extra:
+            data.update(extra)
         with config_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
@@ -256,13 +263,20 @@ class FontIdDiffusionConfig:
     # regardless of its natural magnitude.  ``None`` = raw MSE.
     geometry_std: tuple[float, ...] | None = None
 
-    def save_sidecar(self, model_path) -> None:
-        """Save config as a JSON sidecar alongside the model weights."""
+    def save_sidecar(self, model_path, extra: dict | None = None) -> None:
+        """Save config as a JSON sidecar alongside the model weights.
+
+        ``extra`` holds additional keys to persist alongside the config fields
+        (the training loop passes the full command-line arguments here) so a
+        resumed run can reproduce its original hyperparameters.
+        """
         import hrothgar.utils as u
 
         config_path = Path(str(model_path)).with_suffix(".conf.json")
         data = dataclasses.asdict(self)
         data["git_sha"] = u.git_short_sha()
+        if extra:
+            data.update(extra)
         with config_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, sort_keys=True)
             f.write("\n")
