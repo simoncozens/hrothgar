@@ -107,6 +107,9 @@ class Font:
         hbfont = hb.Font(self.hb_face)
         return hbfont.get_glyph_h_advance(gid)
 
+    def is_color(self) -> bool:
+        return "COLR" in self.hb_face.table_tags
+
 
 def load_family_tags(repo_path) -> dict[str, dict[str, float]]:
     """Parse ``tags/all/families.csv`` into ``{family: {tag: centile}}``.
@@ -189,17 +192,11 @@ class GoogleFonts:
             or font.tags().get("/Special use/Redaction", 0)
         ):
             return True
-        # Skip CJK; we don't want these big fonts with lots of characters
-        # and a different glyph construction style to dominate
-        has_cjk = [
-            "chinese-hongkong",
-            "chinese-simplified",
-            "chinese-traditional",
-            "japanese",
-            "korean",
-        ]
-        subsets = font.metadata.subsets
-        if any(subset in subsets for subset in has_cjk):
+        # Alien Block is just Too Weird
+        if font.path.parts[-2].startswith("alienblock"):
+            return True
+        # Ban color fonts
+        if "Color" in str(font.path) or font.is_color():
             return True
         return False
 
@@ -314,6 +311,7 @@ class GoogleFont(Font):
         if c is None:
             return "UNKNOWN"
         return "/".join(c)
+
 
 
 class StandaloneFont(Font):
