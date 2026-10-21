@@ -163,6 +163,13 @@ class ExemplarDiffusionConfig:
     # Self-conditioning + min-SNR weighting, matching the fontid model.
     self_condition: bool = True
     min_snr_gamma: float = 5.0
+    # Classifier-free guidance.  ``cond_drop_prob`` is the fraction of training
+    # samples whose (codepoint, style) conditioning is replaced with a learned
+    # null embedding; ``cond_scale`` is the guidance scale used at sampling.
+    # Defaults of 0.0 / 1.0 leave CFG disabled (matching the fontid model's
+    # off-by-default convention).
+    cond_drop_prob: float = 0.0
+    cond_scale: float = 1.0
 
     # Training.
     learning_rate: float = 1e-4

@@ -115,3 +115,6 @@ class FontStyleEmbeddingLossWeights:
     tag_prediction: float = 0.5
     family_positive_weight: float = 0.3
     tag_positive_weight: float = 1.0
+    # Summary-space view invariance: pulls the two disjoint glyph-subset views
+    # of each font's summary embedding together.  0.0 disables it.
+    view_invariance: float = 0.0

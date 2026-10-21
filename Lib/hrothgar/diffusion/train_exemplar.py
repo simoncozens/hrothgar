@@ -79,6 +79,8 @@ class ExemplarTrainingLoop(TrainingLoop):
             geometry_loss_weight=train_args.geometry_weight,
             geometry_std=maker.geometry_std,
             min_snr_gamma=train_args.min_snr_gamma,
+            cond_drop_prob=train_args.cond_drop_prob,
+            cond_scale=train_args.cond_scale,
         )
         config.save_sidecar(
             train_args.model_path,
@@ -405,6 +407,19 @@ if __name__ == "__main__":
     parser.add_argument("--timesteps", type=int, default=1000)
     parser.add_argument("--sampling-timesteps", type=int, default=100)
     parser.add_argument("--min-snr-gamma", type=float, default=5.0)
+    parser.add_argument(
+        "--cond-drop-prob",
+        type=float,
+        default=0.0,
+        help="Classifier-free guidance: fraction of training samples whose "
+        "conditioning is dropped (0 disables CFG)",
+    )
+    parser.add_argument(
+        "--cond-scale",
+        type=float,
+        default=1.0,
+        help="Classifier-free guidance scale at sampling (1.0 = no guidance)",
+    )
     parser.add_argument(
         "--precision",
         type=str,

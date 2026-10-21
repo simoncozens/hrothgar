@@ -270,6 +270,28 @@ def category_loss(
     return loss, accuracy
 
 
+def view_invariance_loss(embeddings: torch.Tensor) -> torch.Tensor:
+    """Pull the two views of each font's *summary* embedding together.
+
+    ``embeddings`` is ``(2B, D)`` with view 1 stacked on view 2.  The summary
+    (pre-projection) embedding is what downstream consumers actually use, so the
+    content-invariance that the disjoint-glyph-subset views are meant to teach
+    must be enforced *here*, not only through the contrastive projection head.
+    InfoNCE can otherwise be satisfied by spreading negatives apart while the
+    two views of the same font drift content-sensitive (visible as falling
+    sampling stability even as the contrastive loss drops).
+
+    Returns mean ``1 - cos(view1, view2)`` in ``[0, 2]``.
+    """
+    B = embeddings.shape[0] // 2
+    if B < 1:
+        return torch.tensor(0.0, device=embeddings.device)
+    v1 = F.normalize(embeddings[:B].float(), p=2, dim=-1, eps=1e-8)
+    v2 = F.normalize(embeddings[B:].float(), p=2, dim=-1, eps=1e-8)
+    cos = (v1 * v2).sum(dim=-1)  # (B,)
+    return (1.0 - cos).mean()
+
+
 def compute_losses(
     projections: torch.Tensor,
     predicted_tags: dict[str, torch.Tensor] | None,
@@ -284,6 +306,7 @@ def compute_losses(
     category_targets: torch.Tensor | None = None,
     text_embeddings: torch.Tensor | None = None,
     tag_vectors: torch.Tensor | None = None,
+    embeddings: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute combined loss and per-term breakdown.
 
@@ -322,13 +345,30 @@ def compute_losses(
     if category_logits is not None and category_targets is not None:
         cat_loss, cat_accuracy = category_loss(category_logits, category_targets)
 
-    total = weight * contr + weights.tag_prediction * tag_loss + cat_loss
+    # View invariance: pull the two views' summary embeddings together so the
+    # content-invariance the disjoint-glyph views are meant to teach is enforced
+    # on the deliverable vector, not just the contrastive projection.
+    inv = torch.tensor(0.0, device=device)
+    if embeddings is not None and weights.view_invariance > 0:
+        inv = view_invariance_loss(embeddings)
+
+    total = (
+        weight * contr
+        + weights.tag_prediction * tag_loss
+        + cat_loss
+        + weights.view_invariance * inv
+    )
 
     loss_info: dict[str, torch.Tensor] = {
         "contrastive": contr.detach(),
         "contrastive_weighted": (weight * contr).detach(),
         "loss": total.detach(),
     }
+    if embeddings is not None and weights.view_invariance > 0:
+        loss_info["view_invariance"] = inv.detach()
+        loss_info["view_invariance_weighted"] = (
+            weights.view_invariance * inv
+        ).detach()
     if predicted_tags is not None and target_tags:
         loss_info["tag_prediction"] = tag_loss.detach()
         loss_info["tag_prediction_weighted"] = (

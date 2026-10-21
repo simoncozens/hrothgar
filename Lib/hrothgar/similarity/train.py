@@ -179,6 +179,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         self.loss_weights = FontStyleEmbeddingLossWeights(
             family_positive_weight=config.family_positive_weight,
             tag_positive_weight=getattr(train_args, "tag_positive_weight", 1.0),
+            view_invariance=getattr(train_args, "view_invariance_weight", 0.0),
         )
 
         # ── Bookkeeping ─────────────────────────────────────────────────
@@ -296,7 +297,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         )
 
         with self._autocast_context():
-            _embedding, projection, predicted_tags, category_logits = self.model(
+            embedding, projection, predicted_tags, category_logits = self.model(
                 images, glyph_mask=glyph_mask
             )
 
@@ -313,6 +314,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 category_targets=category_2x,
                 text_embeddings=text_embeddings,
                 tag_vectors=tag_vectors,
+                embeddings=embedding,
             )
 
         return loss, loss_info
@@ -379,7 +381,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 )
 
                 with self._autocast_context():
-                    _emb, projection, predicted_tags, category_logits = self.model(
+                    embedding, projection, predicted_tags, category_logits = self.model(
                         images, glyph_mask=glyph_mask
                     )
                     _loss, loss_info = compute_losses(
@@ -395,6 +397,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         category_targets=category_2x,
                         text_embeddings=text_embeddings,
                         tag_vectors=tag_vectors,
+                        embeddings=embedding,
                     )
 
                 val_contrastive.append(loss_info["contrastive"])
@@ -824,6 +827,17 @@ def _parse_args() -> argparse.Namespace:
         "(0.0 = pure visual, 1.0 = full tag signal).  "
         "Use small values (e.g. 0.1) for gentle style nudges "
         "on top of a converged visual model.",
+    )
+    p.add_argument(
+        "--view-invariance-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the summary-space view-invariance term: pulls the two "
+        "disjoint glyph-subset views of each font's summary embedding together "
+        "(mean 1 - cosine).  0.0 disables it.  Enforces content-invariance on "
+        "the deliverable vector rather than only the contrastive projection, "
+        "so sampling stability stops drifting down while the contrastive loss "
+        "falls.  Start around 0.5-1.0.",
     )
     p.add_argument(
         "--tag",
