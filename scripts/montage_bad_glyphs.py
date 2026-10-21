@@ -33,7 +33,6 @@ from hrothgar.googlefonts import GoogleFont
 from hrothgar.render import (
     denormalize_uniform,
     geometry_tensor,
-    render_glyph_with_geometry,
 )
 from hrothgar.set_membership.config import SetMembershipConfig
 from hrothgar.set_membership.model import SetMembershipModel

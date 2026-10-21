@@ -29,7 +29,7 @@ from pathlib import Path
 import torch
 
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
-from hrothgar.render import render_glyph_uniform
+from hrothgar.render import render
 from hrothgar.set_membership.calibration import (
     ConfidenceScorer,
     PlattCalibrator,
@@ -79,7 +79,7 @@ def render_visible_glyphs(
     n_blank = 0
     for cp in codepoints:
         try:
-            image, _geom = render_glyph_uniform(font, cp, size)
+            image, _geom = render(font, codepoint=cp, size=size)
         except Exception:
             continue
         if bool((image >= 1.0).all()):

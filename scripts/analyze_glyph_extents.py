@@ -2,7 +2,8 @@
 
 Motivation
 ----------
-``render_glyph_uniform`` frames every glyph into a fixed 2em x 2em window — the
+``render`` (with the default ``UNIFORM_FRAME``) frames every glyph into a fixed
+2em x 2em window — the
 X origin 0.5em from the left and the baseline 1.5em from the top — so the window
 covers ``x in [-0.5, 1.5]`` and ``y in [-0.5, 1.5]`` relative to the origin and
 baseline.  If the ink actually occupies much less than that, the framing is
@@ -42,9 +43,10 @@ from pathlib import Path
 
 import numpy as np
 
-# The window ``render_gid_uniform`` frames into, in em relative to the glyph
-# origin (x = 0) and the baseline (y = 0, positive up).  Keep in sync with the
-# framing in ``hrothgar/render.py``; these are the assumptions under test.
+# The window ``render`` (default ``UNIFORM_FRAME``) frames into, in em relative
+# to the glyph origin (x = 0) and the baseline (y = 0, positive up).  Keep in
+# sync with the framing in ``hrothgar/render.py``; these are the assumptions
+# under test.
 CURRENT_WINDOW = dict(left=-0.5, right=1.5, bottom=-0.5, top=1.5)
 
 # The encoder is at chance on a case pair whose cue is under ~8px at 128x128

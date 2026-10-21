@@ -34,9 +34,9 @@ from fontTools.unicodedata import script as codepoint_script
 from sklearn.linear_model import Ridge
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.model import FontStyleEmbedder
-from hrothgar.style_embedding.render_utils import render_input_set
+from hrothgar.render import render
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.model import FontStyleEmbedder
 
 STRONG_ORIGINS = {"Custom", "Designed to match Latin"}
 
@@ -95,7 +95,9 @@ def naive_embed(
     if len(letters) < MIN_GLYPHS:
         return None
 
-    imgs = render_input_set(font, letters, glyph_size)  # (G, 1, H, W)
+    imgs = torch.stack(
+        [render(font, codepoint=cp, size=glyph_size)[0] for cp in letters]
+    ).unsqueeze(1)  # (G, 1, H, W)
     blank = imgs.amin(dim=(-2, -1)) > 0.995  # (G, 1)
     imgs = imgs[~blank.squeeze(1)]  # drop blank (empty-outline) glyphs
     if imgs.shape[0] < MIN_GLYPHS:
@@ -134,7 +136,7 @@ def main() -> int:
     )
     parser.add_argument("--csv", default="non-latins.resolved.csv")
     parser.add_argument("--embeddings", default="latin_companion_embeddings.pt")
-    parser.add_argument("--model", default="models/style_embedding_finetune.pth")
+    parser.add_argument("--model", default="models/similarity_finetune.pth")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--alpha", type=float, default=1.0, help="ridge alpha")
     parser.add_argument(

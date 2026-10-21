@@ -21,10 +21,10 @@ Method
 For each ``<family>/<family>-U+XXXX.png``:
 
 1. Crop the 384x256 placed canvas to its left 256 columns -- exactly the 2em
-   ``UNIFORM_FRAME`` that :func:`~hrothgar.render.render_glyph_uniform` draws at
-   ``size=256`` (1 em == 128 px), so generated and ground truth share a scale
-   and coordinate system.
-2. Render the ground truth with ``render_glyph_uniform(font, cp, 256,
+   ``UNIFORM_FRAME`` that :func:`~hrothgar.render.render` draws at ``size=256``
+   (1 em == 128 px), so generated and ground truth share a scale and coordinate
+   system.
+2. Render the ground truth with ``render(font, codepoint=cp, size=256,
    axis_position=...)`` at the same instance (static file, or the variable
    font's synthesised weight-400 design coords from ``.instances.json``).
 3. Binarise both to ink masks, crop each to its ink bounding box, and stretch
@@ -67,7 +67,7 @@ from scipy.ndimage import distance_transform_edt, zoom
 from scipy.signal import correlate2d
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render import render_glyph_uniform
+from hrothgar.render import render
 
 # Ink is rendered near 0.0 on a white (1.0) background.
 _INK_THRESHOLD = 0.5
@@ -239,7 +239,7 @@ def render_gt(font: StandaloneFont, codepoint: int) -> np.ndarray | None:
     """
     if not font.has_codepoint(codepoint):
         return None
-    img, _ = render_glyph_uniform(font, codepoint, 256)
+    img, _ = render(font, codepoint=codepoint, size=256)
     return img.numpy()
 
 

@@ -7,7 +7,7 @@ fonts a designer would call similar?  The training metric only checks that two
 masked views of the *same* font land near each other, which is trivially
 satisfiable and never touches retrieval.
 
-The suite is defined once in ``hrothgar.style_embedding.evaluation`` and shared
+The suite is defined once in ``hrothgar.similarity.evaluation`` and shared
 with the training loop, which logs the same numbers under
 ``Validation/Similarity/*``.  Reported here:
 
@@ -25,7 +25,7 @@ with the training loop, which logs the same numbers under
 Usage::
 
     PYTHONPATH=Lib python scripts/similarity_eval.py \
-        --repo ~/others-repos/fonts --model models/style_embedding.pth \
+        --repo ~/others-repos/fonts --model models/similarity.pth \
         --space summary --out similarity_eval.json
 """
 
@@ -39,18 +39,18 @@ from pathlib import Path
 
 from hrothgar.dataset import DatasetMaker
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.evaluation import (
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.evaluation import (
     build_eval_panel,
     embed_panel,
     run_suite,
 )
-from hrothgar.style_embedding.metrics import (
+from hrothgar.similarity.metrics import (
     cross_set_purity,
     nearest_neighbours,
     sibling_retrieval,
 )
-from hrothgar.style_embedding.model import FontStyleEmbedder
+from hrothgar.similarity.model import FontStyleEmbedder
 from hrothgar.utils import pick_device
 
 
@@ -102,7 +102,7 @@ def _parse_args() -> argparse.Namespace:
         "--repo",
         default=os.environ.get("GOOGLE_FONTS_REPO", "/home/simon/others-repos/fonts"),
     )
-    p.add_argument("--model", default="models/style_embedding.pth")
+    p.add_argument("--model", default="models/similarity.pth")
     p.add_argument("--device", default=None)
     p.add_argument("--space", choices=["summary", "projection"], default="summary")
     p.add_argument("--limit", type=int, default=None, help="cap fonts scanned (canary)")

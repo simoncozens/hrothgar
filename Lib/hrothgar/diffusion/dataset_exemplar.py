@@ -3,10 +3,11 @@
 Each training item is a ``(target glyph, evidence glyph set, codepoint,
 geometry)`` tuple:
 
-* the **target** glyph is rendered crop-to-ink (:func:`render_glyph_with_geometry`),
-  exactly as the factorized model consumes it, with its five geometry labels;
+* the **target** glyph is rendered crop-to-ink (:func:`render` with
+  ``frame=NORMALIZED``), exactly as the factorized model consumes it, with its
+  five geometry labels;
 * the **evidence** glyphs are rendered in the uniform 2em frame
-  (:func:`render_glyph_uniform`, aspect preserved — a style *reference*, not a
+  (:func:`render`, aspect preserved — a style *reference*, not a
   diffusion I/O) and selected **content-aware** via
   :func:`~hrothgar.diffusion.exemplar_mix.draw_exemplars`: an uppercase target
   mostly sees uppercase exemplars with some lowercase, a digit sees digits plus
@@ -31,9 +32,9 @@ from torch.utils.data import Dataset as TorchDataset
 from hrothgar.diffusion.dataset_fontid import NUM_WORKERS, FontIdDatasetMaker
 from hrothgar.diffusion.exemplar_mix import DEFAULT_MIX, draw_exemplars
 from hrothgar.render import (
+    NORMALIZED,
     geometry_tensor,
-    render_glyph_uniform,
-    render_glyph_with_geometry,
+    render,
 )
 
 
@@ -64,11 +65,12 @@ class _ExemplarPairDataset(TorchDataset):
         instance = self.instances[instance_id]
         cp = self.cp_list[cp_idx]
 
-        img, geometry = render_glyph_with_geometry(
+        img, geometry = render(
             instance.font,
-            cp,
-            self.image_size,
+            codepoint=cp,
+            size=self.image_size,
             axis_position=instance.axis_position,
+            frame=NORMALIZED,
         )
 
         # Content-aware evidence: mostly the target's own class, with a tuned
@@ -85,10 +87,10 @@ class _ExemplarPairDataset(TorchDataset):
 
         evidence = []
         for ev_cp in ev_cps:
-            ev_img, _ = render_glyph_uniform(
+            ev_img, _ = render(
                 instance.font,
-                ev_cp,
-                self.image_size,
+                codepoint=ev_cp,
+                size=self.image_size,
                 axis_position=instance.axis_position,
             )
             evidence.append(ev_img.unsqueeze(0))  # (1, H, W)

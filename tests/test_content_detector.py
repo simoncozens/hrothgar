@@ -299,12 +299,12 @@ def test_dataset_draws_glyphs_into_the_configured_frame() -> None:
         _render_font,
         content_frame,
     )
-    from hrothgar.render import render_glyph_uniform
+    from hrothgar.render import render
 
     config = _config(anchors=[ord("o")], negatives=[ord("x")], augment=False)
     font = _render_font(ROBOTO_VF)
-    framed, _ = render_glyph_uniform(
-        font, ord("o"), config.glyph_size, frame=content_frame(config)
+    framed, _ = render(
+        font, codepoint=ord("o"), size=config.glyph_size, frame=content_frame(config)
     )
 
     item = _CellDataset([Cell(ROBOTO_VF, ord("o"), "sans")], config)[0]
@@ -312,7 +312,7 @@ def test_dataset_draws_glyphs_into_the_configured_frame() -> None:
     assert item["images"].shape[1:] == (1, config.glyph_size, config.glyph_size)
     assert torch.allclose(item["images"][0, 0], framed)
     # ... and the tight frame really is a different picture from the legacy one.
-    legacy_image, _ = render_glyph_uniform(font, ord("o"), config.glyph_size)
+    legacy_image, _ = render(font, codepoint=ord("o"), size=config.glyph_size)
     assert not torch.allclose(framed, legacy_image)
 
 

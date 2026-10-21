@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import torch
 
-from hrothgar.style_embedding.metrics import (
+from hrothgar.similarity.metrics import (
     cross_set_purity,
     geometry_stats,
     label_agreement_at_k,

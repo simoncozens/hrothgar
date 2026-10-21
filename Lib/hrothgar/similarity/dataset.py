@@ -19,8 +19,8 @@ from torch.utils.data import Dataset as TorchDataset
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker, fvar_axes
 from hrothgar.dataset_constants import LATIN_CORE
 from hrothgar.googlefonts import ALL_CATEGORIES, GoogleFont
-from hrothgar.style_embedding.config import DEFAULT_INPUT_CODEPOINTS
-from hrothgar.style_embedding.render_utils import render_glyph
+from hrothgar.render import frame_for_codepoints, render
+from hrothgar.similarity.config import DEFAULT_INPUT_CODEPOINTS
 
 # Canonical style-category and theme tags used for tag-weighted
 # multi-positive contrastive examples.  These capture the major stylistic
@@ -325,13 +325,19 @@ class FontStyleDatasetMaker(DatasetMaker):
             half_a = perm[:half]
             half_b = perm[half:]
 
+            # A per-font tight frame over the whole input set, so the same
+            # letter occupies comparable pixels in every font instead of
+            # shrinking with the design's x-height.
+            frame = frame_for_codepoints(font, self._input_codepoints)
+
             for j, cp_idx in enumerate(idx):
-                glyph = render_glyph(
+                glyph = render(
                     font,
-                    self._input_codepoints[cp_idx],
-                    size,
+                    codepoint=self._input_codepoints[cp_idx],
+                    size=size,
                     axis_position=positions[i],
-                )
+                    frame=frame,
+                )[0]
                 glyphs[i, j, 0] = glyph
 
             mask_a[i, half_a] = True

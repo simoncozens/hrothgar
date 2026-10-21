@@ -23,9 +23,8 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import FontIdDatasetMaker
 from hrothgar.diffusion.fontid import build_fontid_model
-from hrothgar.render import GEOMETRY_NAMES, place_glyph
+from hrothgar.render import GEOMETRY_NAMES, NORMALIZED, place_glyph, render
 from hrothgar.llamagen_lpips import LPIPS
-from hrothgar.render import render_glyph_with_geometry
 from hrothgar.utils import TrainingLoop, apply_cli_defaults, load_cli_defaults
 
 
@@ -229,11 +228,12 @@ class FontIdTrainingLoop(TrainingLoop):
             target_cp = self.maker.cp_list[codepoints[i].item()]
             avail = sorted(set(inst.codepoints) - {target_cp})
             ref_cp = rng.choice(avail) if avail else target_cp
-            ref_img, _ = render_glyph_with_geometry(
+            ref_img, _ = render(
                 inst.font,
-                ref_cp,
-                self.maker.image_size,
+                codepoint=ref_cp,
+                size=self.maker.image_size,
                 axis_position=inst.axis_position,
+                frame=NORMALIZED,
             )
             refs.append(ref_img.unsqueeze(0))
             text_lines.append(
@@ -458,14 +458,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cond-drop-prob",
         type=float,
-        default=0.1,
+        default=0.0,
         help="Classifier-free guidance: fraction of training samples whose "
         "conditioning is dropped (0 disables CFG)",
     )
     parser.add_argument(
         "--cond-scale",
         type=float,
-        default=3.0,
+        default=1.0,
         help="Classifier-free guidance scale at sampling (1.0 = no guidance)",
     )
     parser.add_argument(

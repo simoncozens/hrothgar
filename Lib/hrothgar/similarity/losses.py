@@ -9,7 +9,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-from hrothgar.style_embedding.config import FontStyleEmbeddingLossWeights
+from hrothgar.similarity.config import FontStyleEmbeddingLossWeights
 
 
 def multipos_contrastive_loss(

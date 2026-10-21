@@ -43,7 +43,7 @@ from hrothgar.diffusion.dataset_fontid import inference_jobs, load_or_build_unit
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.render import GEOMETRY_NAMES
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render import render_glyph_with_geometry
+from hrothgar.render import NORMALIZED, render
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 import tqdm
@@ -333,8 +333,8 @@ def main() -> None:
                     glyphs.append((image, geom))
                 elif cp in font.codepoints:
                     try:
-                        ref_img, ref_geom = render_glyph_with_geometry(
-                            font, cp, glyph_size, axis_position=inst["axis_position"]
+                        ref_img, ref_geom = render(
+                            font, cp, glyph_size, axis_position=inst["axis_position"], frame=NORMALIZED
                         )
                         glyphs.append((ref_img.detach().cpu().numpy(), ref_geom))
                     except Exception:

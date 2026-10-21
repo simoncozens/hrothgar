@@ -36,9 +36,10 @@ from PIL import Image
 
 from hrothgar.googlefonts import GoogleFont
 from hrothgar.render import (
+    NORMALIZED,
     denormalize_uniform,
     geometry_tensor,
-    render_glyph_with_geometry,
+    render,
 )
 from hrothgar.set_membership.config import SetMembershipConfig
 from hrothgar.set_membership.model import SetMembershipModel
@@ -200,7 +201,7 @@ def main() -> int:
         geom_cache: dict[int, torch.Tensor] = {}
         for cp in list(good_cps) + list(bad_cps):
             try:
-                _, g = render_glyph_with_geometry(font, cp, size, axis_position=axis)
+                _, g = render(font, codepoint=cp, size=size, axis_position=axis, frame=NORMALIZED)
                 geom_cache[cp] = geometry_tensor(g).to(device)
             except Exception:
                 geom_cache[cp] = torch.zeros(5, device=device)

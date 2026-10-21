@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from hrothgar.googlefonts import Font
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
+from hrothgar.similarity.config import FontStyleEmbedderConfig
 from hrothgar.glyph_encoder import GlyphEncoder
 from hrothgar.utils import SaveLoadModel
 
@@ -188,20 +188,29 @@ class FontStyleEmbedder(SaveLoadModel):
         rendering logic used by the training dataset, so the two can never
         drift apart.
         """
-        from hrothgar.style_embedding.render_utils import render_input_set
+        from hrothgar.render import frame_for_codepoints, render
 
-        images = render_input_set(
-            font,
-            self.config.input_codepoints,
-            self.config.glyph_size,
-            axis_position=axis_position,
-        ).unsqueeze(
-            0
+        frame = frame_for_codepoints(font, self.config.input_codepoints)
+        images = (
+            torch.stack(
+                [
+                    render(
+                        font,
+                        codepoint=cp,
+                        size=self.config.glyph_size,
+                        axis_position=axis_position,
+                        frame=frame,
+                    )[0]
+                    for cp in self.config.input_codepoints
+                ]
+            )
+            .unsqueeze(1)
+            .unsqueeze(0)
         )  # (1, G, 1, H, W)
 
-        # ``Font.render`` silently returns an all-white image on failure, so
-        # surface blank glyphs here so callers can apply their unrenderable-font
-        # fallback instead of embedding blank space.
+        # A blank (no-ink) glyph renders all-white, so surface blank glyphs
+        # here so callers can apply their unrenderable-font fallback instead of
+        # embedding blank space.
         blank = images.amin(dim=(-2, -1)) > 0.995  # (1, G, 1)
         if bool(blank.any()):
             cp_idx = int(blank.squeeze(0).squeeze(1).nonzero()[0].item())

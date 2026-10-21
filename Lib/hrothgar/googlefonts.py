@@ -10,36 +10,15 @@ import uharfbuzz as hb
 from fontTools.ttLib import TTFont
 from gftools.util.google_fonts import Metadata
 
-from hrothgar.render import render_gid
-
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
-
+# Too weird
+BANNED_FONTS = ["alienblock", "barrio", "barriecito", "betania", "bethellen", "bitcount", "pixel"]
 
 class Font:
     """A font, whether standalone or from the Google Fonts repository. This is an abstract base class that defines the interface for fonts, and provides some common functionality. The concrete implementations are GoogleFont and StandaloneFont."""
 
     hb_face: hb.Face
     path: Path
-
-    def render(
-        self, char: int, size: int = 64, axis_position: list[float] | None = None
-    ) -> np.ndarray:
-        """Render a single glyph as a (3, size, size) float32 array."""
-        try:
-            gid = hb.Font(self.hb_face).get_nominal_glyph(char)
-            return self.render_gid(gid, size, axis_position=axis_position)
-        except Exception:
-            return np.ones((3, size, size), dtype=np.float32)
-
-    def render_gid(
-        self, gid: int, size: int = 64, axis_position: list[float] | None = None
-    ) -> np.ndarray:
-        """Render a single glyph by GID as a (3, size, size) float32 array."""
-        try:
-            axis_tuple = tuple(axis_position) if axis_position is not None else None
-            return render_gid(self.path, gid, size, axis_position=axis_tuple)
-        except Exception:
-            return np.ones((3, size, size), dtype=np.float32)
 
     @cached_property
     def codepoints(self) -> set[int]:
@@ -192,9 +171,10 @@ class GoogleFonts:
             or font.tags().get("/Special use/Redaction", 0)
         ):
             return True
-        # Alien Block is just Too Weird
-        if font.path.parts[-2].startswith("alienblock"):
-            return True
+        # Some fonts are just Too Weird
+        for banned in BANNED_FONTS:
+            if banned in str(font.path).lower():
+                return True
         # Ban color fonts
         if "Color" in str(font.path) or font.is_color():
             return True
@@ -320,7 +300,7 @@ class StandaloneFont(Font):
     This is used for NFA (Novel Font Adaptation) when adapting to fonts that are
     not part of the Google Fonts repository, or when the repo is unavailable.
 
-    It exposes the same interface as ``GoogleFont`` (``codepoints``, ``render``,
+    It exposes the same interface as ``GoogleFont`` (``codepoints``,
     ``reference_font``, ``has_codepoint``, ``hb_face``) so it can be used
     as a drop-in replacement in dataset collation code.
     """

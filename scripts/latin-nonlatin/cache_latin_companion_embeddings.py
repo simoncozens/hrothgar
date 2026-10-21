@@ -30,8 +30,8 @@ import torch
 import torch.nn.functional as F
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.model import FontStyleEmbedder
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.model import FontStyleEmbedder
 
 STRONG_ORIGINS = {"Custom", "Designed to match Latin"}
 
@@ -125,7 +125,7 @@ def main() -> int:
         help="Google Fonts repo root, or the ofl/ directory directly",
     )
     parser.add_argument("--csv", default="non-latins.resolved.csv")
-    parser.add_argument("--model", default="models/style_embedding_finetune.pth")
+    parser.add_argument("--model", default="models/similarity_finetune.pth")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--out", default="latin_companion_embeddings.pt")
     parser.add_argument(

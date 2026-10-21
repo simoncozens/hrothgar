@@ -15,10 +15,9 @@ For every ``<family>/<family>-U+XXXX.png`` we mirror ``triage_identical.py``'s
 data conventions:
 
 1. Crop the 384x256 placed canvas to its left 256 columns -- the 2em
-   ``UNIFORM_FRAME`` that :func:`~hrothgar.render.render_glyph_uniform` draws at
-   ``size=256`` -- so generated and ground truth share a scale and coordinate
-   system.
-2. Render the ground truth with ``render_glyph_uniform(font, cp, 256)``.  A
+   ``UNIFORM_FRAME`` that :func:`~hrothgar.render.render` draws at ``size=256``
+   -- so generated and ground truth share a scale and coordinate system.
+2. Render the ground truth with ``render(font, codepoint=cp, size=256)``.  A
    codepoint the font lacks (e.g. the rupee) has no GT and is skipped; so is a
    blank glyph.
 3. Downsample both to ``--size`` and accumulate, per ``(codepoint, stratum)``,
@@ -59,7 +58,7 @@ from PIL import Image
 
 from hrothgar.dataset import style_bucket
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
-from hrothgar.render import render_glyph_uniform
+from hrothgar.render import render
 
 STRATA = ("sans", "serif", "display", "script", "handwriting", "mono", "other")
 _INK_THRESHOLD = 0.5
@@ -131,7 +130,7 @@ def render_gt(font: StandaloneFont, codepoint: int) -> np.ndarray | None:
     """Ground truth in the uniform 2em frame, or ``None`` if absent."""
     if not font.has_codepoint(codepoint):
         return None
-    img, _ = render_glyph_uniform(font, codepoint, 256)
+    img, _ = render(font, codepoint=codepoint, size=256)
     return img.numpy()
 
 

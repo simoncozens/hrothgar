@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.content_detector.detect_content_errors import (  # noqa: E402
+    SlotRecord,
     _print_findings,
     is_blank_render,
     is_excluded_font,
@@ -27,9 +28,8 @@ from scripts.content_detector.detect_content_errors import (  # noqa: E402
 class _Args:
     max_print = 10
     ambiguous = 0.5
-    reject_below = 0.30
+    wrong_margin = 0.35
     confident_above = 0.70
-    margin = 0.0
 
 
 def _stats(**overrides) -> dict:
@@ -39,6 +39,7 @@ def _stats(**overrides) -> dict:
         "skipped_caps": [],
         "skipped_blank": [],
         "skipped_special": [],
+        "skipped_collapsed": [],
         "tallies": Counter(),
     }
     stats.update(overrides)
@@ -54,9 +55,10 @@ def test_print_findings_handles_all_three_labels(capsys) -> None:
             "family": "Laila",
             "path": "ofl/laila/Laila-Regular.ttf",
             "claimed": 0xE1,
-            "claimed_probability": 0.08,
+            "claimed_probability": 0.70,
             "top": 0xE0,
-            "top_probability": 0.71,
+            "top_probability": 1.00,
+            "cosine_excess": 0.66,
         },
         {
             "label": "ambiguous",
@@ -66,6 +68,7 @@ def test_print_findings_handles_all_three_labels(capsys) -> None:
             "claimed_probability": 0.11,
             "top": 0x6F,
             "top_probability": 0.12,
+            "cosine_excess": 0.05,
         },
         {
             "label": "blank",
@@ -75,6 +78,7 @@ def test_print_findings_handles_all_three_labels(capsys) -> None:
             "claimed_probability": 0.0,
             "top": 0x65,
             "top_probability": 0.0,
+            "cosine_excess": 0.0,
         },
     ]
     _print_findings(
@@ -127,14 +131,94 @@ def test_is_excluded_font() -> None:
     )
 
 
-def test_sweep_counts_requires_rejection_and_confidence() -> None:
-    # (claimed, top, top_is_claimed, blank)
+def test_sweep_counts_requires_a_cosine_margin_and_confidence() -> None:
+    def record(cosine_excess, competitor_probability, *, same=False, blank=False):
+        return SlotRecord(
+            claimed_probability=0.70,
+            top_probability=1.00,
+            top_is_claimed=same,
+            competitor_probability=competitor_probability,
+            cosine_excess=cosine_excess,
+            blank=blank,
+        )
+
     records = [
-        (0.00, 1.00, False, False),  # the Laila case: always flagged
-        (0.89, 0.99, False, False),  # a legitimate a where a neighbour ranks higher
-        (0.10, 0.40, False, False),  # nothing confident: never flagged
-        (0.90, 0.10, True, False),  # correct: never flagged
-        (0.00, 1.00, False, True),  # blank: never flagged
+        record(0.66, 1.00),  # the Laila case: always flagged
+        record(0.08, 0.99),  # a legitimate a whose neighbour ranks a little higher
+        record(0.50, 0.65),  # big margin, but the competitor is not confident
+        record(-0.80, 0.10, same=True),  # correct: never flagged
+        record(0.66, 1.00, blank=True),  # blank: never flagged
     ]
-    table = sweep_counts(records, (0.3,), (0.7,))
-    assert table == [(0.3, 0.7, 1)]
+    table = sweep_counts(records, (0.35,), (0.70,))
+    assert table == [(0.35, 0.70, 1)]
+
+
+# --------------------------------------------------------------------------- #
+# Font centring and collapse detection
+# --------------------------------------------------------------------------- #
+
+
+def test_collapsed_font_detects_a_whole_font_failure() -> None:
+    from scripts.content_detector.detect_content_errors import collapsed_font
+
+    anchors = [ord(c) for c in "aegofc"]
+    # Two slots win their own anchor, four are won by `e`: a font whose style the
+    # encoder cannot read, not four individually mis-encoded slots.
+    cosine = torch.zeros(len(anchors), len(anchors))
+    for i in range(len(anchors)):
+        cosine[i, i if i < 2 else 1] = 1.0
+
+    result = collapsed_font(cosine, anchors, anchors)
+    assert result is not None
+    assert result["n_slots"] == len(anchors)
+    assert result["n_disagreeing"] == len(anchors) - 2
+    assert result["top_foreign"] == ord("e")
+    assert result["top_foreign_count"] == len(anchors) - 2
+
+
+def test_collapsed_font_ignores_a_healthy_font() -> None:
+    from scripts.content_detector.detect_content_errors import collapsed_font
+
+    anchors = [ord(c) for c in "aego"]
+    cosine = torch.eye(len(anchors))
+    assert collapsed_font(cosine, anchors, anchors) is None
+
+    # Even a couple of odd slots is not a collapse — most claims must disagree.
+    cosine[1, 1] = 0.0
+    cosine[1, 0] = 1.0
+    assert collapsed_font(cosine, anchors, anchors) is None
+
+
+def test_collapsed_font_needs_enough_slots_to_judge() -> None:
+    from scripts.content_detector.detect_content_errors import collapsed_font
+
+    anchors = [ord("a"), ord("e")]
+    assert collapsed_font(torch.zeros(2, 2), anchors, anchors) is None
+
+
+def test_font_scores_centres_on_the_font_and_handles_a_single_glyph() -> None:
+    from hrothgar.content_detector.config import ContentDetectorConfig
+    from hrothgar.content_detector.model import ContentDetector
+    from scripts.content_detector.detect_content_errors import font_scores
+
+    config = ContentDetectorConfig(anchors=[ord("a"), ord("e")], glyph_size=32)
+    model = ContentDetector(config).eval()
+    images = torch.rand(4, 1, 32, 32)
+
+    raw_cos, raw_logits = font_scores(model, images, "cpu", centre=False)
+    centred_cos, centred_logits = font_scores(model, images, "cpu", centre=True)
+    assert raw_cos.shape == centred_cos.shape == (4, 2)
+    assert not torch.allclose(raw_cos, centred_cos)  # the font mean was removed
+
+    # Logits are just ``scale * cosine + bias``, so centring cannot reorder the
+    # geometry-dependent part; only the reference point moved.
+    expected = model.logit_scale.detach() * raw_cos + model.anchor_bias.detach()
+    assert torch.allclose(raw_logits, expected, atol=1e-5)
+    assert not torch.allclose(raw_logits, centred_logits)
+
+    # A single glyph has nothing to centre on, so centring is a no-op.
+    one = images[:1]
+    assert torch.allclose(
+        font_scores(model, one, "cpu", centre=True)[0],
+        font_scores(model, one, "cpu", centre=False)[0],
+    )

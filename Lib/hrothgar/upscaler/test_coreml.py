@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from hrothgar.render import crop_to_ink
+from hrothgar.render import NORMALIZED, render
 from hrothgar.googlefonts import StandaloneFont
 
 
@@ -30,8 +30,8 @@ def _render_glyph(font_path: str, char: str, size: int) -> np.ndarray:
     model, so outputs are directly comparable.
     """
     font = StandaloneFont(font_path)
-    rgb = np.ascontiguousarray(font.render(ord(char), size=size), dtype=np.float32)
-    return crop_to_ink(torch.from_numpy(rgb), size)[:1].numpy()  # (1, size, size)
+    image, _ = render(font, codepoint=ord(char), size=size, frame=NORMALIZED)
+    return image.unsqueeze(0).numpy()  # (1, size, size)
 
 
 def _find_sidecar(model_dir: Path) -> Path:

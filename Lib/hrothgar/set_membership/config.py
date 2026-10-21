@@ -16,8 +16,8 @@ class SetMembershipConfig:
     """Configuration for the instance-membership model."""
 
     # Input rendering: uniform scale-and-pad glyph images (see
-    # ``hrothgar.render.render_glyph_uniform``), matching the framing the
-    # generator will denormalize to.
+    # ``hrothgar.render.render``), matching the framing the generator will
+    # denormalize to.
     input_codepoints: list[int] = field(
         default_factory=lambda: list(LATIN_CORE)
     )

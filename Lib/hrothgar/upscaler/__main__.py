@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render import render_gid_with_geometry, render_glyph_with_geometry
+from hrothgar.render import NORMALIZED, render
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 
@@ -44,10 +44,10 @@ def _render_grayscale(
     what the diffusion model emits and the upscaler consumes.
     """
     if gid is not None:
-        image, _ = render_gid_with_geometry(font, gid, size)
+        image, _ = render(font, gid=gid, size=size, frame=NORMALIZED)
     else:
         assert char is not None
-        image, _ = render_glyph_with_geometry(font, char, size)
+        image, _ = render(font, codepoint=char, size=size, frame=NORMALIZED)
     return image.unsqueeze(0).numpy()  # (1, size, size)
 
 

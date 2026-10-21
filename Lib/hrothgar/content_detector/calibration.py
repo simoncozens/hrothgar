@@ -34,6 +34,15 @@ from hrothgar.calibration import PlattCalibrator, expected_calibration_error
 # for reference and for a FAR-driven threshold if we ever want one.
 FAR_LEVELS = (0.01, 0.05)
 
+# Default cosine margin at which a competing anchor is declared to have beaten the
+# claim (``cos(competitor) - cos(claimed)``, so positive means the claim lost).
+# Calibrated probabilities saturate once ``logit_scale`` is around 18, so they carry
+# no usable margin; the cosine ranking does.  Measured on 2,426 good library slots
+# in the *centred* space the audit scores in, the margin is -0.40 at p50, +0.08 at
+# p95, +0.50 at p99 and +0.58 at p99.5; 0.35 flags ~1.1% of healthy slots.  Laila's
+# swapped accents sit at +0.66 to +0.72.
+DEFAULT_WRONG_MARGIN = 0.35
+
 
 @dataclass
 class AnchorCalibration:
@@ -133,15 +142,30 @@ class ContentCalibrator:
             return cls.from_dict(json.load(f))
 
 
+def cosine_margin(cosine: torch.Tensor, claimed_index: int) -> tuple[int, float]:
+    """``(best_other_index, best_other_cosine - claimed_cosine)`` for one slot.
+
+    A positive margin means the claim *lost*: a different anchor is closer to the
+    glyph than the one it is encoded as.  The claimed anchor is excluded, so this
+    is the gap to the nearest competitor rather than the gap to the winner.
+    """
+    rest = cosine.clone()
+    rest[claimed_index] = float("-inf")
+    other_index = int(rest.argmax())
+    return other_index, float(rest[other_index] - cosine[claimed_index])
+
+
 def classify_slot(
     probabilities: torch.Tensor,
     claimed_index: int,
     anchors: list[int],
     *,
+    cosine: torch.Tensor | None = None,
     ambiguous: float = 0.5,
     reject_below: float = 0.30,
     confident_above: float = 0.70,
     margin: float = 0.0,
+    wrong_margin: float = DEFAULT_WRONG_MARGIN,
 ) -> tuple[str, int | None]:
     """Label one slot's calibrated probabilities: ``"ok"``/``"wrong"``/``"ambiguous"``.
 
@@ -149,14 +173,22 @@ def classify_slot(
     look like anything the model knows (a symbol/barcode glyph, or a malformed one),
     so there is nothing to accuse it of.
 
-    ``"wrong"`` then requires the model to *reject the claim* — the claimed anchor
-    below ``reject_below`` — **and** a different anchor to be confident (at least
-    ``confident_above``, and ahead of the claim by ``margin``).  Requiring outright
-    rejection, rather than merely "some other anchor ranks higher", is what
-    separates a real accent swap from two similar anchors trading places on a
-    perfectly good glyph.  Laila's ``á`` slot (which holds an ``à``) reads
-    ``claimed≈0.0, competitor≈1.0`` and fires; a legitimate ``a`` that scores
-    ``p(a)=0.89, p(à)=0.99`` does not, because the ``a`` anchor accepts it.
+    The ``"wrong"`` rule has two forms.  With ``cosine`` supplied (the audit's
+    *font-centred* space) the claim must lose the embedding comparison by at least
+    ``wrong_margin`` **and** the winning competitor must still clear
+    ``confident_above``.  Centring deliberately lifts the claimed *probability*
+    above any meaningful threshold — so it cannot be part of this rule — while the
+    cosine ordering is unaffected by it.  This is what makes a real accent swap fire
+    (Laila's ``á`` slot holds an ``à``: cosine margin +0.66..+0.72, competitor
+    p=1.00) without accusing a legitimate ``a`` whose ``à`` anchor merely ranks a
+    little closer (margin < 0.10).
+
+    Without ``cosine`` (uncentred scores, where the calibration map was fitted) the
+    rule is the older probability gate: the claimed anchor is below
+    ``reject_below`` and a different anchor is both ``confident_above`` and ahead of
+    the claim by ``margin``.  Requiring outright rejection, rather than merely "some
+    other anchor ranks higher", is what separates a real accent swap from two
+    similar anchors trading places on a perfectly good glyph.
 
     Returns ``(label, best_anchor)`` where ``best_anchor`` is the competing
     codepoint for a ``"wrong"`` verdict and ``None`` otherwise.
@@ -166,6 +198,16 @@ def classify_slot(
     best = float(probabilities[best_index])
     if best < ambiguous:
         return "ambiguous", None
+
+    if cosine is not None:
+        other_index, excess = cosine_margin(cosine, claimed_index)
+        if (
+            excess >= wrong_margin
+            and float(probabilities[other_index]) >= confident_above
+        ):
+            return "wrong", anchors[other_index]
+        return "ok", None
+
     if (
         best_index != claimed_index
         and claimed < reject_below

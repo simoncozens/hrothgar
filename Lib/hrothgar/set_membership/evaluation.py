@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 
-from hrothgar.render import geometry_tensor, render_glyph_uniform
+from hrothgar.render import geometry_tensor, render
 from hrothgar.set_membership.config import SetMembershipConfig
 
 
@@ -70,19 +70,19 @@ def build_membership_panel(
     for instance in selected:
         ri, rg, qi, qg = [], [], [], []
         for cp in ref_cps:
-            image, geom = render_glyph_uniform(
+            image, geom = render(
                 instance.font,
-                cp,
-                config.glyph_size,
+                codepoint=cp,
+                size=config.glyph_size,
                 axis_position=instance.axis_position,
             )
             ri.append(image.unsqueeze(0))
             rg.append(geometry_tensor(geom))
         for cp in query_cps:
-            image, geom = render_glyph_uniform(
+            image, geom = render(
                 instance.font,
-                cp,
-                config.glyph_size,
+                codepoint=cp,
+                size=config.glyph_size,
                 axis_position=instance.axis_position,
             )
             qi.append(image.unsqueeze(0))

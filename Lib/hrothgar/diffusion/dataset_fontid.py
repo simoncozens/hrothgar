@@ -61,7 +61,7 @@ from hrothgar.dataset import (
 )
 from hrothgar.dataset_constants import LATIN_KERNEL
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
-from hrothgar.render import GEOMETRY_SPEC, geometry_tensor, render_glyph_with_geometry
+from hrothgar.render import GEOMETRY_SPEC, NORMALIZED, geometry_tensor, render
 
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "8"))
 
@@ -179,11 +179,12 @@ class _PairDataset(TorchDataset):
         instance_id, cp_idx = self.pairs[idx]
         instance = self.instances[instance_id]
         cp = self.cp_list[cp_idx]
-        img, geometry = render_glyph_with_geometry(
+        img, geometry = render(
             instance.font,
-            cp,
-            self.image_size,
+            codepoint=cp,
+            size=self.image_size,
             axis_position=instance.axis_position,
+            frame=NORMALIZED,
         )
         return {
             "image": img.unsqueeze(0),  # (1, H, W)
@@ -333,11 +334,12 @@ class FontIdDatasetMaker:
         geos = []
         for iid, cp_idx in sample:
             inst = self.instances[iid]
-            _, geom = render_glyph_with_geometry(
+            _, geom = render(
                 inst.font,
-                self.cp_list[cp_idx],
-                self.image_size,
+                codepoint=self.cp_list[cp_idx],
+                size=self.image_size,
                 axis_position=inst.axis_position,
+                frame=NORMALIZED,
             )
             geos.append(geometry_tensor(geom))
         std = torch.stack(geos).std(dim=0).clamp_min(1e-3)

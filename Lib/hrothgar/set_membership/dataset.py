@@ -22,7 +22,7 @@ from torch.utils.data import Sampler
 
 from hrothgar.dataset import DatasetMaker, fvar_axes
 from hrothgar.googlefonts import GoogleFont, GoogleFonts
-from hrothgar.render import geometry_tensor, render_glyph_uniform
+from hrothgar.render import geometry_tensor, render
 from hrothgar.set_membership.config import SetMembershipConfig
 
 
@@ -226,8 +226,11 @@ class SetMembershipDatasetMaker:
             while len(chosen) < k:
                 chosen.append(random.choice(available))
             for codepoint in chosen:
-                image, geom = render_glyph_uniform(
-                    instance.font, codepoint, size, axis_position=instance.axis_position
+                image, geom = render(
+                    instance.font,
+                    codepoint=codepoint,
+                    size=size,
+                    axis_position=instance.axis_position,
                 )
                 images.append(image.unsqueeze(0))
                 geometry.append(geometry_tensor(geom))

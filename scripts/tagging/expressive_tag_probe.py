@@ -32,9 +32,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.model import FontStyleEmbedder
-from hrothgar.style_embedding.render_utils import render_input_set
+from hrothgar.render import render
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.model import FontStyleEmbedder
 
 EXPRESSIVE_PREFIX = "/Expressive"
 MIN_GLYPHS = 8
@@ -118,7 +118,7 @@ def main() -> int:
         "--repo",
         default=os.environ.get("GOOGLE_FONTS_REPO", "/home/simon/others-repos/fonts"),
     )
-    parser.add_argument("--model", default="models/style_embedding_finetune.pth")
+    parser.add_argument("--model", default="models/similarity_finetune.pth")
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
         "--limit", type=int, default=None, help="limit number of families"
@@ -165,7 +165,9 @@ def main() -> int:
             print(f"  computing features {i}/{len(reps)} …")
         target_name = pick_regular(fonts)
         font = next(f for f in fonts if f.path.name == target_name)
-        imgs = render_input_set(font, cfg.input_codepoints, cfg.glyph_size)
+        imgs = torch.stack(
+            [render(font, codepoint=cp, size=cfg.glyph_size)[0] for cp in cfg.input_codepoints]
+        ).unsqueeze(1)  # (G, 1, H, W)
         imgs = imgs[~(imgs.amin(dim=(-2, -1)) > 0.995).squeeze(1)]
         if imgs.shape[0] < MIN_GLYPHS:
             continue

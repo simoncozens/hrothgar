@@ -8,7 +8,7 @@ instance membership) or spatial attention/correlation for fine-grained style
 matching.
 
 This is the single implementation shared by ``set_membership``,
-``content_detector`` and ``style_embedding``, which previously each carried a
+``content_detector`` and ``similarity``, which previously each carried a
 functionally-identical copy.
 """
 

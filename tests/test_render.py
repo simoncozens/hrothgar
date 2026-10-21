@@ -4,13 +4,12 @@ import numpy as np
 import pytest
 import uharfbuzz as hb
 from hrothgar.render import (
+    _normalize_bitmap,
     _paste_bitmap_onto_canvas,
     denormalize_uniform,
     geometry_tensor,
-    normalize_bitmap,
     place_glyph,
-    render_gid,
-    render_gid_uniform,
+    render,
 )
 
 
@@ -68,15 +67,14 @@ def test_paste_bitmap_crops_negative_left_sidebearing() -> None:
 
 
 def test_variable_font_axis_positions_change_rendering() -> None:
-    font_path = Path("tests/dummy_repo/ofl/roboto/Roboto[wdth,wght].ttf")
-    face = hb.Face(hb.Blob.from_file_path(str(font_path)))
-    gid = hb.Font(face).get_nominal_glyph(ord("A"))
+    font = _roboto_font()
+    gid = hb.Font(font.hb_face).get_nominal_glyph(ord("A"))
 
-    regular = render_gid(font_path, gid, size=128, axis_position=(100.0, 100.0))
-    heavy = render_gid(font_path, gid, size=128, axis_position=(900.0, 100.0))
+    regular, _ = render(font, gid=gid, size=128, axis_position=(100.0, 100.0))
+    heavy, _ = render(font, gid=gid, size=128, axis_position=(900.0, 100.0))
 
     assert regular.shape == heavy.shape
-    assert not np.allclose(regular, heavy)
+    assert not np.allclose(regular.numpy(), heavy.numpy())
 
 
 def test_render_phrase_variable_font_axis_changes_output() -> None:
@@ -105,7 +103,7 @@ def test_normalize_bitmap_geometry_in_em_units() -> None:
     bitmap = np.zeros((4, 3), dtype=np.uint8)
     bitmap[1:4, 1:3] = 255
 
-    image, geometry = normalize_bitmap(
+    image, geometry = _normalize_bitmap(
         bitmap, bitmap_left=2, bitmap_top=10, advance_px=7, size=10
     )
 
@@ -119,7 +117,7 @@ def test_normalize_bitmap_geometry_in_em_units() -> None:
 
 
 def test_normalize_bitmap_blank_glyph_preserves_advance() -> None:
-    image, geometry = normalize_bitmap(
+    image, geometry = _normalize_bitmap(
         np.zeros((0, 0), dtype=np.uint8),
         bitmap_left=0,
         bitmap_top=0,
@@ -191,13 +189,13 @@ def _roboto_font():
     return font
 
 
-def test_render_gid_uniform_square_image_and_geometry() -> None:
+def test_render_uniform_square_image_and_geometry() -> None:
     import torch
 
     font = _roboto_font()
     gid = hb.Font(font.hb_face).get_nominal_glyph(ord("g"))
 
-    image, geometry = render_gid_uniform(font, gid, size=128)
+    image, geometry = render(font, gid=gid, size=128)
 
     assert image.shape == (128, 128)
     assert image.dtype == torch.float32
@@ -212,11 +210,42 @@ def test_render_gid_uniform_square_image_and_geometry() -> None:
     }
 
 
-def test_render_gid_uniform_preserves_descender() -> None:
+def test_render_normalized_returns_crop_to_ink_square() -> None:
+    from hrothgar.render import NORMALIZED
+
+    font = _roboto_font()
+    image, geometry = render(font, codepoint=ord("A"), size=128, frame=NORMALIZED)
+
+    assert image.shape == (128, 128)
+    assert 0.0 <= float(image.min()) <= float(image.max()) <= 1.0
+    assert float(image.min()) < 1.0  # some ink
+    assert set(geometry) == {
+        "scale_x",
+        "scale_y",
+        "left_sidebearing",
+        "descender_depth",
+        "advance",
+    }
+
+
+def test_render_requires_exactly_one_of_gid_or_codepoint() -> None:
+    font = _roboto_font()
+    with pytest.raises(ValueError):
+        render(font, size=128)
+    with pytest.raises(ValueError):
+        render(font, gid=1, codepoint=ord("A"), size=128)
+
+
+def test_render_rejects_unknown_frame() -> None:
+    with pytest.raises(TypeError):
+        render(_roboto_font(), codepoint=ord("A"), size=128, frame="square")
+
+
+def test_render_uniform_preserves_descender() -> None:
     font = _roboto_font()
     hbfont = hb.Font(font.hb_face)
-    g_img, _ = render_gid_uniform(font, hbfont.get_nominal_glyph(ord("g")), size=128)
-    a_img, _ = render_gid_uniform(font, hbfont.get_nominal_glyph(ord("A")), size=128)
+    g_img, _ = render(font, gid=hbfont.get_nominal_glyph(ord("g")), size=128)
+    a_img, _ = render(font, gid=hbfont.get_nominal_glyph(ord("A")), size=128)
 
     baseline_row = int(round(0.75 * 128))
     g_below = int((g_img[baseline_row:, :] < 1.0).sum())
@@ -295,13 +324,13 @@ def _ink_centre_row(image) -> float:
 
 
 def test_tighter_frame_makes_the_glyph_proportionally_bigger() -> None:
-    from hrothgar.render import Frame, render_glyph_uniform
+    from hrothgar.render import Frame
 
     font = _roboto_font()
-    default, geometry = render_glyph_uniform(font, ord("x"), size=128)
+    default, geometry = render(font, codepoint=ord("x"), size=128)
     # A frame half the linear size covers half the em, so the glyph doubles.
-    tight, tight_geometry = render_glyph_uniform(
-        font, ord("x"), size=128, frame=Frame(-0.25, 0.75, -0.25, 0.75)
+    tight, tight_geometry = render(
+        font, codepoint=ord("x"), size=128, frame=Frame(-0.25, 0.75, -0.25, 0.75)
     )
 
     # The geometry labels are em units and do not see the frame, so the ink in
@@ -312,14 +341,14 @@ def test_tighter_frame_makes_the_glyph_proportionally_bigger() -> None:
 
 
 def test_non_square_frame_keeps_aspect_ratio_and_centres_the_glyph() -> None:
-    from hrothgar.render import Frame, render_glyph_uniform
+    from hrothgar.render import Frame
 
     font = _roboto_font()
-    default, _ = render_glyph_uniform(font, ord("o"), size=128)
+    default, _ = render(font, codepoint=ord("o"), size=128)
     # 2.0 em wide but only 1.0 em tall: same em_span, so the same scale, but the
     # frame now sits centred in the canvas and the glyph moves with it.
-    wide, _ = render_glyph_uniform(
-        font, ord("o"), size=128, frame=Frame(-0.5, 1.5, -0.25, 0.75)
+    wide, _ = render(
+        font, codepoint=ord("o"), size=128, frame=Frame(-0.5, 1.5, -0.25, 0.75)
     )
 
     assert _ink_height(wide) == _ink_height(default)  # not stretched vertically
@@ -329,7 +358,7 @@ def test_non_square_frame_keeps_aspect_ratio_and_centres_the_glyph() -> None:
 
 
 def test_envelope_frame_contains_the_glyphs_it_was_measured_from() -> None:
-    from hrothgar.render import frame_for_codepoints, render_glyph_uniform
+    from hrothgar.render import frame_for_codepoints
 
     font = _roboto_font()
     codepoints = [ord(c) for c in "AEGOFCSafgo"]
@@ -337,7 +366,7 @@ def test_envelope_frame_contains_the_glyphs_it_was_measured_from() -> None:
     assert 0.0 < frame.em_span < 2.0  # tighter than the legacy window
 
     for codepoint in codepoints:
-        image, _ = render_glyph_uniform(font, codepoint, size=128, frame=frame)
+        image, _ = render(font, codepoint=codepoint, size=128, frame=frame)
         ink = image < 0.5
         assert ink.any()
         assert not (

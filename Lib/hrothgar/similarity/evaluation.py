@@ -18,9 +18,9 @@ import torch
 import torch.nn.functional as F
 
 from hrothgar.dataset import fvar_axes
-from hrothgar.render import geometry_tensor, render_glyph_with_geometry
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.metrics import (
+from hrothgar.render import NORMALIZED, frame_for_codepoints, geometry_tensor, render
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.metrics import (
     geometry_stats,
     label_agreement_at_k,
     membership_ranking,
@@ -28,13 +28,28 @@ from hrothgar.style_embedding.metrics import (
     sibling_retrieval,
     signal_attribution,
 )
-from hrothgar.style_embedding.render_utils import render_input_set
 
 # Variable axes to sweep, and the "these should still look like the same font"
 # reading of each.
 TARGET_AXES = ("wdth", "wght", "slnt", "ital", "opsz")
 DEFAULT_KS = (1, 3, 5)
 _BLANK_THRESHOLD = 0.995
+
+
+def _render_input_set(font, config: FontStyleEmbedderConfig) -> torch.Tensor:
+    """Render a font's full input glyph set as ``(G, 1, H, W)`` greyscale.
+
+    Drawn into the font's per-font tight frame (over the whole input set), the
+    same framing the training collate and ``compute_embedding`` use, so the
+    panel, sampling-stability and membership metrics see identical inputs.
+    """
+    frame = frame_for_codepoints(font, config.input_codepoints)
+    return torch.stack(
+        [
+            render(font, codepoint=cp, size=config.glyph_size, frame=frame)[0]
+            for cp in config.input_codepoints
+        ]
+    ).unsqueeze(1)
 
 
 @dataclass
@@ -66,7 +81,9 @@ def _descriptors(font, config: FontStyleEmbedderConfig):
     geoms: list[torch.Tensor] = []
     shapes: list[torch.Tensor] = []
     for codepoint in config.input_codepoints:
-        image, geometry = render_glyph_with_geometry(font, codepoint, config.glyph_size)
+        image, geometry = render(
+            font, codepoint=codepoint, size=config.glyph_size, frame=NORMALIZED
+        )
         geoms.append(geometry_tensor(geometry))
         pooled = F.adaptive_avg_pool2d(image.unsqueeze(0).unsqueeze(0), (8, 8))
         shapes.append(pooled.flatten())
@@ -115,7 +132,7 @@ def build_eval_panel(
     axis_specs: dict[str, list[tuple[int, list[float]]]] = {t: [] for t in axes}
 
     for font in selected:
-        rendered = render_input_set(font, config.input_codepoints, config.glyph_size)
+        rendered = _render_input_set(font, config)
         if bool((rendered.amin(dim=(-2, -1)) > _BLANK_THRESHOLD).any()):
             continue
         idx = len(kept)
@@ -213,9 +230,7 @@ def sampling_stability(
         if panel.images is not None:
             images = panel.images[i]
         else:
-            images = render_input_set(
-                panel.fonts[i], panel.config.input_codepoints, panel.config.glyph_size
-            )
+            images = _render_input_set(panel.fonts[i], panel.config)
         images = images[~(images.amin(dim=(-2, -1)) > _BLANK_THRESHOLD).squeeze(1)]
         n = images.shape[0]
         if n < 4:
@@ -262,14 +277,7 @@ def membership_eval(
     if panel.images is not None:
         images = panel.images
     else:
-        images = torch.stack(
-            [
-                render_input_set(
-                    f, panel.config.input_codepoints, panel.config.glyph_size
-                )
-                for f in panel.fonts
-            ]
-        )
+        images = torch.stack([_render_input_set(f, panel.config) for f in panel.fonts])
     n_glyphs = images.shape[1]
     slots = random.Random(seed).sample(
         range(n_glyphs), min(codepoints_per_font, n_glyphs)

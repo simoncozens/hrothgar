@@ -13,7 +13,7 @@ from __future__ import annotations
 import torch
 
 from hrothgar.dataset import AllGidsDataset, DatasetMaker
-from hrothgar.render import render_gid_with_geometry
+from hrothgar.render import NORMALIZED, render
 
 
 class UpscalerDatasetMaker(DatasetMaker):
@@ -28,7 +28,7 @@ class UpscalerDatasetMaker(DatasetMaker):
         the diffusion model's output can be fed directly to the upscaler.  Returns
         a ``(size, size)`` grayscale tensor in ``[0, 1]`` (0 = ink, 1 = white).
         """
-        image, _ = render_gid_with_geometry(font, gid, size)
+        image, _ = render(font, gid=gid, size=size, frame=NORMALIZED)
         return image  # (size, size)
 
     def __init__(

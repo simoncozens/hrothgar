@@ -48,7 +48,7 @@ from hrothgar.content_detector.constants import (
 from hrothgar.dataset import DatasetMaker, fvar_axes, style_bucket
 from hrothgar.fontquant import FontQuantTable
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.render import Frame, render_glyph_uniform
+from hrothgar.render import Frame, render
 
 
 # --------------------------------------------------------------------------- #
@@ -336,7 +336,7 @@ def _x_height_em(font: _RenderFont) -> float:
     if x_height:
         return x_height / upem
     if ord("x") in font.codepoints:
-        _image, geometry = render_glyph_uniform(font, ord("x"), 64)
+        _image, geometry = render(font, codepoint=ord("x"), size=64)
         return max(geometry["scale_y"], 1e-3)
     return 1.0
 
@@ -381,8 +381,8 @@ class _CellDataset(TorchDataset):
         position = list(cell.position_for(self.epoch))
         frame = content_frame(self.config)
 
-        positive, positive_geometry = render_glyph_uniform(
-            font, cell.anchor, size, axis_position=position, frame=frame
+        positive, positive_geometry = render(
+            font, codepoint=cell.anchor, size=size, axis_position=position, frame=frame
         )
         if is_blank_render(positive):
             # An axis extreme (or a broken font) can render empty, and a blank
@@ -409,8 +409,8 @@ class _CellDataset(TorchDataset):
         rasters = [positive]
         heights = [normalised_height(positive_geometry["scale_y"], font.x_height_em)]
         for cp in candidates:
-            image, geometry = render_glyph_uniform(
-                font, cp, size, axis_position=position, frame=frame
+            image, geometry = render(
+                font, codepoint=cp, size=size, axis_position=position, frame=frame
             )
             # Drop any codepoint that renders to the anchor's own outline: it is
             # the same shape with a contradictory target, not a negative.

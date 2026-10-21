@@ -44,7 +44,7 @@ from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.dataset_fontid import load_or_build_units
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.googlefonts import StandaloneFont
-from hrothgar.render import GEOMETRY_NAMES, render_glyph_with_geometry
+from hrothgar.render import GEOMETRY_NAMES, NORMALIZED, render
 from hrothgar.upscaler.model import UpscalerConfig, UpscalerModel
 from hrothgar.utils import pick_device
 
@@ -377,8 +377,8 @@ def main() -> None:
                 glyphs.append((image, geom))
             elif font is not None and cp_ref in font.codepoints:
                 try:
-                    ref_img, ref_geom = render_glyph_with_geometry(
-                        font, cp_ref, glyph_size, axis_position=axis_position
+                    ref_img, ref_geom = render(
+                        font, codepoint=cp_ref, size=glyph_size, axis_position=axis_position, frame=NORMALIZED
                     )
                     glyphs.append((ref_img.detach().cpu().numpy(), ref_geom))
                 except Exception:

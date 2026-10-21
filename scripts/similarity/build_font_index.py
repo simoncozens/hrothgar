@@ -46,8 +46,8 @@ import torch
 import tqdm
 
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.style_embedding.config import FontStyleEmbedderConfig
-from hrothgar.style_embedding.model import FontStyleEmbedder
+from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.model import FontStyleEmbedder
 from hrothgar.utils import pick_device
 
 

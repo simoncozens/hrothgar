@@ -1,18 +1,23 @@
-"""Glyph rendering and normalization.
+"""Glyph rendering.
 
-Single source of truth for everything that turns a font into a glyph image:
+Single source of truth for everything that turns a font into a glyph image.  All
+glyph rendering goes through one entry point, :func:`render`, which takes either
+a ``codepoint`` or a ``gid`` plus a :class:`Frame` (or the :data:`NORMALIZED`
+sentinel) and returns the image together with its five ``GEOMETRY_NAMES``
+em-unit labels:
 
-* low-level FreeType/Skia rendering (:func:`render_gid`, :func:`render_gid_raw`,
-  :func:`render_phrase`)
-* the shared crop-to-ink normalization policy (:func:`crop_to_ink`,
-  :func:`normalize_bitmap`) and its geometry labels (``GEOMETRY_SPEC`` /
-  ``GEOMETRY_NAMES``)
-* the model-facing renderers used by the diffusion generator, the upscaler,
-  the style embedder and the set-membership model (:func:`render_glyph`,
-  :func:`render_glyph_with_geometry`, :func:`render_gid_with_geometry`,
-  :func:`render_glyph_uniform`, :func:`render_gid_uniform`)
-* the em-space :class:`Frame` those uniform renderers draw into, and
-  :func:`frame_for_codepoints` for framing a font by its own ink envelope
+* ``render(font, codepoint=cp, size=size, frame=frame)`` — uniform scale into
+  the em-space :class:`Frame` (aspect ratio kept, ink outside the frame clipped).
+* ``render(font, codepoint=cp, size=size, frame=NORMALIZED)`` — crop-to-ink,
+  stretch to a square (aspect ratio discarded); the framing the diffusion
+  generator and the upscaler consume.
+
+Low-level helpers are private: ``_render_gid_raw`` (the FreeType bitmap, no
+canvas) and ``_normalize_bitmap`` (crop a raw bitmap to ink).  :func:`render_phrase`
+(Skia) renders a string, not a glyph.  The inverse direction — putting a
+crop-to-ink glyph back onto the baseline or into a frame — lives in
+:func:`place_glyph`, :func:`denormalize_uniform` and :func:`crop_placed_to_frame`.
+:func:`frame_for_codepoints` frames a font by its own ink envelope.
 
 Glyphs are rendered as ink-on-white: ink near 0.0 on a white (1.0) background.
 The crop-to-ink convention deliberately discards aspect ratio — the generator
@@ -28,7 +33,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import freetype
 import numpy as np
@@ -36,9 +41,6 @@ import skia
 import torch
 import torch.nn.functional as F
 import uharfbuzz as hb
-
-if TYPE_CHECKING:
-    from hrothgar.googlefonts import Font
 
 # Ink is rendered near 0.0 on a white (1.0) background.
 _INK_THRESHOLD = 0.5
@@ -50,7 +52,7 @@ _INK_THRESHOLD = 0.5
 RENDER_SUPERSAMPLE = 4
 
 
-def render_size(size: int) -> int:
+def _render_size(size: int) -> int:
     """The raster resolution to render at for a given output ``size``."""
     return size * RENDER_SUPERSAMPLE
 
@@ -153,7 +155,7 @@ def _paste_bitmap_onto_canvas(
 
 
 @dataclass
-class RawGlyph:
+class _RawGlyph:
     """A rendered glyph's raw bitmap plus its placement metrics.
 
     All quantities are in *pixels* at the requested ``ppem``.  The conversion to
@@ -177,87 +179,20 @@ def _face_for_path(font_path: str, axis_position: tuple | None) -> freetype.Face
     return face
 
 
-def render_gid(
-    font_path: str | Path,
-    gid: int,
-    size: int,
-    trim_to_rsb: bool = False,
-    axis_position: Sequence[float] | None = None,
-) -> np.ndarray:
-    """Render a glyph by GID into a square image.
-
-    Args:
-        font_path: Path to the font file.
-        gid: Glyph index (GID) to render.
-        size: Output image size. Output is (3, size, size).
-        trim_to_rsb: If True, trim the output to the right sidebearing instead of the full square. This can be useful for certain applications but may produce variable-width outputs.
-        axis_position: Optional in-order list of variable-font user-space
-            design coordinates (matching fvar axis order).
-
-    Returns:
-        Float32 image in [0, 1], shaped (3, size, size).
-    """
-    if size <= 0:
-        raise ValueError("size must be positive")
-    if gid < 0:
-        raise ValueError("gid must be non-negative")
-
-    # Parsing a font file is expensive (especially large variable fonts), and
-    # rendering pipelines call this once per glyph, so cache the face.  The
-    # axis position is part of the key so a cached face never leaks design
-    # coordinates from one call site to another.
-    axis_tuple = tuple(axis_position) if axis_position is not None else None
-    face = _face_for_path(str(font_path), axis_tuple)
-    upem = int(face.units_per_EM)
-    if upem <= 0:
-        raise ValueError(f"Font has invalid units-per-em: {upem}")
-
-    # Match the existing project convention: 1 upem ascent above baseline and
-    # 0.5 upem descent below baseline in the output square.
-    ppem = size
-    face.set_pixel_sizes(0, ppem)
-    face.load_glyph(
-        gid,
-        freetype.FT_LOAD_FLAGS["FT_LOAD_RENDER"]
-        | freetype.FT_LOAD_FLAGS["FT_LOAD_NO_HINTING"],
-        # Hinting failures can cause segfaults we can't catch
-    )
-
-    glyph_slot = face.glyph
-    actual_width = glyph_slot.linearHoriAdvance / 65536
-    bitmap_array = _bitmap_to_array(glyph_slot.bitmap)
-    if trim_to_rsb:
-        image = np.full((size, int(np.ceil(actual_width))), 255, dtype=np.uint8)
-    else:
-        image = np.full((size, size), 255, dtype=np.uint8)
-    baseline_y = int(size * 1.0)
-    _paste_bitmap_onto_canvas(
-        canvas=image,
-        bitmap_array=bitmap_array,
-        bitmap_left=int(glyph_slot.bitmap_left),
-        bitmap_top=int(glyph_slot.bitmap_top),
-        baseline_y=baseline_y,
-    )
-
-    out = image.astype(np.float32) / 255.0
-    return np.stack([out, out, out], axis=0)
-
-
-def render_gid_raw(
+def _render_gid_raw(
     font_path: str | Path,
     gid: int,
     size: int,
     axis_position: Sequence[float] | None = None,
-) -> RawGlyph:
+) -> _RawGlyph:
     """Render a glyph to its raw FreeType bitmap without pasting onto a canvas.
 
-    Unlike :func:`render_gid`, this does not crop to a fixed square, clip
-    descenders at the baseline, or clip negative left sidebearings at ``x=0``.
     The caller receives the tightly-fit coverage bitmap plus its offsets, from
-    which the ink bbox and baseline position can be recovered exactly.
+    which the ink bbox and baseline position can be recovered exactly.  This is
+    the primitive every framing in :func:`render` builds on.
 
     Returns:
-        :class:`RawGlyph` with the coverage bitmap and per-glyph placement in
+        :class:`_RawGlyph` with the coverage bitmap and per-glyph placement in
         pixels.  ``1 em == size`` pixels, so dividing by ``size`` yields em
         units (font-independent).
     """
@@ -280,9 +215,9 @@ def render_gid_raw(
         # Very complex outlines can overflow FreeType's rasterizer at render
         # time (e.g. "raster overflow").  The glyph metrics (advance width)
         # are loaded before the render step, so preserve them and fall back to
-        # a blank glyph — the caller's ``normalize_bitmap`` already treats an
+        # a blank glyph — the caller's ``_normalize_bitmap`` already treats an
         # empty bitmap as blank.
-        return RawGlyph(
+        return _RawGlyph(
             bitmap=np.zeros((0, 0), dtype=np.uint8),
             bitmap_left=0,
             bitmap_top=0,
@@ -290,7 +225,7 @@ def render_gid_raw(
         )
 
     glyph_slot = face.glyph
-    return RawGlyph(
+    return _RawGlyph(
         bitmap=_bitmap_to_array(glyph_slot.bitmap),
         bitmap_left=int(glyph_slot.bitmap_left),
         bitmap_top=int(glyph_slot.bitmap_top),
@@ -336,107 +271,6 @@ def render_phrase(
     return image.toarray()
 
 
-# ── Shared crop-to-ink normalization policy ─────────────────────────────────
-
-
-def render_glyph(
-    font: Font,
-    codepoint: int,
-    size: int,
-    axis_position: list[float] | None = None,
-) -> torch.Tensor:
-    """Render a glyph as a ``(3, size, size)`` float32 tensor in [0, 1].
-
-    This is the full, uncropped render (the glyph is placed on the fixed square
-    canvas).  The crop-to-ink variants (:func:`render_glyph_with_geometry`,
-    :func:`crop_to_ink`) are what the models consume.
-    """
-    arr = font.render(codepoint, size=size, axis_position=axis_position)
-    return torch.from_numpy(arr.copy())
-
-
-def ink_bbox(rendering: torch.Tensor, size: int) -> torch.Tensor:
-    """Return the ink bbox as normalized ``(x0, y0, x1, y1)`` in [0, 1].
-
-    ``rendering`` may be ``(1, H, W)`` or ``(3, H, W)``; ink detection uses
-    channel 0.  Blank glyphs return an all-zero bbox.
-    """
-    ink = rendering[0] < _INK_THRESHOLD
-    if not ink.any():
-        return torch.zeros(4, dtype=torch.float32, device=rendering.device)
-    ys, xs = ink.nonzero(as_tuple=True)
-    return (
-        torch.tensor(
-            [
-                xs.min().float(),
-                ys.min().float(),
-                xs.max().float(),
-                ys.max().float(),
-            ],
-            dtype=torch.float32,
-            device=rendering.device,
-        )
-        / size
-    )
-
-
-def bbox_size(rendering: torch.Tensor, size: int) -> torch.Tensor:
-    """Return the normalized ink bbox ``(width, height)`` in [0, 1]."""
-    x0, y0, x1, y1 = ink_bbox(rendering, size)
-    return torch.stack([x1 - x0, y1 - y0])
-
-
-def crop_to_ink(rendering: torch.Tensor, size: int) -> torch.Tensor:
-    """Crop a glyph to its ink bbox and stretch it to ``(C, size, size)``.
-
-    Args:
-        rendering: ``(C, H, W)`` float32 glyph image in [0, 1] (C = 1 or 3).
-        size: side length of the output square.
-
-    Returns:
-        ``(C, size, size)`` float32. Blank glyphs (no ink) return a white
-        square of ``size``.
-    """
-    if rendering.ndim != 3:
-        raise ValueError(f"crop_to_ink expects (C, H, W), got {tuple(rendering.shape)}")
-
-    channels = rendering.shape[0]
-    ink = rendering[0] < _INK_THRESHOLD
-    if not ink.any():
-        return torch.ones(
-            (channels, size, size), dtype=rendering.dtype, device=rendering.device
-        )
-
-    ys, xs = ink.nonzero(as_tuple=True)
-    y0, y1 = int(ys.min().item()), int(ys.max().item())
-    x0, x1 = int(xs.min().item()), int(xs.max().item())
-    crop = rendering[:, y0 : y1 + 1, x0 : x1 + 1]  # (C, h, w)
-
-    return F.interpolate(
-        crop.unsqueeze(0), size=(size, size), mode="bilinear", align_corners=False
-    )[0]
-
-
-def render_normalized(
-    font: Font,
-    codepoint: int,
-    size: int,
-    axis_position: list[float] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Render + crop-to-ink a glyph.
-
-    Renders at ``render_size(size)`` (supersampled) and downscales during
-    crop-to-ink, so corners survive the AA.
-
-    Returns:
-        ``(normalized, bbox)`` where ``normalized`` is ``(3, size, size)`` and
-        ``bbox`` is normalized ``(x0, y0, x1, y1)`` in [0, 1].
-    """
-    rsize = render_size(size)
-    rendering = render_glyph(font, codepoint, rsize, axis_position=axis_position)
-    return crop_to_ink(rendering, size), ink_bbox(rendering, rsize)
-
-
 def geometry_tensor(geometry: dict[str, float]) -> torch.Tensor:
     """Pack a geometry dict into a ``(5,)`` float32 tensor in canonical order."""
     return torch.tensor(
@@ -444,14 +278,14 @@ def geometry_tensor(geometry: dict[str, float]) -> torch.Tensor:
     )
 
 
-def _geometry_from_raw(raw: RawGlyph, ppem: int) -> dict[str, float]:
+def _geometry_from_raw(raw: _RawGlyph, ppem: int) -> dict[str, float]:
     """Compute the five em-unit geometry labels from a raw FreeType bitmap.
 
-    Shared by the crop-to-ink path (:func:`normalize_bitmap`) and the
-    uniform-scale path (:func:`render_gid_uniform`), so the labels stay
-    identical no matter which framing the image uses.  ``ppem`` is the
-    resolution the glyph was rendered at (1 em == ``ppem`` pixels), so dividing
-    pixel offsets by it yields em units.
+    Shared by the crop-to-ink path (:func:`_normalize_bitmap`) and the
+    uniform-scale path (:func:`render`), so the labels stay identical no matter
+    which framing the image uses.  ``ppem`` is the resolution the glyph was
+    rendered at (1 em == ``ppem`` pixels), so dividing pixel offsets by it
+    yields em units.
     """
     if raw.bitmap.size == 0:
         # Blank glyph (space, etc.): no ink, but the advance is still meaningful.
@@ -464,7 +298,7 @@ def _geometry_from_raw(raw: RawGlyph, ppem: int) -> dict[str, float]:
         }
 
     coverage = np.asarray(raw.bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
-    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches crop_to_ink's threshold
+    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches the shared ink threshold
 
     if not ink.any():
         return {
@@ -489,7 +323,7 @@ def _geometry_from_raw(raw: RawGlyph, ppem: int) -> dict[str, float]:
     }
 
 
-def normalize_bitmap(
+def _normalize_bitmap(
     bitmap: np.ndarray,
     bitmap_left: int,
     bitmap_top: int,
@@ -507,7 +341,7 @@ def normalize_bitmap(
     ``size`` is the output square side length.  ``ppem`` is the raster
     resolution the bitmap was *rendered* at (used for the em-unit geometry;
     defaults to ``size``).  They differ when the glyph was rendered
-    supersampled (``render_size``) and downscaled here.
+    supersampled (``_render_size``) and downscaled here.
 
     Returns:
         ``(image, geometry)`` where ``image`` is a ``(1, size, size)`` float32
@@ -516,7 +350,7 @@ def normalize_bitmap(
         ``descender_depth``, ``advance`` in em units.
     """
     ppem = ppem if ppem is not None else size
-    raw = RawGlyph(
+    raw = _RawGlyph(
         bitmap=np.asarray(bitmap, dtype=np.uint8),
         bitmap_left=int(bitmap_left),
         bitmap_top=int(bitmap_top),
@@ -530,7 +364,7 @@ def normalize_bitmap(
         return image, geometry
 
     coverage = np.asarray(raw.bitmap, dtype=np.float32) / 255.0  # 0..1, 1 = full ink
-    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches crop_to_ink's threshold
+    ink = coverage > (1.0 - _INK_THRESHOLD)  # matches the shared ink threshold
 
     if not ink.any():
         image = torch.ones((1, size, size), dtype=torch.float32)
@@ -563,8 +397,8 @@ def place_glyph(
     descender_em: float = 0.5,
     origin_x_em: float = 0.5,
 ) -> tuple[np.ndarray, int, int, int]:
-    """Place a crop-to-ink glyph back onto a baseline canvas (inverse of
-    :func:`normalize_bitmap`).
+    """Place a crop-to-ink glyph back onto a baseline canvas (inverse of the
+    crop-to-ink normalization).
 
     Args:
         image: ``(H, W)`` float32 array in [0, 1], ink = 0, white = 1 — a
@@ -634,7 +468,7 @@ def crop_placed_to_frame(
     A placed canvas is already in em space — baseline ``ascender_em`` em from
     the top, X origin ``origin_x_em`` em from the left, ``1 em == ppm`` pixels —
     so a tighter frame is just a crop of that canvas, no re-render.  The result
-    lines up with :func:`render_gid_uniform` for the same glyph and ``size``, so
+    lines up with :func:`render` for the same glyph and ``size``, so
     a generated glyph re-framed here matches GT rendered there (up to the
     geometry predictor's error).  Frames that extend past the placed canvas are
     clipped; for the tight 1.40em frame that never happens (it sits inside the
@@ -644,7 +478,7 @@ def crop_placed_to_frame(
         placed: ``(H, W)`` float32 array in [0, 1] (ink = 0, white = 1), a
             :func:`place_glyph` output.
         frame: the em rectangle to show, as a :class:`Frame`.
-        size: output square side length (matches ``render_gid_uniform``).
+        size: output square side length (matches ``render``).
         ppm / ascender_em / origin_x_em: the ``place_glyph`` conventions the
             canvas was produced with.
     """
@@ -671,53 +505,6 @@ def crop_placed_to_frame(
     src = torch.from_numpy(np.ascontiguousarray(crop, dtype=np.float32))[None, None]
     out = F.interpolate(src, size=(size, size), mode="bilinear", align_corners=False)
     return out[0, 0].numpy()
-
-
-# ── Model-facing crop-to-ink renderers ──────────────────────────────────────
-
-
-def render_gid_with_geometry(
-    font,
-    gid: int,
-    size: int,
-    axis_position: Sequence[float] | None = None,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render a glyph by GID, crop-to-ink, and return its geometry labels.
-
-    Reads FreeType's raw bitmap and offsets directly (via
-    :func:`render_gid_raw`), so descenders are not clipped at the baseline and
-    negative left sidebearings are not clipped at ``x=0``.  This is the same
-    normalize-to-square policy the factorized diffusion model uses, so a glyph
-    consumed here occupies the same canonical square as the diffusion model's
-    output.  The glyph is rendered supersampled (``render_size``) and downscaled
-    during normalization, so corners survive the AA.
-
-    Returns:
-        ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
-        tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is a dict of the
-        five em-unit labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
-        ``descender_depth``, ``advance``.
-    """
-    rsize = render_size(size)
-    raw = render_gid_raw(font.path, gid, rsize, axis_position=axis_position)
-    image, geometry = normalize_bitmap(
-        raw.bitmap, raw.bitmap_left, raw.bitmap_top, raw.advance_px, size, ppem=rsize
-    )
-    return image[0], geometry
-
-
-def render_glyph_with_geometry(
-    font,
-    codepoint: int,
-    size: int,
-    axis_position: Sequence[float] | None = None,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render + crop-to-ink a glyph by codepoint, returning its geometry labels.
-
-    See :func:`render_gid_with_geometry` for the normalization policy.
-    """
-    gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
-    return render_gid_with_geometry(font, gid, size, axis_position=axis_position)
 
 
 # ── Framing ──────────────────────────────────────────────────────────────
@@ -801,6 +588,25 @@ class Frame:
 # The canonical 2em framing, and what every existing caller gets.
 UNIFORM_FRAME = Frame()
 
+
+class _Normalized:
+    """Sentinel for the crop-to-ink framing (pass :data:`NORMALIZED` to
+    :func:`render`).
+
+    Not a :class:`Frame` — it carries no em rectangle — so it cannot be passed
+    to the uniform path or its inverse (:func:`denormalize_uniform`).
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return "NORMALIZED"
+
+
+# The crop-to-ink framing: discard aspect ratio and stretch to a square.
+NORMALIZED = _Normalized()
+
+
 # How much to grow a font's ink envelope when framing that font.  The measured
 # outlines are the *default instance* (``glyf``/``CFF`` store one), so a render
 # at an axis extreme (``wght``/``opsz``/``GRAD``) grows past the envelope.
@@ -857,49 +663,78 @@ def frame_for_codepoints(
     )
 
 
-# ── Uniform-scale renderers ────────────────────────────────────────────────
+# ── The one rendering function ────────────────────────────────────────────
 
 
-def render_gid_uniform(
+def render(
     font,
-    gid: int,
+    *,
+    codepoint: int | None = None,
+    gid: int | None = None,
     size: int,
     axis_position: Sequence[float] | None = None,
-    *,
-    frame: Frame = UNIFORM_FRAME,
+    frame: Frame | _Normalized = UNIFORM_FRAME,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render a glyph by GID at a uniform scale into a fixed square.
+    """Render one glyph and return its ``(image, geometry)``.
 
-    The canvas shows exactly the em rectangle ``frame`` (default
-    :data:`UNIFORM_FRAME`, the 2em window this function has always used: the
-    baseline 1.5em from the top, the X origin 0.5em from the left, ``1 em ==
-    size // 2`` pixels).  That default is the window :func:`place_glyph` and
-    :func:`denormalize_uniform` invert, so generation and set-membership keep
-    round-tripping — a caller using a custom frame must denormalize with the
-    same one.  A tighter frame makes every glyph *larger* at the same
-    output ``size`` — the frame is the only lever on how many pixels a given em
-    extent gets — which is why a caller with a per-font ink envelope
-    (:func:`frame_for_codepoints`) passes it here: the same letter then occupies
-    comparable pixels in every font, instead of shrinking with the design's
-    x-height.
+    Exactly one of ``codepoint`` or ``gid`` must be given; a codepoint is looked
+    up through the font's HarfBuzz face.  ``frame`` selects the framing:
 
-    Aspect ratio and absolute em extent are kept, and ink outside the frame is
-    clipped, unlike crop-to-ink.  A non-square frame keeps the one uniform scale
-    (fitted to its larger dimension) and is centred in the canvas.
+    * :class:`Frame` (default :data:`UNIFORM_FRAME`) — uniform scale into the em
+      rectangle, aspect ratio kept, ink outside the frame clipped.
+    * :data:`NORMALIZED` — crop-to-ink, stretch to a square, aspect ratio
+      discarded.  This is the framing the diffusion generator and the upscaler
+      consume.
 
-    The glyph is rendered supersampled (:func:`render_size`) and downscaled so
+    The glyph is rendered supersampled (:func:`_render_size`) and downscaled so
     corners survive the AA.
 
     Returns:
-        ``(image, geometry)`` where ``image`` is a ``(size, size)`` greyscale
-        tensor in [0, 1] (0 = ink, 1 = white) and ``geometry`` is the same
-        five em-unit labels as :func:`render_gid_with_geometry` — always in the
-        font's own em units, whatever the frame.
+        ``(image, geometry)`` where ``image`` is a ``(size, size)`` float32
+        tensor in ``[0, 1]`` (0 = ink, 1 = white) and ``geometry`` is a dict of
+        the five em-unit labels ``scale_x``, ``scale_y``, ``left_sidebearing``,
+        ``descender_depth``, ``advance`` — always in the font's own em units,
+        whatever the frame.
     """
-    rsize = render_size(size)
+    if (gid is None) == (codepoint is None):
+        raise ValueError("render() takes exactly one of gid= or codepoint=")
+    if gid is None:
+        gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
+
+    if frame is NORMALIZED:
+        return _render_normalized(font, gid, size, axis_position)
+    if not isinstance(frame, Frame):
+        raise TypeError(f"frame must be a Frame or NORMALIZED, got {frame!r}")
+    return _render_uniform(font, gid, size, axis_position, frame)
+
+
+def _render_normalized(
+    font,
+    gid: int,
+    size: int,
+    axis_position: Sequence[float] | None,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """The crop-to-ink (:data:`NORMALIZED`) path of :func:`render`."""
+    rsize = _render_size(size)
+    raw = _render_gid_raw(font.path, gid, rsize, axis_position=axis_position)
+    image, geometry = _normalize_bitmap(
+        raw.bitmap, raw.bitmap_left, raw.bitmap_top, raw.advance_px, size, ppem=rsize
+    )
+    return image[0], geometry
+
+
+def _render_uniform(
+    font,
+    gid: int,
+    size: int,
+    axis_position: Sequence[float] | None,
+    frame: Frame,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    """The uniform-scale (:class:`Frame`) path of :func:`render`."""
+    rsize = _render_size(size)
     span = frame.em_span  # em covered by one canvas side
     ppm = max(1, round(rsize / span))  # 1 em == ppm pixels
-    raw = render_gid_raw(font.path, gid, ppm, axis_position=axis_position)
+    raw = _render_gid_raw(font.path, gid, ppm, axis_position=axis_position)
     geometry = _geometry_from_raw(raw, ppm)
 
     # Centre the frame in the square canvas (a no-op for a square frame).
@@ -924,22 +759,6 @@ def render_gid_uniform(
     return image, geometry
 
 
-def render_glyph_uniform(
-    font,
-    codepoint: int,
-    size: int,
-    axis_position: Sequence[float] | None = None,
-    *,
-    frame: Frame = UNIFORM_FRAME,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render + uniform-scale a glyph by codepoint, returning its geometry labels.
-
-    See :func:`render_gid_uniform` for the framing.
-    """
-    gid = hb.Font(font.hb_face).get_nominal_glyph(codepoint)
-    return render_gid_uniform(font, gid, size, axis_position=axis_position, frame=frame)
-
-
 def denormalize_uniform(
     image: np.ndarray,
     geometry: Sequence[float],
@@ -949,8 +768,8 @@ def denormalize_uniform(
 ) -> torch.Tensor:
     """Denormalize a crop-to-ink glyph into the uniform square framing.
 
-    Inverse of :func:`render_gid_uniform`: un-squares a crop-to-ink normalized
-    glyph back to its true em extent and places it onto a ``size``-square canvas
+    Inverse of the uniform framing of :func:`render`: un-squares a crop-to-ink
+    normalized glyph back to its true em extent and places it onto a ``size``-square canvas
     showing exactly the em rectangle ``frame`` (default :data:`UNIFORM_FRAME`:
     baseline 1.5em from the top, X origin 0.5em from the left, ``1 em ==
     size / 2`` pixels).  Used to frame generated glyphs the same way the
@@ -1014,11 +833,6 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Save rendering to a PNG file next to the font",
     )
-    parser.add_argument(
-        "--trim",
-        action="store_true",
-        help="Trim output width to the right sidebearing instead of the full square",
-    )
 
     parser.add_argument(
         "--show",
@@ -1030,17 +844,20 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     """Debug entry point to render a single glyph and display it."""
-    args = _parse_args()
-    rendering = render_gid(args.font, args.gid, args.size, trim_to_rsb=args.trim)
+    from hrothgar.googlefonts import StandaloneFont
 
-    non_white_pixels = int((rendering[0] < 1.0).sum())
+    args = _parse_args()
+    font = StandaloneFont(args.font)
+    rendering, _ = render(font, gid=args.gid, size=args.size)
+
+    non_white_pixels = int((rendering < 1.0).sum())
     print("Rendered non-white pixels:", non_white_pixels)
 
     if args.show:
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(5, 5))
-        plt.imshow(rendering[0], cmap="gray", vmin=0.0, vmax=1.0)
+        plt.imshow(rendering, cmap="gray", vmin=0.0, vmax=1.0)
         plt.title(f"{args.font.name} GID={args.gid} size={args.size}")
         plt.axis("off")
         plt.tight_layout()
@@ -1049,7 +866,7 @@ def main() -> None:
         import matplotlib.pyplot as plt
 
         output_path = args.font.with_suffix(f".gid{args.gid}.png")
-        plt.imsave(output_path, rendering[0], cmap="gray", vmin=0.0, vmax=1.0)
+        plt.imsave(output_path, rendering, cmap="gray", vmin=0.0, vmax=1.0)
         print(f"Saved rendering to {output_path}")
 
 

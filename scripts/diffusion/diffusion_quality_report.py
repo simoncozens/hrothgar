@@ -37,7 +37,7 @@ from hrothgar.diffusion.config import FontIdDiffusionConfig
 from hrothgar.diffusion.fontid import build_fontid_model
 from hrothgar.googlefonts import GoogleFont, GoogleFonts, StandaloneFont
 from hrothgar.llamagen_lpips import LPIPS
-from hrothgar.render import render_glyph_with_geometry
+from hrothgar.render import NORMALIZED, render
 from hrothgar.utils import pick_device
 
 GOOD_THRESHOLD = 0.1
@@ -277,8 +277,8 @@ def main() -> None:
             recs = model.sample(cp_t, meta).clamp(0.0, 1.0)  # (B, 1, H, W)
             gts = torch.stack(
                 [
-                    render_glyph_with_geometry(
-                        font, cp, image_size, axis_position=axis_position
+                    render(
+                        font, cp, image_size, axis_position=axis_position, frame=NORMALIZED
                     )[0]
                     for cp in available
                 ]

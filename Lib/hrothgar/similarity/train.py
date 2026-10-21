@@ -16,18 +16,18 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from hrothgar.style_embedding.config import (
+from hrothgar.similarity.config import (
     FontStyleEmbedderConfig,
     FontStyleEmbeddingLossWeights,
 )
-from hrothgar.style_embedding.dataset import FontStyleDatasetMaker
-from hrothgar.style_embedding.evaluation import (
+from hrothgar.similarity.dataset import FontStyleDatasetMaker
+from hrothgar.similarity.evaluation import (
     build_eval_panel,
     flatten_metrics,
     run_suite,
 )
-from hrothgar.style_embedding.losses import compute_losses
-from hrothgar.style_embedding.model import FontStyleEmbedder
+from hrothgar.similarity.losses import compute_losses
+from hrothgar.similarity.model import FontStyleEmbedder
 from hrothgar.utils import TrainingLoop, progress_values
 
 # ── Hyper-parameters ────────────────────────────────────────────────────────

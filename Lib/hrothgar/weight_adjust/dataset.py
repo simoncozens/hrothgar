@@ -44,7 +44,7 @@ from hrothgar.dataset import (
 )
 from hrothgar.dataset_constants import LATIN_KERNEL
 from hrothgar.googlefonts import GoogleFonts
-from hrothgar.weight_adjust.render import render_gid_shared_frame
+from hrothgar.render import render
 
 
 # ── Shared item-building / rendering helpers ────────────────────────────────
@@ -172,20 +172,20 @@ def _render_item(item: dict, image_size: int) -> dict:
     ref_font, ref_axis = item["ref"]
     target = item["target_cp"]
 
-    reg_img, reg_geo = render_gid_shared_frame(
-        src_font, _gid(src_font, target), image_size, src_axis
+    reg_img, reg_geo = render(
+        src_font, gid=_gid(src_font, target), size=image_size, axis_position=src_axis
     )
-    bold_img, bold_geo = render_gid_shared_frame(
-        tgt_font, _gid(tgt_font, target), image_size, tgt_axis
+    bold_img, bold_geo = render(
+        tgt_font, gid=_gid(tgt_font, target), size=image_size, axis_position=tgt_axis
     )
 
     pairs = []
     for cp in item["exemplar_cps"]:
-        er, _ = render_gid_shared_frame(
-            src_font, _gid(src_font, cp), image_size, src_axis
+        er, _ = render(
+            src_font, gid=_gid(src_font, cp), size=image_size, axis_position=src_axis
         )
-        eb, _ = render_gid_shared_frame(
-            ref_font, _gid(ref_font, cp), image_size, ref_axis
+        eb, _ = render(
+            ref_font, gid=_gid(ref_font, cp), size=image_size, axis_position=ref_axis
         )
         pairs.append(torch.stack([er, eb], dim=0))  # (2, H, W)
     exemplars = torch.stack(pairs, dim=0)  # (K, 2, H, W)

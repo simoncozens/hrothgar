@@ -67,7 +67,7 @@ def test_empty_calibrator_is_the_raw_sigmoid() -> None:
     assert torch.allclose(empty.calibrate(logits), torch.sigmoid(logits))
 
 
-def test_classify_slot_labels() -> None:
+def test_classify_slot_probability_rule() -> None:
     anchors = [ord("a"), ord("e")]
     # Confident and correct.
     assert classify_slot(torch.tensor([0.9, 0.1]), 0, anchors) == ("ok", None)
@@ -85,6 +85,33 @@ def test_classify_slot_labels() -> None:
     )
 
 
+def test_classify_slot_cosine_margin_rule() -> None:
+    anchors = [ord("á"), ord("à")]
+    # Laila, scored *centred*: the claimed probability is lifted above any useful
+    # threshold (0.70), so a probability gate cannot fire, but the cosine ranking
+    # still puts the à anchor decisively closer.
+    probabilities = torch.tensor([0.70, 1.00])
+    assert classify_slot(
+        probabilities, 0, anchors, cosine=torch.tensor([0.14, 0.80])
+    ) == ("wrong", ord("à"))
+
+    # A legitimate á whose à anchor is a little closer is not accused: the margin
+    # (0.10) is under the default 0.35 even though à is the cosine winner.
+    assert classify_slot(
+        probabilities, 0, anchors, cosine=torch.tensor([0.60, 0.50])
+    ) == ("ok", None)
+
+    # A large cosine margin is not enough if the competitor is not confident.
+    assert classify_slot(
+        torch.tensor([0.60, 0.65]), 0, anchors, cosine=torch.tensor([0.10, 0.60])
+    ) == ("ok", None)
+
+    # Ambiguity is still tested first.
+    assert classify_slot(
+        torch.tensor([0.30, 0.20]), 0, anchors, cosine=torch.tensor([0.10, 0.60])
+    ) == ("ambiguous", None)
+
+
 def test_legitimate_glyph_is_not_flagged_when_a_neighbour_ranks_higher() -> None:
     anchors = [ord("a"), ord("à")]
     # A perfectly good `a` where the à anchor ranks slightly higher: the `a`
@@ -95,6 +122,14 @@ def test_legitimate_glyph_is_not_flagged_when_a_neighbour_ranks_higher() -> None
     # The reject threshold is the knob that separates them.
     assert classify_slot(
         torch.tensor([0.89, 0.99]), 0, anchors, reject_below=0.95
+    ) == ("wrong", ord("à"))
+
+    # The centred cosine rule divides the same two cases the same way.
+    assert classify_slot(
+        torch.tensor([0.89, 0.99]), 0, anchors, cosine=torch.tensor([0.55, 0.60])
+    ) == ("ok", None)
+    assert classify_slot(
+        torch.tensor([0.89, 0.99]), 0, anchors, cosine=torch.tensor([0.10, 0.80])
     ) == ("wrong", ord("à"))
 
 

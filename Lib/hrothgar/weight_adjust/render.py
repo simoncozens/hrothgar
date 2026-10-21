@@ -1,113 +1,41 @@
-"""Shared-frame rendering for the weight-adjustment model.
+"""Shared-frame geometry read-back for the weight-adjustment model.
 
 The generator crop-to-inks and stretches to a square because its job is to
 produce *content* from a style latent, and layout is a confound to strip off.
 Weight adjustment is the opposite: the content (skeleton) is already given, and
 the thing being manipulated — stroke thickness — is exactly what crop-to-ink
-normalizes away.  So this module renders every weight of a glyph into the *same*
-``EM_SPAN``-em square at the *same* pen origin and baseline.
+normalizes away.  So every weight of a glyph is rendered into the *same* frame
+at the *same* pen origin and baseline.
 
-The origin is a fixed, known offset from the left edge, so the left sidebearing
-can be read back off the raster (``lsb = ink_x0 - origin``).  Only the advance
-width is invisible in ink, and it is returned directly by the renderer (and
-predicted by the model's advance head at inference time).
+That frame is :data:`hrothgar.render.UNIFORM_FRAME` (the 2em window): 0.5em of
+left margin, 1.5em above and 0.5em below the baseline.  The origin is a fixed,
+known offset from the left edge, so the left sidebearing can be read back off
+the raster (``lsb = ink_x0 - origin``).  Only the advance width is invisible in
+ink; the model's advance head supplies it.
 
-Frame layout (``EM_SPAN`` = ascender + descender = 2.0 em square):
-
-* ``ORIGIN_X_EM = 0.5`` — left margin so glyphs with a negative left
-  sidebearing (e.g. an italic ``f`` or ``j`` overhang) extend left of the
-  origin without clipping.
-* ``ASCENDER_EM = 1.0`` / ``DESCENDER_EM = 1.0`` — 1 em of room above and
-  below the baseline, so descenders are not clipped.
+Rendering itself goes through :func:`hrothgar.render.render`; this module only
+holds the frame's derived constants and the functions that read geometry back
+off a rendered image at inference time.
 """
 
 from __future__ import annotations
 
-from typing import Sequence
-
-import numpy as np
 import torch
-import torch.nn.functional as F
 
-from hrothgar.render import render_gid_raw, render_size
+from hrothgar.render import UNIFORM_FRAME
 
-ASCENDER_EM = 1.0
-DESCENDER_EM = 1.0
-ORIGIN_X_EM = 0.5
-EM_SPAN = ASCENDER_EM + DESCENDER_EM  # 2.0 em square
+# Derived from UNIFORM_FRAME: baseline 1.5em from the top, X origin 0.5em from
+# the left, 0.5em of descender room.
+ASCENDER_EM = UNIFORM_FRAME.top  # 1.5
+DESCENDER_EM = -UNIFORM_FRAME.bottom  # 0.5
+ORIGIN_X_EM = -UNIFORM_FRAME.left  # 0.5
+EM_SPAN = UNIFORM_FRAME.em_span  # 2.0 em square
 
 _INK_THRESHOLD = 0.5
 
 
-def render_gid_shared_frame(
-    font,
-    gid: int,
-    size: int,
-    axis_position: Sequence[float] | None = None,
-) -> tuple[torch.Tensor, dict[str, float]]:
-    """Render a glyph into the shared, origin-tracked frame.
-
-    Renders supersampled (``render_size``) and downscales with area averaging,
-    so the anti-aliased edges survive the downscale.  Both the regular and the
-    bold are placed at the same pen origin and baseline, each using its own
-    FreeType bitmap offsets, so the stroke-thickness difference between them is
-    a first-order pixel signal.
-
-    Args:
-        font: a ``Font`` (needs ``.path``).
-        gid: glyph index to render.
-        size: output square side length.
-        axis_position: variable-font design coordinates in fvar order (``None``
-            for a static/default instance).
-
-    Returns:
-        ``(image, geometry)`` where ``image`` is a ``(size, size)`` float32
-        tensor in ``[0, 1]`` (0 = ink, 1 = white) and ``geometry`` carries the
-        two labels that matter for weight adjustment — ``advance`` and
-        ``left_sidebearing``, both in em units.  ``left_sidebearing`` is the
-        ground-truth value for reference; at inference it is read back off the
-        image via :func:`measure_geometry`.
-    """
-    rsize = render_size(size)  # supersampled: 1 em == rsize px
-    raw = render_gid_raw(font.path, gid, rsize, axis_position=axis_position)
-
-    canvas_h = int(EM_SPAN * rsize)
-    canvas = np.full((canvas_h, canvas_h), 255, dtype=np.uint8)
-    origin_x = int(ORIGIN_X_EM * rsize)
-    baseline_y = int(ASCENDER_EM * rsize)
-
-    bitmap = raw.bitmap  # (h, w) uint8 coverage: 0 = no ink, 255 = full ink
-    if bitmap.size:
-        h, w = bitmap.shape
-        dst_x0 = origin_x + raw.bitmap_left
-        dst_y0 = baseline_y - raw.bitmap_top
-        # Clamp the paste so a glyph whose ink extends past the frame does not
-        # crash — it just clips (the frame is sized generously, so this is rare).
-        src_x0 = max(0, -dst_x0)
-        src_y0 = max(0, -dst_y0)
-        src_x1 = w - max(0, dst_x0 + w - canvas_h)
-        src_y1 = h - max(0, dst_y0 + h - canvas_h)
-        if src_x0 < src_x1 and src_y0 < src_y1:
-            dx0 = max(0, dst_x0)
-            dy0 = max(0, dst_y0)
-            canvas[dy0 : dy0 + (src_y1 - src_y0), dx0 : dx0 + (src_x1 - src_x0)] = (
-                255 - bitmap[src_y0:src_y1, src_x0:src_x1]
-            )
-
-    image = torch.from_numpy(canvas).float().div_(255.0)  # 0 = ink, 1 = white
-    image = F.interpolate(
-        image.unsqueeze(0).unsqueeze(0), size=(size, size), mode="area"
-    )[0, 0]
-
-    geometry = {
-        "advance": raw.advance_px / rsize,
-        "left_sidebearing": raw.bitmap_left / rsize,
-    }
-    return image, geometry
-
-
 def measure_geometry(image: torch.Tensor, size: int) -> dict[str, float]:
-    """Read ink geometry back off a shared-frame image.
+    """Read ink geometry back off a uniform-frame image.
 
     Everything except ``advance`` is visible in the raster, because the frame's
     origin and baseline are fixed and known.  ``advance`` is not; the model's
@@ -148,5 +76,5 @@ def measure_geometry(image: torch.Tensor, size: int) -> dict[str, float]:
 
 
 def measure_lsb(image: torch.Tensor, size: int) -> float:
-    """The left sidebearing in em, read off a shared-frame image."""
+    """The left sidebearing in em, read off a uniform-frame image."""
     return measure_geometry(image, size)["left_sidebearing"]

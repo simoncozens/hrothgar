@@ -25,7 +25,7 @@ class ContentDetectorConfig:
     negatives: list[int] = field(default_factory=lambda: list(PILOT_NEGATIVES))
 
     # Input rendering: each glyph is drawn into the em-space ``render.Frame``
-    # below (see ``render_glyph_uniform``).  Aspect ratio is *kept* here, because
+    # below (see ``render``).  Aspect ratio is *kept* here, because
     # several content distinctions (l/I, o/O) are partly about proportion, unlike
     # the crop-to-ink framing the generator consumes.
     glyph_size: int = 256

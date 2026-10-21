@@ -44,7 +44,7 @@ from hrothgar.content_detector.dataset import (
     is_shape_identical,
 )
 from hrothgar.dataset import style_bucket
-from hrothgar.render import render_glyph_uniform
+from hrothgar.render import render
 
 REJECT_THRESHOLD = 0.5
 
@@ -181,7 +181,7 @@ def build_content_panel(
         # Render each anchor once: the raster is both the positive entry and the
         # reference for the shape-identity filter below.
         anchor_images = {
-            anchor: render_glyph_uniform(font, anchor, config.glyph_size, frame=frame)[0]
+            anchor: render(font, codepoint=anchor, size=config.glyph_size, frame=frame)[0]
             for anchor in config.anchors
         }
 
@@ -198,7 +198,7 @@ def build_content_panel(
             for cp in hard_negative_pool(anchor, pool):
                 if cp == anchor or cp not in available:
                     continue
-                image, _ = render_glyph_uniform(font, cp, config.glyph_size, frame=frame)
+                image, _ = render(font, codepoint=cp, size=config.glyph_size, frame=frame)
                 if is_shape_identical(anchor_images[anchor], image):
                     continue  # the same outline under a different codepoint
                 per_font.append((cp, "anchor" if cp in anchor_set else "off_hard"))
@@ -216,7 +216,7 @@ def build_content_panel(
             for cp in rng.sample(easy_avail, min(easy_per_font, len(easy_avail)))
         ]
         for cp, bucket in draws:
-            image, _ = render_glyph_uniform(font, cp, config.glyph_size, frame=frame)
+            image, _ = render(font, codepoint=cp, size=config.glyph_size, frame=frame)
             if shaped_like_an_anchor(image):
                 continue
             per_font.append((cp, bucket))
@@ -228,8 +228,8 @@ def build_content_panel(
             seen.add(cp)
             image = anchor_images.get(cp)
             if image is None:
-                image, _ = render_glyph_uniform(
-                    font, cp, config.glyph_size, frame=frame
+                image, _ = render(
+                    font, codepoint=cp, size=config.glyph_size, frame=frame
                 )
             images.append(
                 (image * 255.0).round().clamp(0.0, 255.0).to(torch.uint8).unsqueeze(0)

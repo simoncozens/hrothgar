@@ -67,7 +67,7 @@ from hrothgar.render import (
     DESCENDER_SNAP_EPSILON,
     GEOMETRY_NAMES,
     GEOMETRY_SPEC,
-    render_glyph_uniform,
+    render,
 )
 from hrothgar.utils import SaveLoadModel
 
@@ -687,10 +687,10 @@ class ExemplarDiffusionModel(SaveLoadModel):
                 continue
             evidence = []
             for cp in cps:
-                ev_img, _ = render_glyph_uniform(
+                ev_img, _ = render(
                     inst.font,
-                    cp,
-                    image_size,
+                    codepoint=cp,
+                    size=image_size,
                     axis_position=inst.axis_position,
                 )
                 evidence.append(ev_img.unsqueeze(0))  # (1, H, W)
