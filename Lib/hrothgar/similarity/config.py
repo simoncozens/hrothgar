@@ -31,8 +31,8 @@ class FontStyleEmbedderConfig:
 
     # CNN encoder.
     encoder_base_channels: int = 32
-    # Summary / glyph-token / projection dimensionality.  This is the size of
-    # the per-glyph token fed to the set encoder and of the final summary, NOT
+    # Summary / glyph-token dimensionality.  This is the size of the per-glyph
+    # token fed to the set encoder and of the final L2-normalized summary, NOT
     # the encoder's spatial map channel count (see ``spatial_map_channels``).
     encoder_feature_dim: int = 256
     # Channel count of the encoder's *spatial* feature map (``GlyphEncoder``'s
@@ -55,8 +55,6 @@ class FontStyleEmbedderConfig:
     set_encoder_heads: int = 8
     set_encoder_dropout: float = 0.1
 
-    # Final embedding dimensionality for contrastive loss.
-    projection_dim: int = 128
     # Visual reconstruction auxiliary: the summary must reconstruct the raw
     # content-averaged glyph shape at this grid resolution.
     reconstruction_grid: int = 16
@@ -74,7 +72,6 @@ class FontStyleEmbedderConfig:
 
     # Regularization.
     encoder_dropout: float = 0.3
-    projection_dropout: float = 0.1
 
     # Text conditioning — frozen text encoder provides a training signal
     # via multi-positive contrastive loss.  Not needed at inference.

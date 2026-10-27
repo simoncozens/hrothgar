@@ -178,10 +178,13 @@ def build_eval_panel(
 def _to_space(
     model, summaries: torch.Tensor, device: torch.device, space: str
 ) -> torch.Tensor:
-    if space == "summary":
-        return summaries
-    with torch.no_grad():
-        return F.normalize(model.projection(summaries.to(device)), p=2, dim=-1).cpu()
+    """Return the single L2-normalized summary embedding.
+
+    The projection head is gone: the summary *is* the normalized deliverable, so
+    ``space`` ("summary"/"projection") is now a no-op.  Normalization is
+    defensive (idempotent) in case a caller passes raw summaries.
+    """
+    return F.normalize(summaries.float(), p=2, dim=-1)
 
 
 def _encode_images(

@@ -116,7 +116,6 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             text_encoder_name=text_encoder_name,
             family_positive_weight=family_positive_weight,
             encoder_dropout=getattr(train_args, "encoder_dropout", 0.3),
-            projection_dropout=getattr(train_args, "projection_dropout", 0.1),
         )
         if getattr(train_args, "input_glyphs", None):
             config.input_codepoints = [ord(c) for c in train_args.input_glyphs]
@@ -752,12 +751,6 @@ def _parse_args() -> argparse.Namespace:
         help="Dropout on the pooled style summary.",
     )
     p.add_argument(
-        "--projection-dropout",
-        type=float,
-        default=0.1,
-        help="Dropout in the contrastive projection head (train-time only).",
-    )
-    p.add_argument(
         "--glyph-size", type=int, default=128, help="Rendered glyph size (square)."
     )
     p.add_argument(
@@ -855,8 +848,8 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default="summary",
         choices=["summary", "projection"],
-        help="Embedding space for the validation suite.  'summary' is what the "
-        "shipped index uses; 'projection' is the contrastive space.",
+        help="Deprecated no-op: the projection head is gone, so the summary is "
+        "the single L2-normalized embedding and both choices are identical.",
     )
     p.add_argument(
         "--val-membership-codepoints",

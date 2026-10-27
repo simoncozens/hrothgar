@@ -3,8 +3,10 @@
 Encodes each glyph with a shared CNN into a coarse spatial map, then aggregates
 the per-glyph maps with a permutation-invariant set encoder (self-attention over
 glyphs) instead of a mean pool, so the summary can retain the fine per-glyph
-style (aperture, terminal shape) that averaging destroys.  The summary feeds
-contrastive, tag-prediction, and category heads.
+style (aperture, terminal shape) that averaging destroys.  The L2-normalized
+summary is the single deliverable: it is used directly by the contrastive (and
+tag/family soft-positive) objective and shipped for retrieval, while the
+tag/category/reconstruction heads read the un-normalized summary.
 """
 
 from __future__ import annotations
@@ -165,15 +167,6 @@ class FontStyleEmbedder(SaveLoadModel):
 
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
 
-        # Projection head for contrastive loss.  Dropout is applied to the
-        # output so the sequential's parameter names do not shift.
-        self.projection = nn.Sequential(
-            nn.Linear(config.encoder_feature_dim, config.encoder_feature_dim),
-            nn.SiLU(),
-            nn.Linear(config.encoder_feature_dim, config.projection_dim),
-        )
-        self.projection_dropout = nn.Dropout(config.projection_dropout)
-
         # Tag prediction heads.
         self.tag_heads: nn.ModuleDict | None = None
         if config.tag_names:
@@ -198,12 +191,13 @@ class FontStyleEmbedder(SaveLoadModel):
                 dropout=config.category_dropout,
             )
 
-        # Optional text projection — maps frozen text embeddings into the
-        # same space as image projections for multi-positive contrastive loss.
+        # Optional text projection — maps frozen text embeddings into the same
+        # (normalized summary) space as the image embedding for the
+        # multi-positive contrastive loss.
         self.text_projection: nn.Linear | None = None
         if config.text_encoder_name:
             self.text_projection = nn.Linear(
-                config.text_embedding_dim, config.projection_dim
+                config.text_embedding_dim, config.encoder_feature_dim
             )
 
     def _encode(
@@ -234,16 +228,16 @@ class FontStyleEmbedder(SaveLoadModel):
         images: torch.Tensor,
         glyph_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Encode glyph sets into the summary style embedding.
+        """Encode glyph sets into the L2-normalized summary embedding.
 
         Args:
             images: ``(B, G, 1, H, W)`` greyscale glyph renderings in [0, 1].
             glyph_mask: Optional ``(B, G)`` boolean, ``True`` = glyph visible.
 
         Returns:
-            ``(B, encoder_feature_dim)`` summary vector.
+            ``(B, encoder_feature_dim)`` L2-normalized summary vector.
         """
-        return self._encode(images, glyph_mask)
+        return F.normalize(self._encode(images, glyph_mask), p=2, dim=-1)
 
     def compute_embedding(
         self,
@@ -295,7 +289,7 @@ class FontStyleEmbedder(SaveLoadModel):
             return self.encode(images).squeeze(0).cpu()
 
     def project_text(self, text_embeddings: torch.Tensor) -> torch.Tensor:
-        """Project frozen text embeddings into the contrastive projection space."""
+        """Project frozen text embeddings into the normalized summary space."""
         assert (
             self.text_projection is not None
         ), "text_projection not initialised; set text_encoder_name in config"
@@ -319,23 +313,24 @@ class FontStyleEmbedder(SaveLoadModel):
     ]:
         """Full forward pass.
 
-        Returns ``(embedding, projection, tags, category_logits, reconstruction)``.
-        ``reconstruction`` is the summary decoded back to the raw glyph shape and
+        Returns ``(embedding, projection, tags, category_logits, reconstruction)``
+        where ``projection`` is the same L2-normalized summary as ``embedding``
+        (a second slot kept so the contrastive loss and the retrieval metric can
+        share this forward without changing the tuple shape).  ``reconstruction``
+        is the *un-normalized* summary decoded back to the raw glyph shape and
         feeds the visual reconstruction auxiliary (see ``reconstruction_loss``).
         """
-        embedding = self._encode(images, glyph_mask)
-        projection = F.normalize(
-            self.projection_dropout(self.projection(embedding)), p=2, dim=-1
-        )
+        summary = self._encode(images, glyph_mask)  # (B, F) un-normalized
+        embedding = F.normalize(summary, p=2, dim=-1)  # the single deliverable
         rg = self.config.reconstruction_grid
-        reconstruction = self.reconstruction_head(embedding).view(-1, 1, rg, rg)
+        reconstruction = self.reconstruction_head(summary).view(-1, 1, rg, rg)
 
         tags: dict[str, torch.Tensor] | None = None
         if self.tag_heads is not None:
-            tags = {name: head(embedding) for name, head in self.tag_heads.items()}
+            tags = {name: head(summary) for name, head in self.tag_heads.items()}
 
         category_logits: torch.Tensor | None = None
         if self.category_head is not None:
-            category_logits = self.category_head(embedding)
+            category_logits = self.category_head(summary)
 
-        return embedding, projection, tags, category_logits, reconstruction
+        return embedding, embedding, tags, category_logits, reconstruction

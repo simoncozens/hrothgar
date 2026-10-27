@@ -368,13 +368,12 @@ def category_loss(
 def view_invariance_loss(embeddings: torch.Tensor) -> torch.Tensor:
     """Pull the two views of each font's *summary* embedding together.
 
-    ``embeddings`` is ``(2B, D)`` with view 1 stacked on view 2.  The summary
-    (pre-projection) embedding is what downstream consumers actually use, so the
-    content-invariance that the disjoint-glyph-subset views are meant to teach
-    must be enforced *here*, not only through the contrastive projection head.
-    InfoNCE can otherwise be satisfied by spreading negatives apart while the
-    two views of the same font drift content-sensitive (visible as falling
-    sampling stability even as the contrastive loss drops).
+    ``embeddings`` is ``(2B, D)`` with view 1 stacked on view 2.  The summary is
+    the deliverable, so the content-invariance that the disjoint-glyph-subset
+    views are meant to teach is enforced directly on it (rather than only through
+    the contrastive objective, which can be satisfied by spreading negatives
+    apart while the two views of the same font drift content-sensitive — visible
+    as falling sampling stability even as the contrastive loss drops).
 
     Returns mean ``1 - cos(view1, view2)`` in ``[0, 2]``.
     """
