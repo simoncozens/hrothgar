@@ -31,7 +31,17 @@ class FontStyleEmbedderConfig:
 
     # CNN encoder.
     encoder_base_channels: int = 32
+    # Summary / glyph-token / projection dimensionality.  This is the size of
+    # the per-glyph token fed to the set encoder and of the final summary, NOT
+    # the encoder's spatial map channel count (see ``spatial_map_channels``).
     encoder_feature_dim: int = 256
+    # Channel count of the encoder's *spatial* feature map (``GlyphEncoder``'s
+    # ``out_dim``), before the 1x1 ``spatial_proj`` compression.  Previously this
+    # was conflated with ``encoder_feature_dim`` (256), which materialised a
+    # 256 x 64 x 64 map per glyph — the dominant training-time activation
+    # (~8.6 GB for a 32/32/128 step).  Decoupled so the spatial map can stay
+    # lean while the summary stays wide.
+    spatial_map_channels: int = 64
     encoder_downsample: int = 2  # 128 -> 64
 
     # Spatial pooling.  A 1x1 projection compresses channels, then each glyph is

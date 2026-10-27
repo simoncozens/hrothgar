@@ -104,6 +104,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             encoder_downsample=getattr(train_args, "encoder_downsample", 2),
             coarse_grid_size=getattr(train_args, "coarse_grid_size", 32),
             spatial_channels=getattr(train_args, "spatial_channels", 32),
+            spatial_map_channels=getattr(train_args, "spatial_map_channels", 64),
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
             contrastive_loss=getattr(train_args, "contrastive_loss", "multipos"),
@@ -784,6 +785,15 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=32,
         help="Channel count after the 1x1 projection before coarse pooling.",
+    )
+    p.add_argument(
+        "--spatial-map-channels",
+        type=int,
+        default=64,
+        help="Channel count of the encoder's per-glyph spatial feature map "
+        "(GlyphEncoder out_dim), before the 1x1 spatial projection.  This was "
+        "previously the full encoder_feature_dim (256) — the dominant "
+        "training-time activation; 64 cuts it 4x while the summary stays 256.",
     )
     p.add_argument(
         "--glyph-sample-size",

@@ -131,16 +131,17 @@ class FontStyleEmbedder(SaveLoadModel):
 
         self.encoder = GlyphEncoder(
             base_channels=config.encoder_base_channels,
-            out_dim=config.encoder_feature_dim,
+            out_dim=config.spatial_map_channels,
             downsample=config.encoder_downsample,
         )
 
-        # Spatial reduction.  A 1x1 projection compresses channels, then each
-        # glyph is max-pooled down to ``coarse_grid_size`` (max, not average, so
-        # sparse local features like terminal rounding are preserved) before the
-        # set encoder pools across glyphs.
+        # Spatial reduction.  A 1x1 projection compresses the encoder's
+        # ``spatial_map_channels`` down to ``spatial_channels``, then each glyph
+        # is max-pooled to ``coarse_grid_size`` (max, not average, so sparse
+        # local features like terminal rounding are preserved) before the set
+        # encoder pools across glyphs.
         self.spatial_proj = nn.Conv2d(
-            config.encoder_feature_dim, config.spatial_channels, 1, bias=False
+            config.spatial_map_channels, config.spatial_channels, 1, bias=False
         )
         self.glyph_proj = nn.Linear(
             config.spatial_channels * config.coarse_grid_size * config.coarse_grid_size,
