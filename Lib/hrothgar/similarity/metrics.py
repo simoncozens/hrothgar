@@ -217,18 +217,23 @@ def masked_pairwise_cosine(
     boolean mask of pairs with a non-empty assessed overlap.
     """
     n = tag_vectors.shape[0]
-    sim = torch.zeros(n, n, device=tag_vectors.device, dtype=tag_vectors.dtype)
-    comparable = torch.zeros(n, n, device=tag_vectors.device, dtype=torch.bool)
-    for i in range(n):
-        for j in range(i + 1, n):
-            overlap = tag_masks[i] & tag_masks[j]
-            if not bool(overlap.any()):
-                continue
-            x = tag_vectors[i][overlap].float()
-            y = tag_vectors[j][overlap].float()
-            denom = (x.norm() * y.norm()).clamp(min=1e-12)
-            comparable[i, j] = comparable[j, i] = True
-            sim[i, j] = sim[j, i] = (x @ y) / denom
+    V = tag_vectors.float()
+    M = tag_masks.to(V.dtype)  # (N, T), 1.0 = assessed
+
+    # Masked dot products and per-pair norms, vectorized over all pairs.
+    Vm = V * M  # values masked by each row's own assessment
+    num = Vm @ Vm.T  # (N, N): sum_t V_i V_j over assessed overlap
+    sq = (V * V) * M
+    norm2_i = sq @ M.T  # (N, N): ||V_i||^2 over overlap(i, j)
+    norm2_j = norm2_i.T  # (N, N): ||V_j||^2 over overlap(i, j)
+    denom = torch.sqrt(norm2_i * norm2_j).clamp(min=1e-12)
+    sim = num / denom  # (N, N)
+
+    comparable = (M @ M.T) > 0  # non-empty assessed overlap
+    eye = torch.eye(n, device=tag_vectors.device, dtype=torch.bool)
+    sim = sim.masked_fill(eye, 0.0)
+    comparable = comparable & ~eye
+
     return sim, comparable
 
 

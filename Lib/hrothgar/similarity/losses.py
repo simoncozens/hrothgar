@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from hrothgar.similarity.config import FontStyleEmbeddingLossWeights
+from hrothgar.similarity.metrics import masked_pairwise_cosine
 
 
 def _positive_mask(
@@ -22,6 +23,7 @@ def _positive_mask(
     family_positive_weight: float,
     tag_weight: float,
     tag_threshold: float,
+    tag_masks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build ``(sim, pos_mask)`` over the joint candidate set.
 
@@ -56,10 +58,14 @@ def _positive_mask(
         font_idx = torch.arange(N, device=device) % B
         pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
 
-    # 3. Tag soft positives.
+    # 3. Tag soft positives.  With ``tag_masks`` the similarity is a masked
+    # cosine over assessed dimensions only (absent theme tags = unknown, not 0).
     if tag_vectors is not None:
-        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)  # (B, T)
-        tag_sim = torch.matmul(tag_norm, tag_norm.T)  # (B, B)
+        if tag_masks is not None:
+            tag_sim, _ = masked_pairwise_cosine(tag_vectors, tag_masks)  # (B, B)
+        else:
+            tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)  # (B, T)
+            tag_sim = torch.matmul(tag_norm, tag_norm.T)  # (B, B)
         tag_sim = torch.where(
             tag_sim > tag_threshold, tag_sim, torch.zeros_like(tag_sim)
         )
@@ -102,6 +108,7 @@ def multipos_contrastive_loss(
     font_ids: list[str] | None = None,
     text_embeddings: torch.Tensor | None = None,
     tag_vectors: torch.Tensor | None = None,
+    tag_masks: torch.Tensor | None = None,
     temperature: float = 0.07,
     family_positive_weight: float = 0.3,
     tag_threshold: float = 0.1,
@@ -169,6 +176,7 @@ def multipos_contrastive_loss(
         family_labels,
         font_ids=font_ids,
         tag_vectors=tag_vectors,
+        tag_masks=tag_masks,
         text_embeddings=text_embeddings,
         family_positive_weight=family_positive_weight,
         tag_weight=tag_weight,
@@ -198,6 +206,7 @@ def circle_loss(
     font_ids: list[str] | None = None,
     text_embeddings: torch.Tensor | None = None,
     tag_vectors: torch.Tensor | None = None,
+    tag_masks: torch.Tensor | None = None,
     family_positive_weight: float = 0.3,
     tag_threshold: float = 0.1,
     tag_weight: float = 1.0,
@@ -227,6 +236,7 @@ def circle_loss(
         family_labels,
         font_ids=font_ids,
         tag_vectors=tag_vectors,
+        tag_masks=tag_masks,
         text_embeddings=text_embeddings,
         family_positive_weight=family_positive_weight,
         tag_weight=tag_weight,
@@ -498,6 +508,7 @@ def compute_losses(
     category_targets: torch.Tensor | None = None,
     text_embeddings: torch.Tensor | None = None,
     tag_vectors: torch.Tensor | None = None,
+    style_tag_masks: torch.Tensor | None = None,
     embeddings: torch.Tensor | None = None,
     shape_target: torch.Tensor | None = None,
     reconstruction: torch.Tensor | None = None,
@@ -520,6 +531,7 @@ def compute_losses(
             font_ids=font_ids,
             text_embeddings=text_embeddings,
             tag_vectors=tag_vectors,
+            tag_masks=style_tag_masks,
             family_positive_weight=weights.family_positive_weight,
             tag_weight=weights.tag_positive_weight,
             margin=circle_margin,
@@ -532,6 +544,7 @@ def compute_losses(
             font_ids=font_ids,
             text_embeddings=text_embeddings,
             tag_vectors=tag_vectors,
+            tag_masks=style_tag_masks,
             temperature=temperature,
             family_positive_weight=weights.family_positive_weight,
             tag_weight=weights.tag_positive_weight,

@@ -290,6 +290,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         tag_vectors = batch.get("tag_vectors")
         if tag_vectors is not None:
             tag_vectors = tag_vectors.to(self.device)
+        style_tag_masks = batch.get("style_tag_masks")
+        if style_tag_masks is not None:
+            style_tag_masks = style_tag_masks.to(self.device)
         text_embeddings = batch.get("text_embeddings")
         if text_embeddings is not None:
             text_embeddings = text_embeddings.to(self.device)
@@ -334,6 +337,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 category_targets=category_2x,
                 text_embeddings=text_embeddings,
                 tag_vectors=tag_vectors,
+                style_tag_masks=style_tag_masks,
                 embeddings=embedding,
                 shape_target=shape_target,
                 reconstruction=reconstruction,
@@ -381,6 +385,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 tag_vectors = val_batch.get("tag_vectors")
                 if tag_vectors is not None:
                     tag_vectors = tag_vectors.to(self.device)
+                style_tag_masks = val_batch.get("style_tag_masks")
+                if style_tag_masks is not None:
+                    style_tag_masks = style_tag_masks.to(self.device)
                 text_embeddings = val_batch.get("text_embeddings")
                 if text_embeddings is not None:
                     text_embeddings = text_embeddings.to(self.device)
@@ -431,6 +438,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         category_targets=category_2x,
                         text_embeddings=text_embeddings,
                         tag_vectors=tag_vectors,
+                        style_tag_masks=style_tag_masks,
                         embeddings=embedding,
                         shape_target=shape_target,
                         reconstruction=reconstruction,
@@ -732,7 +740,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--checkpoint-metric",
         type=str,
-        default="family_sibling_mrr",
+        default="style_tag_cosine5",
         choices=["family_sibling_mrr", "style_tag_cosine5"],
         help="Metric to checkpoint on: 'family_sibling_mrr' (same-family lower-"
         "bound canary) or 'style_tag_cosine5' (cross-family style-tag retrieval, "

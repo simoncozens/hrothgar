@@ -514,6 +514,8 @@ class FontStyleDatasetMaker(DatasetMaker):
 
         # Per-font tag vectors for tag-weighted contrastive positives.
         tag_vectors = torch.stack([style_tag_vector(font) for font in fonts])  # (B, num_style_tags)
+        # Per-font presence masks so tag positives use only assessed dims.
+        style_tag_masks = torch.stack([style_tag_mask(font) for font in fonts])  # (B, num_style_tags)
 
         result: dict = {
             "images": images,
@@ -524,6 +526,7 @@ class FontStyleDatasetMaker(DatasetMaker):
             "family": families,
             "font_ids": font_ids,
             "tag_vectors": tag_vectors,
+            "style_tag_masks": style_tag_masks,
         }
 
         if self._text_embeddings:
