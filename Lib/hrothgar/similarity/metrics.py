@@ -164,6 +164,44 @@ def cross_set_purity(
     return {"overall": float(hit.float().mean()), "per_label": per_label}
 
 
+def style_tag_agreement(
+    embeddings: torch.Tensor,
+    tag_vectors: torch.Tensor,
+    *,
+    ks: Sequence[int] = (1, 3, 5),
+    center: bool = True,
+) -> dict:
+    """Fine-grained cross-family style similarity via style-tag labels.
+
+    For each query font, ranks the pool by embedding cosine and reports the mean
+    cosine between the query's style-tag vector and those of its top-k
+    neighbours.  ``tag_cosine_all`` is the random-neighbour baseline, so a value
+    above it means the embedding is grouping fonts that share fine-grained style
+    tags rather than only coarse category/family identity.
+    """
+    x = prepare(embeddings, center=center)
+    n = x.shape[0]
+    if n < 2 or tag_vectors.shape[0] != n:
+        return {f"tag_cosine@{k}": 0.0 for k in ks} | {"tag_cosine_all": 0.0}
+
+    sim = x @ x.T
+    sim.fill_diagonal_(float("-inf"))
+
+    tags = F.normalize(tag_vectors.float().to(x.device), p=2, dim=-1, eps=1e-8)
+    tag_sim = tags @ tags.T  # (N, N)
+
+    out: dict = {}
+    for k in ks:
+        kk = min(k, n - 1)
+        topk = sim.topk(kk, dim=-1).indices  # (N, kk)
+        gathered = tag_sim[torch.arange(n, device=x.device).unsqueeze(1), topk]
+        out[f"tag_cosine@{k}"] = float(gathered.mean())
+
+    off = ~torch.eye(n, dtype=torch.bool, device=x.device)
+    out["tag_cosine_all"] = float(tag_sim[off].mean())
+    return out
+
+
 def geometry_stats(embeddings: torch.Tensor) -> dict:
     """Diagnostics for the shape of the embedding space.
 

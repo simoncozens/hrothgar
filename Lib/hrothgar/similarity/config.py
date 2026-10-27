@@ -32,17 +32,24 @@ class FontStyleEmbedderConfig:
     # CNN encoder.
     encoder_base_channels: int = 32
     encoder_feature_dim: int = 256
-    encoder_downsample: int = 4  # 64 -> 16
+    encoder_downsample: int = 2  # 128 -> 64
 
-    # Coarse-spatial pooling (replaces Gram).  Each glyph is downsampled to a
-    # coarse grid, then pooled across glyphs; a linear maps the flattened map
-    # back to ``encoder_feature_dim``.  Coarse enough to blur the skeleton
-    # (content-invariant), fine enough to keep serif/terminal shape.
-    coarse_grid_size: int = 8
+    # Spatial pooling.  A 1x1 projection compresses channels, then each glyph is
+    # max-pooled down to ``coarse_grid_size`` (max, not average, so sparse local
+    # features like terminal rounding are preserved) and pooled across glyphs by
+    # the set encoder.  The grid is kept fine enough to keep serif/terminal shape.
+    coarse_grid_size: int = 32
     spatial_channels: int = 32
+    # Set-encoder aggregation over glyphs (replaces the mean-over-glyphs pool).
+    set_encoder_layers: int = 2
+    set_encoder_heads: int = 8
+    set_encoder_dropout: float = 0.1
 
     # Final embedding dimensionality for contrastive loss.
     projection_dim: int = 128
+    # Visual reconstruction auxiliary: the summary must reconstruct the raw
+    # content-averaged glyph shape at this grid resolution.
+    reconstruction_grid: int = 16
 
     # Tag prediction.
     tag_names: list[str] = field(default_factory=list)
@@ -70,6 +77,11 @@ class FontStyleEmbedderConfig:
 
     # Training.
     contrastive_temperature: float = 0.07
+    # Contrastive objective: "multipos" (SupCon/InfoNCE) or "circle"
+    # (margin-bounded, saturates the negative term).
+    contrastive_loss: str = "multipos"
+    circle_margin: float = 0.25
+    circle_gamma: float = 128.0
 
     def save_sidecar(self, model_path):
         """Save config as a sidecar JSON alongside the model weights."""
@@ -118,3 +130,9 @@ class FontStyleEmbeddingLossWeights:
     # Summary-space view invariance: pulls the two disjoint glyph-subset views
     # of each font's summary embedding together.  0.0 disables it.
     view_invariance: float = 0.0
+    # Visual reconstruction: forces the summary to retain fine visual style by
+    # reconstructing the mean-pooled style map.  0.0 disables it.
+    reconstruction_weight: float = 0.0
+    # VICReg (variance + invariance + covariance) on the summary between the two
+    # views: anti-collapse + content-invariance.  0.0 disables it.
+    vicreg_weight: float = 0.0

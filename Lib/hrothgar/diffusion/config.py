@@ -143,8 +143,10 @@ class ExemplarDiffusionConfig:
     style_out_res: int = 8
     style_encoder_base_channels: int = 64
     num_evidence_glyphs: int = 8
-    # Weight of the memory↔encoder coupling loss (``‖memory[f] − encoder(e)‖²``),
-    # which keeps the per-font memory exemplar-derived and trains the encoder.
+    # Weight of the memory→encoder coupling loss (``‖memory[f] − encoder(e)‖²``,
+    # memory detached): trains the encoder to mimic the memory without dragging
+    # the memory toward the shared encoder (which would re-introduce stylistic
+    # collapse).
     memory_coupling_weight: float = 0.1
 
     # Denoiser UNet.

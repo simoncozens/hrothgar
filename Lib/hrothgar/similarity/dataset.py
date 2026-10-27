@@ -7,13 +7,14 @@ contrastive objective learns invariance to *which* glyphs are shown.
 
 from __future__ import annotations
 
+import math
 import random
 from collections.abc import Sequence
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import BatchSampler, DataLoader
 from torch.utils.data import Dataset as TorchDataset
 
 from hrothgar.dataset import ClassBalancedBatchSampler, DatasetMaker, fvar_axes
@@ -73,6 +74,25 @@ THEME_TAGS = [
 ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + STYLE_PARENT_TAGS + THEME_TAGS
 
 
+def style_tag_vector(font) -> torch.Tensor:
+    """Per-font centile style-tag vector over the *fine* style tags.
+
+    Uses only the leaf tags (``STYLE_CATEGORY_TAGS`` + ``THEME_TAGS``).  The
+    coarse parent tags (``STYLE_PARENT_TAGS``, e.g. ``/Sans``) are deliberately
+    excluded: they are shared by every font in a broad class, so they make
+    "any two sans" look alike and erode the fine sub-style distinctions
+    (glyphic vs grotesque, Didone vs Transitional, …).  Shared by the training
+    collate (tag-weighted contrastive positives) and the eval panel (style-tag
+    retrieval), so the two can never drift apart.
+    """
+    font_tags = font.tags()
+    fine_tags = STYLE_CATEGORY_TAGS + THEME_TAGS
+    return torch.tensor(
+        [font_tags.get(tag, 0.0) / 100.0 for tag in fine_tags],
+        dtype=torch.float32,
+    )
+
+
 class _FontDataset(TorchDataset):
     """Yields one font per item, optionally at a sampled variable-axis position."""
 
@@ -129,6 +149,74 @@ def _balance_key(name: str):
     return None
 
 
+class SiblingBatchSampler(BatchSampler):
+    """Cap each family's per-batch contribution while keeping siblings together.
+
+    ``ClassBalancedBatchSampler`` with ``key=family`` puts at most *one* font per
+    family in each batch.  That makes a same-family soft-positive contrastive term
+    identically zero, because a batch never contains a same-family,
+    different-font pair.  This sampler instead draws up to ``siblings_per_family``
+    fonts from each family per batch, so the family objective has siblings to pull
+    together while large multi-weight families still cannot dominate a batch.
+    """
+
+    def __init__(
+        self,
+        items: Sequence[GoogleFont],
+        *,
+        key,
+        batch_size: int,
+        siblings_per_family: int,
+        drop_last: bool,
+        rng=None,
+    ):
+        if siblings_per_family < 1:
+            raise ValueError(f"siblings_per_family must be >= 1, got {siblings_per_family}")
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if len(items) == 0:
+            raise ValueError("Cannot build sibling sampler for empty dataset")
+
+        self.batch_size = batch_size
+        self.siblings_per_family = siblings_per_family
+        self.drop_last = drop_last
+        self._rng = rng if rng is not None else random
+
+        self._groups: dict[str, list[int]] = {}
+        for idx, item in enumerate(items):
+            self._groups.setdefault(key(item), []).append(idx)
+        self._families = list(self._groups.keys())
+        self._total = len(items)
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return self._total // self.batch_size
+        return math.ceil(self._total / self.batch_size)
+
+    def __iter__(self):
+        # Partition each family's (shuffled) indices into chunks of size at most
+        # ``siblings_per_family``, then pack the chunks into batches.  Every font
+        # is emitted exactly once per epoch, and a family contributes at most one
+        # chunk (i.e. ``siblings_per_family`` fonts) at a time, so siblings
+        # coexist while large multi-weight families cannot dominate a batch.
+        chunks: list[list[int]] = []
+        for family in self._families:
+            indices = self._groups[family][:]
+            self._rng.shuffle(indices)
+            for start in range(0, len(indices), self.siblings_per_family):
+                chunks.append(indices[start : start + self.siblings_per_family])
+        self._rng.shuffle(chunks)
+
+        batch: list[int] = []
+        for chunk in chunks:
+            batch.extend(chunk)
+            while len(batch) >= self.batch_size:
+                yield batch[: self.batch_size]
+                batch = batch[self.batch_size :]
+        if batch and not self.drop_last:
+            yield batch
+
+
 class FontStyleDatasetMaker(DatasetMaker):
     """Dataset maker for font-level style embedding (glyph-set input)."""
 
@@ -137,7 +225,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         repo_url: str | Path,
         batch_size: int,
         *,
-        glyph_size: int = 64,
+        glyph_size: int = 128,
         input_codepoints: Sequence[int] | None = None,
         glyph_sample_size: int = 32,
         split_seed: int = 1234,
@@ -145,6 +233,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         tag_names: list[str] | None = None,
         tag_num_classes: int = 0,
         balance_by: str = "family",
+        siblings_per_family: int = 1,
         sample_axis: bool = False,
         text_encoder_name: str | None = None,
         text_embedding_dim: int = 384,
@@ -171,6 +260,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         self._tag_names = tag_names or []
         self._tag_num_classes = tag_num_classes
         self._balance_by = balance_by
+        self._siblings_per_family = siblings_per_family
 
         # Variable fonts contribute many instances: record their axes so each
         # item can be rendered at a sampled design position.
@@ -273,14 +363,24 @@ class FontStyleDatasetMaker(DatasetMaker):
         dataset = self.train_set()
         key = _balance_key(self._balance_by)
         if key is not None:
-            return DataLoader(
-                dataset,
-                batch_sampler=ClassBalancedBatchSampler(
+            if self._balance_by == "family" and self._siblings_per_family > 1:
+                sampler: BatchSampler = SiblingBatchSampler(
+                    self.train_fonts,
+                    key=key,
+                    batch_size=self.batch_size,
+                    siblings_per_family=self._siblings_per_family,
+                    drop_last=True,
+                )
+            else:
+                sampler = ClassBalancedBatchSampler(
                     self.train_fonts,
                     key=key,
                     batch_size=self.batch_size,
                     drop_last=True,
-                ),
+                )
+            return DataLoader(
+                dataset,
+                batch_sampler=sampler,
                 collate_fn=self.collate_fn,
                 num_workers=16,
                 pin_memory=True,
@@ -385,24 +485,7 @@ class FontStyleDatasetMaker(DatasetMaker):
         font_ids = [str(font.path) for font in fonts]
 
         # Per-font tag vectors for tag-weighted contrastive positives.
-        style_vectors: list[torch.Tensor] = []
-        for font in fonts:
-            font_tags = font.tags()
-            values: dict[str, float] = {}
-            for tag in ALL_STYLE_TAGS:
-                values[tag] = font_tags.get(tag, 0.0) / 100.0
-            for parent in STYLE_PARENT_TAGS:
-                child_max = 0.0
-                for child in STYLE_CATEGORY_TAGS:
-                    if child.startswith(parent + "/"):
-                        child_max = max(child_max, values.get(child, 0.0))
-                values[parent] = child_max
-            vec = torch.tensor(
-                [values[tag] for tag in ALL_STYLE_TAGS],
-                dtype=torch.float32,
-            )
-            style_vectors.append(vec)
-        tag_vectors = torch.stack(style_vectors)  # (B, num_style_tags)
+        tag_vectors = torch.stack([style_tag_vector(font) for font in fonts])  # (B, num_style_tags)
 
         result: dict = {
             "images": images,

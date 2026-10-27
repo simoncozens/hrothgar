@@ -697,15 +697,22 @@ class ExemplarDiffusionModel(SaveLoadModel):
         return self.memory(instance_ids)
 
     def coupling_loss(self, style_mem: torch.Tensor, style_live: torch.Tensor) -> torch.Tensor:
-        """Pull the memory vector and the live encoder read toward each other.
+        """Train the encoder to mimic the memory, *without* moving the memory.
 
-        Symmetric MSE: the memory is nudged toward what the shared encoder reads
-        from the glyphs (so it stays exemplar-derived and rare fonts inherit the
-        encoder), and the encoder is nudged toward the memory (so it learns to
-        produce the diffusion-useful summary).  Without this term the memory is
-        just a fontid-style free parameter and the encoder receives no gradient.
+        One-way MSE: ``style_mem`` is detached, so the gradient reaches only the
+        encoder (``style_live``).  The memory is an independent per-font vector
+        trained purely by the diffusion gradient — like ``fontid``'s
+        ``family_emb`` — and must NOT be pulled toward the shared encoder's
+        output.  A *symmetric* coupling here would drag each font's independent
+        vector toward the shared CNN's averaged reading of its glyphs, i.e. it
+        would re-introduce the stylistic-sharing / mean-reversion collapse that
+        VecFusion's independent-per-font design exists to prevent.
+
+        The encoder is still trained (it learns the ``glyphs -> style`` mapping by
+        mimicking the well-determined memory), so it remains available for
+        warm-starting and for any future out-of-corpus generalization.
         """
-        return F.mse_loss(style_mem, style_live.to(style_mem.dtype))
+        return F.mse_loss(style_mem.detach(), style_live.to(style_mem.dtype))
 
     @torch.no_grad()
     def warm_start_memory(self, instances, probe: str = WARM_START_PROBE) -> None:

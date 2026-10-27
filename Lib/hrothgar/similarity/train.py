@@ -26,7 +26,7 @@ from hrothgar.similarity.evaluation import (
     flatten_metrics,
     run_suite,
 )
-from hrothgar.similarity.losses import compute_losses
+from hrothgar.similarity.losses import compute_losses, content_averaged_shape
 from hrothgar.similarity.model import FontStyleEmbedder
 from hrothgar.utils import TrainingLoop, progress_values
 
@@ -99,13 +99,16 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         text_encoder_name = getattr(train_args, "text_encoder", None) or ""
         family_positive_weight = getattr(train_args, "family_positive_weight", 0.3)
         config = FontStyleEmbedderConfig(
-            glyph_size=getattr(train_args, "glyph_size", 64),
+            glyph_size=getattr(train_args, "glyph_size", 128),
             glyph_sample_size=getattr(train_args, "glyph_sample_size", 32),
-            encoder_downsample=getattr(train_args, "encoder_downsample", 4),
-            coarse_grid_size=getattr(train_args, "coarse_grid_size", 8),
+            encoder_downsample=getattr(train_args, "encoder_downsample", 2),
+            coarse_grid_size=getattr(train_args, "coarse_grid_size", 32),
             spatial_channels=getattr(train_args, "spatial_channels", 32),
             tag_names=tag_names or [],
             contrastive_temperature=train_args.contrastive_temperature,
+            contrastive_loss=getattr(train_args, "contrastive_loss", "multipos"),
+            circle_margin=getattr(train_args, "circle_margin", 0.25),
+            circle_gamma=getattr(train_args, "circle_gamma", 128.0),
             tag_num_classes=train_args.tag_num_classes,
             tag_dropout=train_args.tag_dropout,
             use_category_head=train_args.use_category_head,
@@ -134,6 +137,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             tag_names=tag_names or [],
             tag_num_classes=config.tag_num_classes,
             balance_by=balance_by,
+            siblings_per_family=getattr(train_args, "siblings_per_family", 2),
             sample_axis=getattr(train_args, "sample_axis_instances", False),
             text_encoder_name=config.text_encoder_name or None,
             text_embedding_dim=config.text_embedding_dim,
@@ -180,6 +184,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             family_positive_weight=config.family_positive_weight,
             tag_positive_weight=getattr(train_args, "tag_positive_weight", 1.0),
             view_invariance=getattr(train_args, "view_invariance_weight", 0.0),
+            reconstruction_weight=getattr(train_args, "reconstruction_weight", 0.0),
+            vicreg_weight=getattr(train_args, "vicreg_weight", 0.0),
         )
 
         # ── Bookkeeping ─────────────────────────────────────────────────
@@ -191,6 +197,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         self.validation_direction = "higher" if self.eval_panel is not None else "lower"
         self.validation_every = train_args.validation_every
         self.validation_batches = train_args.validation_batches
+        self.checkpoint_metric = getattr(
+            train_args, "checkpoint_metric", "family_sibling_mrr"
+        )
 
         # ── AMP ─────────────────────────────────────────────────────────
         self.use_amp = train_args.precision in {"bf16", "fp16"}
@@ -297,8 +306,16 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         )
 
         with self._autocast_context():
-            embedding, projection, predicted_tags, category_logits = self.model(
-                images, glyph_mask=glyph_mask
+            (
+                embedding,
+                projection,
+                predicted_tags,
+                category_logits,
+                reconstruction,
+            ) = self.model(images, glyph_mask=glyph_mask)
+
+            shape_target = content_averaged_shape(
+                images, glyph_mask, self.model.config.reconstruction_grid
             )
 
             loss, loss_info = compute_losses(
@@ -308,6 +325,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 tag_masks=tag_masks_2x,
                 weights=self.loss_weights,
                 temperature=self.model.config.contrastive_temperature,
+                contrastive_loss_type=self.model.config.contrastive_loss,
+                circle_margin=self.model.config.circle_margin,
+                circle_gamma=self.model.config.circle_gamma,
                 family_labels=family_2x,
                 font_ids=font_ids_2x,
                 category_logits=category_logits,
@@ -315,6 +335,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 text_embeddings=text_embeddings,
                 tag_vectors=tag_vectors,
                 embeddings=embedding,
+                shape_target=shape_target,
+                reconstruction=reconstruction,
             )
 
         return loss, loss_info
@@ -381,9 +403,18 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                 )
 
                 with self._autocast_context():
-                    embedding, projection, predicted_tags, category_logits = self.model(
-                        images, glyph_mask=glyph_mask
+                    (
+                        embedding,
+                        projection,
+                        predicted_tags,
+                        category_logits,
+                        reconstruction,
+                    ) = self.model(images, glyph_mask=glyph_mask)
+
+                    shape_target = content_averaged_shape(
+                        images, glyph_mask, self.model.config.reconstruction_grid
                     )
+
                     _loss, loss_info = compute_losses(
                         projections=projection,
                         predicted_tags=predicted_tags,
@@ -391,6 +422,9 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         tag_masks=tag_masks_2x,
                         weights=self.loss_weights,
                         temperature=self.model.config.contrastive_temperature,
+                        contrastive_loss_type=self.model.config.contrastive_loss,
+                        circle_margin=self.model.config.circle_margin,
+                        circle_gamma=self.model.config.circle_gamma,
                         family_labels=family_2x,
                         font_ids=font_ids_2x,
                         category_logits=category_logits,
@@ -398,6 +432,8 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
                         text_embeddings=text_embeddings,
                         tag_vectors=tag_vectors,
                         embeddings=embedding,
+                        shape_target=shape_target,
+                        reconstruction=reconstruction,
                     )
 
                 val_contrastive.append(loss_info["contrastive"])
@@ -490,23 +526,27 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
             for key, value in flatten_metrics(similarity):
                 self.write_scalar(f"Validation/Similarity/{key}", torch.tensor(value))
 
-        # Checkpoint on the deliverable: family-sibling MRR, which is what the
-        # model is for.  Fall back to the cross-view proxy only when the panel
-        # is missing or has no sibling pairs.
-        family = (similarity or {}).get("family_sibling", {})
-        if family.get("n_queries", 0) > 0:
-            self.checkpoint_if_best(torch.tensor(family["mrr"]))
-        elif retrieval_top1:
-            top1 = torch.mean(torch.stack(retrieval_top1))
-            self.checkpoint_if_best(
-                top1 if self.validation_direction == "higher" else -top1
-            )
+        # Checkpoint on the deliverable.  family_sibling/mrr is the cheap
+        # lower-bound canary; style_tag/tag_cosine@5 is the finer cross-family
+        # "similar font" proxy when --checkpoint-metric style_tag_cosine5 is set.
+        st = (similarity or {}).get("style_tag", {})
+        if self.checkpoint_metric == "style_tag_cosine5" and "tag_cosine@5" in st:
+            self.checkpoint_if_best(torch.tensor(st["tag_cosine@5"]))
         else:
-            self.checkpoint_if_best(
-                -avg_contrastive
-                if self.validation_direction == "higher"
-                else avg_contrastive
-            )
+            family = (similarity or {}).get("family_sibling", {})
+            if family.get("n_queries", 0) > 0:
+                self.checkpoint_if_best(torch.tensor(family["mrr"]))
+            elif retrieval_top1:
+                top1 = torch.mean(torch.stack(retrieval_top1))
+                self.checkpoint_if_best(
+                    top1 if self.validation_direction == "higher" else -top1
+                )
+            else:
+                self.checkpoint_if_best(
+                    -avg_contrastive
+                    if self.validation_direction == "higher"
+                    else avg_contrastive
+                )
 
         # Visualize tags (when active).
         if self.model.config.tag_names:
@@ -669,6 +709,36 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--contrastive-temperature", type=float, default=0.07)
     p.add_argument(
+        "--contrastive-loss",
+        type=str,
+        default="circle",
+        choices=["multipos", "circle"],
+        help="Contrastive objective: 'multipos' (SupCon/InfoNCE) or 'circle' "
+        "(margin-bounded; saturates the negative term so late training stops "
+        "eroding fine-grained structure).",
+    )
+    p.add_argument(
+        "--circle-margin",
+        type=float,
+        default=0.25,
+        help="Circle-loss margin m (positive boundary 1-m, negative boundary m).",
+    )
+    p.add_argument(
+        "--circle-gamma",
+        type=float,
+        default=128.0,
+        help="Circle-loss scale factor gamma.",
+    )
+    p.add_argument(
+        "--checkpoint-metric",
+        type=str,
+        default="family_sibling_mrr",
+        choices=["family_sibling_mrr", "style_tag_cosine5"],
+        help="Metric to checkpoint on: 'family_sibling_mrr' (same-family lower-"
+        "bound canary) or 'style_tag_cosine5' (cross-family style-tag retrieval, "
+        "the closer approximation of the similar-font deliverable).",
+    )
+    p.add_argument(
         "--weight-decay",
         type=float,
         default=WEIGHT_DECAY,
@@ -687,7 +757,7 @@ def _parse_args() -> argparse.Namespace:
         help="Dropout in the contrastive projection head (train-time only).",
     )
     p.add_argument(
-        "--glyph-size", type=int, default=64, help="Rendered glyph size (square)."
+        "--glyph-size", type=int, default=128, help="Rendered glyph size (square)."
     )
     p.add_argument(
         "--input-glyphs",
@@ -698,15 +768,16 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--encoder-downsample",
         type=int,
-        default=4,
+        default=2,
         choices=[2, 4, 8],
         help="Spatial downsample ratio of the per-glyph encoder.",
     )
     p.add_argument(
         "--coarse-grid-size",
         type=int,
-        default=8,
-        help="Coarse spatial grid side for glyph pooling (replaces Gram).",
+        default=32,
+        help="Spatial grid side for the max-pooled per-glyph map (fed to the set "
+        "encoder).",
     )
     p.add_argument(
         "--spatial-channels",
@@ -804,9 +875,20 @@ def _parse_args() -> argparse.Namespace:
         "--balance-by",
         choices=["family", "category", "none"],
         default="family",
-        help="Batch-sampler grouping: each batch draws at most one item per "
-        "group.  'family' (default) stops large multi-weight families "
-        "dominating; 'category' is the old 6-way behaviour; 'none' shuffles.",
+        help="Batch-sampler grouping: 'family' (default) stops large multi-weight "
+        "families dominating; 'category' is the old 6-way behaviour; 'none' "
+        "shuffles.  With 'family', --siblings-per-family controls how many fonts "
+        "of a family may share a batch.",
+    )
+    p.add_argument(
+        "--siblings-per-family",
+        type=int,
+        default=2,
+        help="With --balance-by family, cap each family's per-batch contribution "
+        "at this many fonts (default 2).  Must be >= 2 for the same-family soft "
+        "positive to have any gradient: a batch has to contain two different "
+        "fonts of the same family.  1 restores the old one-font-per-family "
+        "behaviour (which silently disables the family objective).",
     )
     p.add_argument(
         "--sample-axis-instances",
@@ -838,6 +920,27 @@ def _parse_args() -> argparse.Namespace:
         "the deliverable vector rather than only the contrastive projection, "
         "so sampling stability stops drifting down while the contrastive loss "
         "falls.  Start around 0.5-1.0.",
+    )
+    p.add_argument(
+        "--reconstruction-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the visual reconstruction term: forces the summary to "
+        "reproduce the mean-pooled style map, so it must retain the fine visual "
+        "style (corners/terminals) that coarse instance separation discards.  "
+        "0.0 disables it.  This is the 'visually similar -> similar embedding' "
+        "signal; start around 0.1-0.5.",
+    )
+    p.add_argument(
+        "--vicreg-weight",
+        type=float,
+        default=0.0,
+        help="Weight of the VICReg (variance+invariance+covariance) term on the "
+        "summary, computed between the two views.  The invariance term enforces "
+        "content-invariance (pure style); variance+covariance prevent the summary "
+        "from collapsing to a few coarse directions.  0.0 disables it.  This is "
+        "the objective that rewards reading fine style rather than instance "
+        "identity; start around 1.0.",
     )
     p.add_argument(
         "--tag",

@@ -1,8 +1,9 @@
-"""Font-level style embedder from a fixed set of glyph renderings (Gram pooling).
+"""Font-level style embedder from a fixed set of glyph renderings.
 
-Encodes each glyph with a shared CNN, then computes a per-glyph Gram matrix
-(channel correlations, spatial order destroyed), averages across glyphs, and
-projects the flattened Gram into a 256-d summary.  The summary feeds
+Encodes each glyph with a shared CNN into a coarse spatial map, then aggregates
+the per-glyph maps with a permutation-invariant set encoder (self-attention over
+glyphs) instead of a mean pool, so the summary can retain the fine per-glyph
+style (aperture, terminal shape) that averaging destroys.  The summary feeds
 contrastive, tag-prediction, and category heads.
 """
 
@@ -72,8 +73,57 @@ class CategoryPredictionHead(nn.Module):
         return self.net(x)  # (B, 6)
 
 
+class SetEncoder(nn.Module):
+    """Permutation-invariant aggregation of per-glyph features via self-attention.
+
+    Replaces the mean-over-glyphs pool: a learned ``[CLS]`` token attends over the
+    glyph set, so the summary can focus on style-bearing glyphs and their
+    inter-glyph structure instead of averaging them away.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int = 8,
+        num_layers: int = 2,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.net = nn.TransformerEncoder(
+            layer, num_layers=num_layers, enable_nested_tensor=False
+        )
+        nn.init.normal_(self.cls_token, std=0.02)
+
+    def forward(
+        self, x: torch.Tensor, glyph_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """``x`` is ``(B, G, d_model)``; returns the ``[CLS]`` summary ``(B, d_model)``."""
+        b = x.shape[0]
+        tokens = torch.cat([self.cls_token.expand(b, -1, -1), x], dim=1)  # (B, 1+G, d_model)
+        if glyph_mask is not None:
+            # True = pad (masked out); the [CLS] token is never masked.
+            pad = torch.cat(
+                [torch.zeros(b, 1, dtype=torch.bool, device=x.device), ~glyph_mask],
+                dim=1,
+            )
+        else:
+            pad = None
+        out = self.net(tokens, src_key_padding_mask=pad)  # (B, 1+G, d_model)
+        return out[:, 0]  # (B, d_model)
+
+
 class FontStyleEmbedder(SaveLoadModel):
-    """Font-level style embedder via coarse-spatial glyph pooling."""
+    """Font-level style embedder via max-pooled glyph maps + set encoder."""
 
     def __init__(self, config: FontStyleEmbedderConfig):
         super().__init__()
@@ -85,14 +135,31 @@ class FontStyleEmbedder(SaveLoadModel):
             downsample=config.encoder_downsample,
         )
 
-        # Coarse-spatial pooling.  A 1x1 projection compresses channels, then
-        # each glyph is downsampled to a coarse grid and pooled across glyphs.
+        # Spatial reduction.  A 1x1 projection compresses channels, then each
+        # glyph is max-pooled down to ``coarse_grid_size`` (max, not average, so
+        # sparse local features like terminal rounding are preserved) before the
+        # set encoder pools across glyphs.
         self.spatial_proj = nn.Conv2d(
             config.encoder_feature_dim, config.spatial_channels, 1, bias=False
         )
-        self.spatial_embed = nn.Linear(
+        self.glyph_proj = nn.Linear(
             config.spatial_channels * config.coarse_grid_size * config.coarse_grid_size,
             config.encoder_feature_dim,
+        )
+        self.set_encoder = SetEncoder(
+            config.encoder_feature_dim,
+            num_heads=config.set_encoder_heads,
+            num_layers=config.set_encoder_layers,
+            dropout=config.set_encoder_dropout,
+        )
+
+        # Reconstruction head: decodes the summary back to the raw
+        # content-averaged glyph shape.  Trained with a cosine loss against the
+        # (fixed) shape computed from the input images, so the summary must
+        # retain the fine visual style it would otherwise discard.
+        self.reconstruction_head = nn.Linear(
+            config.encoder_feature_dim,
+            config.reconstruction_grid * config.reconstruction_grid,
         )
 
         self.enc_dropout = nn.Dropout(config.encoder_dropout)
@@ -138,6 +205,29 @@ class FontStyleEmbedder(SaveLoadModel):
                 config.text_embedding_dim, config.projection_dim
             )
 
+    def _encode(
+        self,
+        images: torch.Tensor,
+        glyph_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Encode a batch of glyph sets into ``(B, encoder_feature_dim)`` summaries."""
+        b, g, c, h, w = images.shape
+        assert c == 1, f"Expected single-channel glyphs, got {c} channels"
+
+        flat = images.flatten(0, 1)  # (B*G, 1, H, W)
+        features = self.encoder(flat)  # (B*G, F, h', w')
+
+        s = self.config.spatial_channels
+        cs = self.config.coarse_grid_size
+        proj = self.spatial_proj(features)  # (B*G, S, h', w')
+        proj = F.adaptive_max_pool2d(proj, (cs, cs))  # (B*G, S, cs, cs) — max pool
+        proj = proj.reshape(b, g, s, cs, cs)  # (B, G, S, cs, cs)
+
+        glyphs = proj.flatten(2)  # (B, G, S*cs*cs)
+        glyphs = self.glyph_proj(glyphs)  # (B, G, encoder_feature_dim)
+        summary = self.set_encoder(glyphs, glyph_mask)  # (B, encoder_feature_dim)
+        return self.enc_dropout(summary)
+
     def encode(
         self,
         images: torch.Tensor,
@@ -152,27 +242,7 @@ class FontStyleEmbedder(SaveLoadModel):
         Returns:
             ``(B, encoder_feature_dim)`` summary vector.
         """
-        b, g, c, h, w = images.shape
-        assert c == 1, f"Expected single-channel glyphs, got {c} channels"
-
-        flat = images.flatten(0, 1)  # (B*G, 1, H, W)
-        features = self.encoder(flat)  # (B*G, F, h', w')
-
-        s = self.config.spatial_channels
-        cs = self.config.coarse_grid_size
-        proj = self.spatial_proj(features)  # (B*G, S, h', w')
-        proj = F.adaptive_avg_pool2d(proj, (cs, cs))  # (B*G, S, cs, cs)
-        proj = proj.reshape(b, g, s, cs, cs)  # (B, G, S, cs, cs)
-
-        if glyph_mask is not None:
-            mask = glyph_mask.to(proj.dtype).reshape(b, g, 1, 1, 1)
-            pooled = (proj * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
-        else:
-            pooled = proj.mean(dim=1)  # (B, S, cs, cs)
-
-        pooled = pooled.flatten(1)  # (B, S * cs * cs)
-        summary = self.spatial_embed(pooled)  # (B, encoder_feature_dim)
-        return self.enc_dropout(summary)
+        return self._encode(images, glyph_mask)
 
     def compute_embedding(
         self,
@@ -244,15 +314,20 @@ class FontStyleEmbedder(SaveLoadModel):
         torch.Tensor,
         dict[str, torch.Tensor] | None,
         torch.Tensor | None,
+        torch.Tensor,
     ]:
         """Full forward pass.
 
-        Returns ``(embedding, projection, tags, category_logits)``.
+        Returns ``(embedding, projection, tags, category_logits, reconstruction)``.
+        ``reconstruction`` is the summary decoded back to the raw glyph shape and
+        feeds the visual reconstruction auxiliary (see ``reconstruction_loss``).
         """
-        embedding = self.encode(images, glyph_mask)
+        embedding = self._encode(images, glyph_mask)
         projection = F.normalize(
             self.projection_dropout(self.projection(embedding)), p=2, dim=-1
         )
+        rg = self.config.reconstruction_grid
+        reconstruction = self.reconstruction_head(embedding).view(-1, 1, rg, rg)
 
         tags: dict[str, torch.Tensor] | None = None
         if self.tag_heads is not None:
@@ -262,4 +337,4 @@ class FontStyleEmbedder(SaveLoadModel):
         if self.category_head is not None:
             category_logits = self.category_head(embedding)
 
-        return embedding, projection, tags, category_logits
+        return embedding, projection, tags, category_logits, reconstruction

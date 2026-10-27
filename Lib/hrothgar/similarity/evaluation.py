@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from hrothgar.dataset import fvar_axes
 from hrothgar.render import NORMALIZED, frame_for_codepoints, geometry_tensor, render
 from hrothgar.similarity.config import FontStyleEmbedderConfig
+from hrothgar.similarity.dataset import style_tag_vector
 from hrothgar.similarity.metrics import (
     geometry_stats,
     label_agreement_at_k,
@@ -27,6 +28,7 @@ from hrothgar.similarity.metrics import (
     pairing_scores,
     sibling_retrieval,
     signal_attribution,
+    style_tag_agreement,
 )
 
 # Variable axes to sweep, and the "these should still look like the same font"
@@ -67,6 +69,8 @@ class EvalPanel:
     # Reference descriptors for signal attribution (see ``_descriptors``).
     proportion: torch.Tensor | None = None  # (P, 10)
     shape: torch.Tensor | None = None  # (P, 64)
+    # Style-tag vectors for fine-grained retrieval (see ``style_tag_vector``).
+    tag_vectors: torch.Tensor | None = None  # (P, num_style_tags)
 
 
 def _descriptors(font, config: FontStyleEmbedderConfig):
@@ -129,6 +133,7 @@ def build_eval_panel(
     images: list[torch.Tensor] = []
     proportions: list[torch.Tensor] = []
     shapes: list[torch.Tensor] = []
+    tag_vectors: list[torch.Tensor] = []
     axis_specs: dict[str, list[tuple[int, list[float]]]] = {t: [] for t in axes}
 
     for font in selected:
@@ -145,6 +150,7 @@ def build_eval_panel(
             proportion, shape = _descriptors(font, config)
             proportions.append(proportion)
             shapes.append(shape)
+            tag_vectors.append(style_tag_vector(font))
         fvar = fvar_axes(font.path)
         if fvar:
             for tag in axes:
@@ -165,6 +171,7 @@ def build_eval_panel(
     if with_descriptors and proportions:
         panel.proportion = torch.stack(proportions)
         panel.shape = torch.stack(shapes)
+        panel.tag_vectors = torch.stack(tag_vectors)
     return panel
 
 
@@ -335,6 +342,8 @@ def run_suite(
         out["attribution"] = signal_attribution(
             base, {"proportion": panel.proportion, "shape": panel.shape}
         )
+    if panel.tag_vectors is not None:
+        out["style_tag"] = style_tag_agreement(base, panel.tag_vectors, ks=ks)
     axis: dict[str, dict] = {}
     for tag in panel.axis_specs:
         anchors, embeddings_t = _axis_embeddings(model, panel, tag, device, space)

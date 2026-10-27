@@ -12,6 +12,89 @@ import torch.nn.functional as F
 from hrothgar.similarity.config import FontStyleEmbeddingLossWeights
 
 
+def _positive_mask(
+    projections: torch.Tensor,
+    family_labels: list[str],
+    *,
+    font_ids: list[str] | None,
+    tag_vectors: torch.Tensor | None,
+    text_embeddings: torch.Tensor | None,
+    family_positive_weight: float,
+    tag_weight: float,
+    tag_threshold: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build ``(sim, pos_mask)`` over the joint candidate set.
+
+    ``sim`` is raw cosine similarity (no temperature) between the ``2B`` image
+    anchors and the ``2B`` images (plus ``B`` text embeddings when provided).
+    ``pos_mask`` is the corresponding weighted positive mask: same-font
+    other-view (1.0), text positive (1.0), tag soft positives (``tag_weight`` ×
+    tag cosine) and same-family different-font (``family_positive_weight``).
+    The diagonal (self) is zeroed so it is neither positive nor negative.
+    """
+    N = projections.shape[0]
+    B = N // 2
+    device = projections.device
+
+    sim_img = torch.matmul(projections, projections.T)  # (N, N)
+    has_text = text_embeddings is not None
+    if has_text:
+        sim_txt = torch.matmul(projections, text_embeddings.T)  # (N, B)
+        sim = torch.cat([sim_img, sim_txt], dim=1)  # (N, M)
+    else:
+        sim = sim_img
+    M = sim.shape[1]
+
+    pos_mask = torch.zeros(N, M, device=device)
+
+    # 1. Same-font, other view (hard positive).
+    other = (torch.arange(N, device=device) + B) % N
+    pos_mask[torch.arange(N), other] = 1.0
+
+    # 2. Text embedding (hard positive).
+    if has_text:
+        font_idx = torch.arange(N, device=device) % B
+        pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
+
+    # 3. Tag soft positives.
+    if tag_vectors is not None:
+        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)  # (B, T)
+        tag_sim = torch.matmul(tag_norm, tag_norm.T)  # (B, B)
+        tag_sim = torch.where(
+            tag_sim > tag_threshold, tag_sim, torch.zeros_like(tag_sim)
+        )
+        top = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
+        bot = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
+        img_pos = torch.cat([top, bot], dim=0)  # (2B, 2B)
+        img_pos.fill_diagonal_(0.0)
+        for i in range(N):
+            img_pos[i, other[i]] = 0.0
+        pos_mask[:, :N] += tag_weight * img_pos
+
+    # 4. Same-family, different-font (soft positive).
+    if font_ids is not None and family_positive_weight > 0:
+        import numpy as np
+
+        fams_arr = np.array(family_labels)  # (2B,)
+        fids_arr = np.array(font_ids)  # (2B,)
+        same_family = torch.tensor(
+            fams_arr[:, None] == fams_arr[None, :],
+            device=device,
+            dtype=torch.float32,
+        )  # (2B, 2B)
+        diff_font = torch.tensor(
+            fids_arr[:, None] != fids_arr[None, :],
+            device=device,
+            dtype=torch.float32,
+        )  # (2B, 2B)
+        pos_mask[:, :N] += family_positive_weight * (same_family * diff_font)
+
+    # Self is neither a positive nor a negative.
+    pos_mask[torch.arange(N), torch.arange(N)] = 0.0
+
+    return sim, pos_mask
+
+
 def multipos_contrastive_loss(
     projections: torch.Tensor,
     family_labels: list[str],
@@ -81,75 +164,21 @@ def multipos_contrastive_loss(
     # if tag_vectors is not None:
     #     _check(tag_vectors, "tag_vectors (input)")
 
-    N = 2 * B  # image anchors
-    has_text = text_embeddings is not None
-    M = N + (B if has_text else 0)  # total candidates
-    device = projections.device
+    sim, pos_mask = _positive_mask(
+        projections,
+        family_labels,
+        font_ids=font_ids,
+        tag_vectors=tag_vectors,
+        text_embeddings=text_embeddings,
+        family_positive_weight=family_positive_weight,
+        tag_weight=tag_weight,
+        tag_threshold=tag_threshold,
+    )
+    N = projections.shape[0]
 
-    # Image-image similarities.
-    sim_img = torch.matmul(projections, projections.T) / temperature  # (2B, 2B)
-    # _check(sim_img, "sim_img after matmul")
-
-    if has_text:
-        sim_txt = torch.matmul(projections, text_embeddings.T) / temperature
-        # _check(sim_txt, "sim_txt after matmul")
-        sim = torch.cat([sim_img, sim_txt], dim=1)
-    else:
-        sim = sim_img
-    # _check(sim, "sim after concat")
-
-    # ---- Positive mask ---------------------------------------------------
-    pos_mask = torch.zeros(N, M, device=device)
-
-    # 1. Same-font, other view: shifted identity (hard positive).
-    other = (torch.arange(N, device=device) + B) % N
-    pos_mask[torch.arange(N), other] = 1.0
-
-    # 2. Text embedding (hard positive) — only when available.
-    if has_text:
-        font_idx = torch.arange(N, device=device) % B
-        pos_mask[torch.arange(N), 2 * B + font_idx] = 1.0
-
-    # 3. Image-image soft positives from tag vectors (when available).
-    if tag_vectors is not None:
-        # Normalize tag vectors and compute cosine similarity.
-        tag_norm = F.normalize(tag_vectors.float(), p=2, dim=-1)  # (B, T)
-        tag_sim = torch.matmul(tag_norm, tag_norm.T)  # (B, B)
-        # Threshold: zero out very weak similarities.
-        tag_sim = torch.where(
-            tag_sim > tag_threshold, tag_sim, torch.zeros_like(tag_sim)
-        )
-        # Duplicate to (2B, 2B) for the two views.
-        top = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
-        bot = torch.cat([tag_sim, tag_sim], dim=1)  # (B, 2B)
-        img_pos = torch.cat([top, bot], dim=0)  # (2B, 2B)
-        # Exclude self and the other-view positive.
-        img_pos.fill_diagonal_(0.0)
-        for i in range(N):
-            img_pos[i, other[i]] = 0.0
-        pos_mask[:, :N] += tag_weight * img_pos
-    # Same family, *different font*: soft positive (closer than cross-family,
-    # but not as close as the same font).
-    if font_ids is not None and family_positive_weight > 0:
-        import numpy as np
-
-        fams_arr = np.array(family_labels)  # (2B,)
-        fids_arr = np.array(font_ids)  # (2B,)
-        same_family = torch.tensor(
-            fams_arr[:, None] == fams_arr[None, :],
-            device=device,
-            dtype=torch.float32,
-        )  # (2B, 2B)
-        diff_font = torch.tensor(
-            fids_arr[:, None] != fids_arr[None, :],
-            device=device,
-            dtype=torch.float32,
-        )  # (2B, 2B)
-        pos_mask[:, :N] += family_positive_weight * (same_family * diff_font)
-
-    # ---- Mask self-similarity in sim ------------------------------------
+    sim = sim / temperature
+    # Exclude self from the softmax denominator.
     sim[torch.arange(N), torch.arange(N)] = float("-inf")
-    # _check(sim, "sim after masking self")
 
     # ---- SupCon-format loss: weighted mean over positives --------------
     log_prob = sim.log_softmax(dim=1)  # (2B, M)
@@ -160,6 +189,72 @@ def multipos_contrastive_loss(
     n_pos = pos_mask.sum(dim=1).clamp(min=1)  # (2B,)
     loss_per_row = -(pos_mask * log_prob).sum(dim=1) / n_pos  # (2B,)
     return loss_per_row.mean()
+
+
+def circle_loss(
+    projections: torch.Tensor,
+    family_labels: list[str],
+    *,
+    font_ids: list[str] | None = None,
+    text_embeddings: torch.Tensor | None = None,
+    tag_vectors: torch.Tensor | None = None,
+    family_positive_weight: float = 0.3,
+    tag_threshold: float = 0.1,
+    tag_weight: float = 1.0,
+    margin: float = 0.25,
+    gamma: float = 128.0,
+) -> torch.Tensor:
+    """Circle loss over the same positive set as ``multipos_contrastive_loss``.
+
+    Unlike InfoNCE, the negative term is bounded by a hard margin: a negative is
+    pushed only until its cosine falls ``margin`` below the positive decision
+    boundary, then contributes no gradient.  This stops the late-training
+    uniformity runaway (the loss falling purely by pushing every pair apart)
+    that erodes fine-grained family/axis/attribution structure.  Positive pairs
+    still pull toward cosine 1, so alignment is preserved.
+
+    Args:
+        margin: single margin ``m``; positive boundary ``1 - m``, negative
+            boundary ``m`` (both in cosine space, [-1, 1]).
+        gamma: scale factor (circle-loss analogue of the softmax temperature).
+    """
+    B = projections.shape[0] // 2
+    if B < 2:
+        return torch.tensor(0.0, device=projections.device)
+
+    sim, pos_mask = _positive_mask(
+        projections,
+        family_labels,
+        font_ids=font_ids,
+        tag_vectors=tag_vectors,
+        text_embeddings=text_embeddings,
+        family_positive_weight=family_positive_weight,
+        tag_weight=tag_weight,
+        tag_threshold=tag_threshold,
+    )
+    N = sim.shape[0]
+
+    positives = pos_mask > 0
+    negatives = ~positives
+    negatives[torch.arange(N), torch.arange(N)] = False
+
+    delta_p = 1.0 - margin
+    delta_n = margin
+
+    # Self-paced weights (detached: they modulate, not differentiate).
+    alpha_p = torch.clamp_min(1.0 + margin - sim, min=0.0).detach()  # (N, M)
+    alpha_n = torch.clamp_min(sim + margin, min=0.0).detach()        # (N, M)
+
+    # pos_mask doubles as the positive weight (hard positive = 1, soft < 1).
+    logit_p = -gamma * pos_mask * alpha_p * (sim - delta_p)
+    logit_n = gamma * alpha_n * (sim - delta_n)
+
+    logit_p = logit_p.masked_fill(~positives, float("-inf"))
+    logit_n = logit_n.masked_fill(~negatives, float("-inf"))
+
+    lp = torch.logsumexp(logit_p, dim=1)  # (N,)
+    ln = torch.logsumexp(logit_n, dim=1)  # (N,)
+    return F.softplus(lp + ln).mean()
 
 
 def contrastive_loss(
@@ -292,6 +387,101 @@ def view_invariance_loss(embeddings: torch.Tensor) -> torch.Tensor:
     return (1.0 - cos).mean()
 
 
+def _off_diag_cov(z: torch.Tensor) -> torch.Tensor:
+    """Mean squared off-diagonal of the correlation matrix (anti-collapse).
+
+    Rows are L2-normalized first so the term is scale-invariant: it reads the
+    *directions* of the summary, not their arbitrary magnitude.
+    """
+    z = F.normalize(z, p=2, dim=-1, eps=1e-8)
+    z = z - z.mean(dim=0, keepdim=True)
+    n, d = z.shape
+    cov = (z.T @ z) / max(n - 1, 1)
+    off = cov - torch.diag(torch.diag(cov))
+    return (off * off).sum() / d
+
+
+def vicreg_loss(embeddings: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Invariance + covariance between the two views of the *summary* embedding.
+
+    ``embeddings`` is ``(2B, D)`` with view 1 in the first B rows and view 2 in
+    the next B rows.
+
+    * ``invariance`` — cosine distance between the two views (content-invariance).
+    * ``covariance`` — off-diagonal decorrelation of the correlation matrix
+      (discourages the summary from collapsing to a low-rank subspace).
+
+    The variance term from the original VICReg is deliberately omitted: the
+    circle loss already spreads instances, and a ``relu(1 - std)`` term on the
+    raw summary just chases its arbitrary magnitude (which is normalized away
+    downstream) and destabilizes training.
+    """
+    B = embeddings.shape[0] // 2
+    if B < 2:
+        return {
+            "invariance": torch.tensor(0.0, device=embeddings.device),
+            "covariance": torch.tensor(0.0, device=embeddings.device),
+        }
+    z1 = embeddings[:B].float()
+    z2 = embeddings[B:].float()
+
+    n1 = F.normalize(z1, p=2, dim=-1, eps=1e-8)
+    n2 = F.normalize(z2, p=2, dim=-1, eps=1e-8)
+    invariance = (1.0 - (n1 * n2).sum(dim=-1)).mean()
+
+    covariance = _off_diag_cov(z1) + _off_diag_cov(z2)
+    return {
+        "invariance": invariance,
+        "covariance": covariance,
+    }
+
+
+def content_averaged_shape(
+    images: torch.Tensor,
+    glyph_mask: torch.Tensor | None,
+    grid: int,
+) -> torch.Tensor:
+    """Mean over *visible* glyphs of the raw image pooled to ``grid``×``grid``.
+
+    This is the fixed reconstruction target: the content-averaged raw glyph
+    shape, which carries the fine visual style (corner rounding, terminals)
+    that the summary must retain.  It is derived from the raw images (not the
+    encoder), so it cannot be distorted to make reconstruction trivial.
+    """
+    b, g, c, h, w = images.shape
+    flat = images.flatten(0, 1)  # (B*G, C, H, W)
+    shape = F.adaptive_avg_pool2d(flat, (grid, grid))  # (B*G, C, grid, grid)
+    shape = shape.reshape(b, g, c, grid, grid)
+    if glyph_mask is not None:
+        mask = glyph_mask.to(shape.dtype).reshape(b, g, 1, 1, 1)
+        return (shape * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1.0)
+    return shape.mean(dim=1)
+
+
+def reconstruction_loss(
+    reconstruction: torch.Tensor, shape_target: torch.Tensor
+) -> torch.Tensor:
+    """Reconstruction of the raw content-averaged glyph shape.
+
+    Forces the summary to retain the fine visual style it would otherwise
+    discard in favour of coarse instance/category separation: if the summary can
+    reproduce the raw glyph shape, two fonts with similar shape must land near
+    each other.  The target is detached, and both sides are mean-centered before
+    the cosine so the loss reads *shape* (ink distribution) rather than the
+    dominant white-background DC component.
+
+    Returns mean ``1 - cos(recon, shape)`` over the batch, in [0, 2].
+    """
+    recon = reconstruction.flatten(1)
+    target = shape_target.detach().flatten(1)
+    recon = recon - recon.mean(dim=1, keepdim=True)
+    target = target - target.mean(dim=1, keepdim=True)
+    recon = F.normalize(recon, p=2, dim=-1, eps=1e-8)
+    target = F.normalize(target, p=2, dim=-1, eps=1e-8)
+    cos = (recon * target).sum(dim=-1)  # (B,)
+    return (1.0 - cos).mean()
+
+
 def compute_losses(
     projections: torch.Tensor,
     predicted_tags: dict[str, torch.Tensor] | None,
@@ -299,6 +489,9 @@ def compute_losses(
     *,
     weights: FontStyleEmbeddingLossWeights,
     temperature: float = 0.07,
+    contrastive_loss_type: str = "multipos",
+    circle_margin: float = 0.25,
+    circle_gamma: float = 128.0,
     tag_masks: dict[str, torch.Tensor] | None = None,
     family_labels: list[str] | None = None,
     font_ids: list[str] | None = None,
@@ -307,6 +500,8 @@ def compute_losses(
     text_embeddings: torch.Tensor | None = None,
     tag_vectors: torch.Tensor | None = None,
     embeddings: torch.Tensor | None = None,
+    shape_target: torch.Tensor | None = None,
+    reconstruction: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute combined loss and per-term breakdown.
 
@@ -318,16 +513,30 @@ def compute_losses(
     # Multi-positive contrastive loss.  Without text/tags this still uses the
     # same-font other-view hard positive plus (when font_ids are present) the
     # same-family soft positive.
-    contr = multipos_contrastive_loss(
-        projections,
-        family_labels if family_labels is not None else [],
-        font_ids=font_ids,
-        text_embeddings=text_embeddings,
-        tag_vectors=tag_vectors,
-        temperature=temperature,
-        family_positive_weight=weights.family_positive_weight,
-        tag_weight=weights.tag_positive_weight,
-    )
+    fam = family_labels if family_labels is not None else []
+    if contrastive_loss_type == "circle":
+        contr = circle_loss(
+            projections,
+            fam,
+            font_ids=font_ids,
+            text_embeddings=text_embeddings,
+            tag_vectors=tag_vectors,
+            family_positive_weight=weights.family_positive_weight,
+            tag_weight=weights.tag_positive_weight,
+            margin=circle_margin,
+            gamma=circle_gamma,
+        )
+    else:
+        contr = multipos_contrastive_loss(
+            projections,
+            fam,
+            font_ids=font_ids,
+            text_embeddings=text_embeddings,
+            tag_vectors=tag_vectors,
+            temperature=temperature,
+            family_positive_weight=weights.family_positive_weight,
+            tag_weight=weights.tag_positive_weight,
+        )
     weight = weights.multipos_contrastive
 
     # Tag prediction loss.
@@ -352,11 +561,31 @@ def compute_losses(
     if embeddings is not None and weights.view_invariance > 0:
         inv = view_invariance_loss(embeddings)
 
+    # VICReg (variance + invariance + covariance): prevents the summary from
+    # collapsing to a low-rank subspace and enforces content-invariance between
+    # the two views.  Subsumes the view-invariance term.
+    vic = torch.tensor(0.0, device=device)
+    vic_components: dict[str, torch.Tensor] = {}
+    if embeddings is not None and weights.vicreg_weight > 0:
+        vic_components = vicreg_loss(embeddings)
+        vic = vic_components["invariance"] + vic_components["covariance"]
+
+    # Visual reconstruction: force the summary to retain fine style.
+    recon = torch.tensor(0.0, device=device)
+    if (
+        shape_target is not None
+        and reconstruction is not None
+        and weights.reconstruction_weight > 0
+    ):
+        recon = reconstruction_loss(reconstruction, shape_target)
+
     total = (
         weight * contr
         + weights.tag_prediction * tag_loss
         + cat_loss
         + weights.view_invariance * inv
+        + weights.reconstruction_weight * recon
+        + weights.vicreg_weight * vic
     )
 
     loss_info: dict[str, torch.Tensor] = {
@@ -368,6 +597,20 @@ def compute_losses(
         loss_info["view_invariance"] = inv.detach()
         loss_info["view_invariance_weighted"] = (
             weights.view_invariance * inv
+        ).detach()
+    if embeddings is not None and weights.vicreg_weight > 0:
+        loss_info["vicreg"] = vic.detach()
+        loss_info["vicreg_weighted"] = (weights.vicreg_weight * vic).detach()
+        loss_info["vicreg_invariance"] = vic_components["invariance"].detach()
+        loss_info["vicreg_covariance"] = vic_components["covariance"].detach()
+    if (
+        shape_target is not None
+        and reconstruction is not None
+        and weights.reconstruction_weight > 0
+    ):
+        loss_info["reconstruction"] = recon.detach()
+        loss_info["reconstruction_weighted"] = (
+            weights.reconstruction_weight * recon
         ).detach()
     if predicted_tags is not None and target_tags:
         loss_info["tag_prediction"] = tag_loss.detach()
