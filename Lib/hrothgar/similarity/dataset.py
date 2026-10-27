@@ -74,6 +74,11 @@ THEME_TAGS = [
 ALL_STYLE_TAGS = STYLE_CATEGORY_TAGS + STYLE_PARENT_TAGS + THEME_TAGS
 
 
+def _fine_style_tags() -> list[str]:
+    """The leaf style + theme tags the style vector/mask are defined over."""
+    return STYLE_CATEGORY_TAGS + THEME_TAGS
+
+
 def style_tag_vector(font) -> torch.Tensor:
     """Per-font centile style-tag vector over the *fine* style tags.
 
@@ -86,11 +91,34 @@ def style_tag_vector(font) -> torch.Tensor:
     retrieval), so the two can never drift apart.
     """
     font_tags = font.tags()
-    fine_tags = STYLE_CATEGORY_TAGS + THEME_TAGS
     return torch.tensor(
-        [font_tags.get(tag, 0.0) / 100.0 for tag in fine_tags],
+        [font_tags.get(tag, 0.0) / 100.0 for tag in _fine_style_tags()],
         dtype=torch.float32,
     )
+
+
+def style_tag_mask(font) -> torch.Tensor:
+    """Per-font presence mask for :func:`style_tag_vector` (``True`` = assessed).
+
+    The two tag families have different absence semantics, so the mask is
+    family-aware:
+
+    * Style-category tags are exhaustive and mutually exclusive across their
+      four families.  Once a font is categorized (has *any* style-category
+      tag), every style-category dimension is a real value — present tags carry
+      centiles, absent tags are a genuine zero (a ``/Sans`` font really is not
+      ``/Serif``).  So all style-category dims share a single mask value.
+    * Theme tags are sparse: absence means "not assessed", *not* "definitely
+      absent".  Each theme dimension is therefore masked by its own presence.
+
+    Callers should compute tag similarity only over dimensions where *both*
+    fonts are assessed.
+    """
+    font_tags = font.tags()
+    has_category = any(tag in font_tags for tag in STYLE_CATEGORY_TAGS)
+    cat_mask = [has_category] * len(STYLE_CATEGORY_TAGS)
+    theme_mask = [tag in font_tags for tag in THEME_TAGS]
+    return torch.tensor(cat_mask + theme_mask, dtype=torch.bool)
 
 
 class _FontDataset(TorchDataset):

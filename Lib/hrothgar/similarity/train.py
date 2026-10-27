@@ -747,7 +747,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--encoder-dropout",
         type=float,
-        default=0.3,
+        default=0.1,
         help="Dropout on the pooled style summary.",
     )
     p.add_argument(

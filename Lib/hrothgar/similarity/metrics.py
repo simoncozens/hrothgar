@@ -202,6 +202,89 @@ def style_tag_agreement(
     return out
 
 
+def masked_pairwise_cosine(
+    tag_vectors: torch.Tensor, tag_masks: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pairwise cosine of sparse tag vectors over assessed dimensions only.
+
+    Entry ``(i, j)`` is the cosine of ``tag_vectors[i]`` and ``tag_vectors[j]``
+    restricted to dimensions where *both* masks are ``True`` (i.e. both fonts
+    were assessed).  Absent theme tags are therefore treated as "unknown" rather
+    than as a real zero — the correct semantics for sparse tags.
+
+    Returns ``(sim, comparable)``: ``sim`` is ``(N, N)`` (0.0 on the diagonal
+    and for incomparable/zero-norm pairs), ``comparable`` is the ``(N, N)``
+    boolean mask of pairs with a non-empty assessed overlap.
+    """
+    n = tag_vectors.shape[0]
+    sim = torch.zeros(n, n, device=tag_vectors.device, dtype=tag_vectors.dtype)
+    comparable = torch.zeros(n, n, device=tag_vectors.device, dtype=torch.bool)
+    for i in range(n):
+        for j in range(i + 1, n):
+            overlap = tag_masks[i] & tag_masks[j]
+            if not bool(overlap.any()):
+                continue
+            x = tag_vectors[i][overlap].float()
+            y = tag_vectors[j][overlap].float()
+            denom = (x.norm() * y.norm()).clamp(min=1e-12)
+            comparable[i, j] = comparable[j, i] = True
+            sim[i, j] = sim[j, i] = (x @ y) / denom
+    return sim, comparable
+
+
+def tag_space_agreement(
+    embeddings: torch.Tensor,
+    tag_vectors: torch.Tensor,
+    tag_masks: torch.Tensor,
+    *,
+    center: bool = True,
+) -> dict:
+    """Agreement between tag-space and embedding-space organisation.
+
+    Compares the pairwise-similarity structure implied by the *assessed* style
+    tags against the model's embedding space.  ``pearson``/``spearman`` are the
+    correlation of the two off-diagonal similarity vectors over the pairs with a
+    non-empty assessed tag overlap; a high value means "fonts the tags say are
+    similar are also close in the embedding".  ``comparable_fraction`` is the
+    share of off-diagonal pairs with any assessed overlap — a coverage/sparsity
+    diagnostic for the tag data.
+    """
+    n = embeddings.shape[0]
+    if n < 3:
+        return {
+            "pearson": 0.0,
+            "spearman": 0.0,
+            "comparable_fraction": 0.0,
+            "n": n,
+        }
+
+    tag_sim, comparable = masked_pairwise_cosine(tag_vectors, tag_masks)
+    x = prepare(embeddings, center=center)
+    emb_sim = x @ x.T
+
+    tri = torch.triu_indices(n, n, offset=1, device=emb_sim.device)
+    t = tag_sim[tri[0], tri[1]]
+    e = emb_sim[tri[0], tri[1]]
+    comp = comparable[tri[0], tri[1]]
+
+    comparable_fraction = float(comp.float().mean()) if comp.numel() else 0.0
+
+    t = t[comp]
+    e = e[comp]
+    if t.numel() < 2:
+        pearson = spearman = 0.0
+    else:
+        pearson = _pearson(e, t)
+        spearman = _pearson(_ranks(e), _ranks(t))
+
+    return {
+        "pearson": pearson,
+        "spearman": spearman,
+        "comparable_fraction": comparable_fraction,
+        "n": n,
+    }
+
+
 def geometry_stats(embeddings: torch.Tensor) -> dict:
     """Diagnostics for the shape of the embedding space.
 
