@@ -579,7 +579,7 @@ class FontStyleEmbeddingTrainingLoop(TrainingLoop):
         font_names = val_batch.get("family", [f"font_{i}" for i in range(B)])
 
         with torch.no_grad(), self._autocast_context():
-            _emb, _proj, predicted_tags, category_logits = self.model(
+            _emb, _proj, predicted_tags, category_logits, _recon = self.model(
                 images_v1, glyph_mask=glyph_mask_v1
             )
 
