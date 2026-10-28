@@ -310,6 +310,66 @@ def test_frame_from_extents_grows_by_margin_and_floors_min_size() -> None:
     assert (dot.left, dot.top) == pytest.approx((0.2, 0.5))
 
 
+def test_units_to_pixels_puts_the_origin_where_the_default_frame_promises() -> None:
+    from hrothgar.render import UNIFORM_FRAME
+
+    # A quarter in from the left, three quarters down, at 1em == size / 2 px.
+    assert UNIFORM_FRAME.units_to_pixels(100, 0, 0) == pytest.approx((25.0, 75.0))
+    # The frame corners are the canvas corners, so em space fills the pixels.
+    assert UNIFORM_FRAME.units_to_pixels(100, -0.5, 1.5) == pytest.approx((0.0, 0.0))
+    assert UNIFORM_FRAME.units_to_pixels(100, 1.5, -0.5) == pytest.approx(
+        (100.0, 100.0)
+    )
+
+
+def test_units_to_pixels_takes_design_units_with_a_upem() -> None:
+    from hrothgar.render import UNIFORM_FRAME
+
+    # A 1000-upem font rendered at size=1000: 1 em is 500px, so a design unit
+    # is half a pixel and 243 units of x is 121.5px right of the origin.
+    assert UNIFORM_FRAME.units_to_pixels(1000, 243, 501, upem=1000) == pytest.approx(
+        (371.5, 499.5)
+    )
+    # The same point given in em.
+    assert UNIFORM_FRAME.units_to_pixels(1000, 0.243, 0.501) == pytest.approx(
+        (371.5, 499.5)
+    )
+
+
+def test_units_to_pixels_accounts_for_centring_a_non_square_frame() -> None:
+    from hrothgar.render import Frame
+
+    # 2.0em wide, 1.0em tall: 0.5em of padding above and below, so the frame
+    # only occupies the middle half of the canvas.
+    frame = Frame(-0.5, 1.5, -0.25, 0.75)
+    assert frame.units_to_pixels(100, -0.5, 0.75) == pytest.approx((0.0, 25.0))
+    assert frame.units_to_pixels(100, 1.5, -0.25) == pytest.approx((100.0, 75.0))
+    # The frame's centre (0.25em) lands on the canvas centre.
+    assert frame.units_to_pixels(100, 0.5, 0.25) == pytest.approx((50.0, 50.0))
+
+
+def test_units_to_pixels_matches_where_the_ink_actually_lands() -> None:
+    from hrothgar.render import Frame
+
+    # The em ink box is x in [lsb, lsb + scale_x], y in [-descender_depth, ...].
+    font = _roboto_font()
+    for frame in (Frame(), Frame(-0.5, 1.5, -0.25, 0.75)):
+        image, g = render(font, codepoint=ord("o"), size=128, frame=frame)
+        lsb, depth = g["left_sidebearing"], g["descender_depth"]
+        left, top = frame.units_to_pixels(128, lsb, -depth + g["scale_y"])
+        right, bottom = frame.units_to_pixels(128, lsb + g["scale_x"], -depth)
+        ink = image < 0.5
+        rows = ink.any(dim=1).nonzero().flatten()
+        cols = ink.any(dim=0).nonzero().flatten()
+        assert [float(cols.min()), float(rows.min())] == pytest.approx(
+            [left, top], abs=2
+        )
+        # The bbox max indices are inclusive, hence the -1.
+        assert [float(cols.max()), float(rows.max())] == pytest.approx(
+            [right - 1, bottom - 1], abs=2
+        )
+
+
 def _ink_height(image) -> int:
     return int((image < 0.5).any(dim=1).sum())
 

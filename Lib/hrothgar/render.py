@@ -38,9 +38,10 @@ from typing import Any
 import freetype
 import numpy as np
 import skia
+import uharfbuzz as hb
+
 import torch
 import torch.nn.functional as F
-import uharfbuzz as hb
 
 # Ink is rendered near 0.0 on a white (1.0) background.
 _INK_THRESHOLD = 0.5
@@ -584,6 +585,33 @@ class Frame:
             centre_y + half_y,
         )
 
+    def units_to_pixels(
+        self, size: float, x: float, y: float, *, upem: float = 1.0
+    ) -> tuple[float, float]:
+        """Map font coordinates to pixels on a ``size``-square render.
+
+        ``x``/``y`` are em units unless ``upem`` is given: pass the font's
+        units-per-em to give them in design units, so 243 at ``upem=1000``
+        means 0.243 em.  ``size`` is the side of the image :func:`render`
+        returned.
+
+        The canvas shows ``em_span`` em per side and centres the frame in it, so
+        the slack on the frame's shorter axis is padding that shifts the origin
+        away from the frame edge.  Pixel ``(0, 0)`` is the canvas's top-left
+        corner and both axes grow rightwards/downwards, so a positive ``y``
+        (above the baseline) maps to a smaller pixel row.
+
+        The mapping is continuous; the raster rounds the origin to the
+        supersampled canvas, so expect up to half a supersampled pixel of
+        disagreement with the actual ink.
+        """
+        scale = size / self.em_span
+        pad_x = (self.em_span - self.width) / 2.0
+        pad_y = (self.em_span - self.height) / 2.0
+        px = (pad_x + x / upem - self.left) * scale
+        py = (pad_y + self.top - y / upem) * scale
+        return px, py
+
 
 # The canonical 2em framing, and what every existing caller gets.
 UNIFORM_FRAME = Frame()
@@ -750,12 +778,16 @@ def _render_uniform(
         bitmap_top=raw.bitmap_top,
         baseline_y=baseline_y,
     )
+    if not torch:
+        return canvas, geometry
 
     # Ink as 0.0 on a white 1.0 background, downscaled from the supersampled canvas.
     out = torch.from_numpy(canvas.astype(np.float32) / 255.0)  # (rsize, rsize)
     image = F.interpolate(
         out[None, None], size=(size, size), mode="bilinear", align_corners=False
-    )[0, 0]  # (size, size)
+    )[
+        0, 0
+    ]  # (size, size)
     return image, geometry
 
 
@@ -797,9 +829,9 @@ def denormalize_uniform(
         .unsqueeze(0)
         .unsqueeze(0)
     )
-    glyph = F.interpolate(
-        src, size=(h_px, w_px), mode="bilinear", align_corners=False
-    )[0, 0].numpy()  # (h_px, w_px)
+    glyph = F.interpolate(src, size=(h_px, w_px), mode="bilinear", align_corners=False)[
+        0, 0
+    ].numpy()  # (h_px, w_px)
 
     # Centre the frame in the square canvas (a no-op for a square frame).
     pad_x = (frame.em_span - frame.width) / 2.0
