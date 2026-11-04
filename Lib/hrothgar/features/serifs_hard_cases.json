@@ -1,0 +1,242 @@
+{
+  "description": "serifs hard cases: fonts where the recogniser disagreed with the CEDARS+ serifs tag (kind=mismatch) or abstained (kind=unrecognised). 'initial' is the current hand-tag; 'gt'/'note' are filled in as fonts are reviewed. calligraphic/bifurcated are dropped from the task.",
+  "task": "serifs",
+  "classes": [
+    "slab",
+    "bracketed",
+    "wedge",
+    "hairline",
+    "asymmetric"
+  ],
+  "items": [
+    {
+      "family": "Corben",
+      "initial": "bracketed",
+      "recogniser": "slab",
+      "confidence": 0.998,
+      "kind": "mismatch",
+      "gt": "bracketed",
+      "note": "heavy slab-like but rounded (bracketed) stem connection"
+    },
+    {
+      "family": "Fraunces",
+      "initial": "bracketed",
+      "recogniser": "slab",
+      "confidence": 0.995,
+      "kind": "mismatch",
+      "gt": "bracketed",
+      "note": "heavy slab-like but rounded (bracketed) stem connection"
+    },
+    {
+      "family": "Cantata One",
+      "initial": "slab",
+      "recogniser": "hairline",
+      "confidence": 0.993,
+      "kind": "mismatch",
+      "gt": "slab",
+      "note": "could go either way"
+    },
+    {
+      "family": "Aleo",
+      "initial": "slab",
+      "recogniser": "asymmetric",
+      "confidence": 0.992,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Sawarabi Mincho",
+      "initial": "bracketed",
+      "recogniser": "wedge",
+      "confidence": 0.971,
+      "kind": "mismatch",
+      "gt": "bracketed",
+      "note": "definitely bracketed"
+    },
+    {
+      "family": "Playfair",
+      "initial": "bracketed",
+      "recogniser": "slab",
+      "confidence": 0.966,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Caladea",
+      "initial": "wedge",
+      "recogniser": "bracketed",
+      "confidence": 0.942,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Headland One",
+      "initial": "bracketed",
+      "recogniser": "wedge",
+      "confidence": 0.917,
+      "kind": "mismatch",
+      "gt": "bracketed",
+      "note": "definitely bracketed"
+    },
+    {
+      "family": "Cutive Mono",
+      "initial": "slab",
+      "recogniser": "bracketed",
+      "confidence": 0.901,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Hahmlet",
+      "initial": "wedge",
+      "recogniser": "slab",
+      "confidence": 0.9,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Literata",
+      "initial": "bracketed",
+      "recogniser": "wedge",
+      "confidence": 0.899,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Hedvig Letters Serif",
+      "initial": "bracketed",
+      "recogniser": "asymmetric",
+      "confidence": 0.889,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Ponomar",
+      "initial": "slab",
+      "recogniser": "bracketed",
+      "confidence": 0.886,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Goblin One",
+      "initial": "wedge",
+      "recogniser": "hairline",
+      "confidence": 0.885,
+      "kind": "mismatch",
+      "gt": "wedge",
+      "note": "very large wedges; hairline is wrong"
+    },
+    {
+      "family": "Cardo",
+      "initial": "bracketed",
+      "recogniser": "wedge",
+      "confidence": 0.884,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Benne",
+      "initial": "wedge",
+      "recogniser": "bracketed",
+      "confidence": 0.869,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Inika",
+      "initial": "wedge",
+      "recogniser": "slab",
+      "confidence": 0.813,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Suranna",
+      "initial": "hairline",
+      "recogniser": "asymmetric",
+      "confidence": 0.813,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Wittgenstein",
+      "initial": "wedge",
+      "recogniser": "bracketed",
+      "confidence": 0.781,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Shafarik",
+      "initial": "slab",
+      "recogniser": "bracketed",
+      "confidence": 0.757,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Labrada",
+      "initial": "wedge",
+      "recogniser": "bracketed",
+      "confidence": 0.685,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Sedan",
+      "initial": "asymmetric",
+      "recogniser": "bracketed",
+      "confidence": 0.667,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Arbutus Slab",
+      "initial": "slab",
+      "recogniser": "wedge",
+      "confidence": 0.654,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Young Serif",
+      "initial": "bracketed",
+      "recogniser": "slab",
+      "confidence": 0.639,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Yrsa",
+      "initial": "bracketed",
+      "recogniser": "wedge",
+      "confidence": 0.566,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Neuton",
+      "initial": "wedge",
+      "recogniser": "unrecognisable",
+      "confidence": 0.516,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "IBM Plex Serif",
+      "initial": "slab",
+      "recogniser": "unrecognisable",
+      "confidence": 0.465,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Caudex",
+      "initial": "bracketed",
+      "recogniser": "unrecognisable",
+      "confidence": 0.442,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "GFS Didot",
+      "initial": "hairline",
+      "recogniser": "unrecognisable",
+      "confidence": 0.441,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Roboto Serif",
+      "initial": "bracketed",
+      "recogniser": "unrecognisable",
+      "confidence": 0.397,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Koh Santepheap",
+      "initial": "bracketed",
+      "recogniser": "unrecognisable",
+      "confidence": 0.289,
+      "kind": "unrecognised"
+    }
+  ]
+}

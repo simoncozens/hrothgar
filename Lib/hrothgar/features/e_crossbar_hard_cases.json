@@ -1,0 +1,305 @@
+{
+  "description": "e-crossbar mismatches: fonts where the recogniser disagreed with the CEDARS+ e-crossbar tag. 'gt' is the current hand-tag (tentative \u2014 some may be mis-tagged and need review); 'recogniser' is the model verdict.",
+  "task": "e-crossbar",
+  "classes": [
+    "flat",
+    "angled",
+    "rounded",
+    "na"
+  ],
+  "items": [
+    {
+      "family": "Pirata One",
+      "initial": "rounded",
+      "recogniser": "angled",
+      "gt": "angled",
+      "confidence": 0.999
+    },
+    {
+      "family": "Josefin Sans",
+      "initial": "angled",
+      "recogniser": "rounded",
+      "gt": "angled",
+      "confidence": 0.986
+    },
+    {
+      "family": "Geostar",
+      "initial": "flat",
+      "recogniser": "na",
+      "gt": "flat",
+      "confidence": 0.985
+    },
+    {
+      "family": "Modak",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "flat",
+      "confidence": 0.985
+    },
+    {
+      "family": "My Soul",
+      "initial": "na",
+      "gt": "flat",
+      "recogniser": "rounded",
+      "confidence": 0.983
+    },
+    {
+      "family": "Anta",
+      "initial": "na",
+      "recogniser": "flat",
+      "gt": "flat",
+      "confidence": 0.975
+    },
+    {
+      "family": "Atma",
+      "initial": "angled",
+      "recogniser": "flat",
+      "gt": "flat",
+      "confidence": 0.974
+    },
+    {
+      "family": "Handjet",
+      "initial": "flat",
+      "recogniser": "na",
+      "gt": "flat",
+      "confidence": 0.973
+    },
+    {
+      "family": "Isometra",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.971
+    },
+    {
+      "family": "Margarine",
+      "initial": "rounded",
+      "recogniser": "angled",
+      "gt": "angled",
+      "confidence": 0.949
+    },
+    {
+      "family": "Ravi Prakash",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "rounded",
+      "confidence": 0.937
+    },
+    {
+      "family": "Edu TAS Beginner",
+      "initial": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.935
+    },
+    {
+      "family": "Joan",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "flat",
+      "confidence": 0.926
+    },
+    {
+      "family": "Beau Rivage",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "rounded",
+      "confidence": 0.924
+    },
+    {
+      "family": "Sonsie One",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "angled",
+      "confidence": 0.923
+    },
+    {
+      "family": "Tillana",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.914
+    },
+    {
+      "family": "Jersey 10",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "na",
+      "confidence": 0.89
+    },
+    {
+      "family": "Spinnaker",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "angled",
+      "confidence": 0.875
+    },
+    {
+      "family": "Dekko",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.841
+    },
+    {
+      "family": "Exile",
+      "initial": "na",
+      "gt": "na",
+      "recogniser": "flat",
+      "confidence": 0.815
+    },
+    {
+      "family": "Nothing You Could Do",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.786
+    },
+    {
+      "family": "Itim",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "flat",
+      "confidence": 0.758
+    },
+    {
+      "family": "Cherry Bomb One",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "flat",
+      "confidence": 0.715
+    },
+    {
+      "family": "Oi",
+      "initial": "na",
+      "gt": "flat",
+      "recogniser": "rounded",
+      "confidence": 0.694
+    },
+    {
+      "family": "Sedgwick Ave",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.644
+    },
+    {
+      "family": "IM Fell Double Pica",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "na",
+      "confidence": 0.616
+    },
+    {
+      "family": "Stick",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "na",
+      "confidence": 0.599
+    },
+    {
+      "family": "Marhey",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "flat",
+      "confidence": 0.49
+    },
+    {
+      "family": "Caprasimo",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "rounded",
+      "confidence": 0.481
+    },
+    {
+      "family": "BioRhyme Expanded",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "angled",
+      "confidence": 0.479
+    },
+    {
+      "family": "Prociono",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "angled",
+      "confidence": 0.433
+    },
+    {
+      "family": "Puppies Play",
+      "initial": "rounded",
+      "gt": "rounded",
+      "recogniser": "flat",
+      "confidence": 0.382
+    },
+    {
+      "family": "Oldenburg",
+      "initial": "rounded",
+      "gt": "flat",
+      "recogniser": "angled",
+      "confidence": 0.342
+    },
+    {
+      "family": "Redaction 35",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "na",
+      "confidence": 0.224
+    },
+    {
+      "family": "Paytone One",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "flat",
+      "confidence": 0.207
+    },
+    {
+      "family": "Tiny5 Duo",
+      "initial": "na",
+      "recogniser": "flat",
+      "gt": "flat",
+      "confidence": 0.167
+    },
+    {
+      "family": "La Belle Aurore",
+      "initial": "rounded",
+      "recogniser": "angled",
+      "gt": "angled",
+      "confidence": 0.153
+    },
+    {
+      "family": "Sekuya",
+      "initial": "na",
+      "recogniser": "flat",
+      "gt": "na",
+      "confidence": 0.15
+    },
+    {
+      "family": "Borel",
+      "initial": "na",
+      "gt": "angled",
+      "recogniser": "flat",
+      "confidence": 0.127
+    },
+    {
+      "family": "Goblin One",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "angled",
+      "confidence": 0.122
+    },
+    {
+      "family": "Londrina Outline",
+      "initial": "flat",
+      "gt": "flat",
+      "recogniser": "angled",
+      "confidence": 0.111
+    },
+    {
+      "family": "Offside",
+      "initial": "angled",
+      "gt": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.091
+    }
+  ]
+}

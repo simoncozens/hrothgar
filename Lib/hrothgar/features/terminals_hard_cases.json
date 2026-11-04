@@ -1,0 +1,406 @@
+{
+  "description": "stem-terminals hard cases (post all-caps/small-caps filter): fonts where the recogniser disagreed with the CEDARS+ stem-terminals tag (kind=mismatch) or abstained (kind=unrecognised). 'initial' is the current hand-tag (tentative — some may be mis-tagged and need review); 'recogniser' is the model verdict.",
+  "task": "stem-terminals",
+  "classes": [
+    "blunted",
+    "soft",
+    "flared",
+    "angled",
+    "tapered",
+    "rounded"
+  ],
+  "items": [
+    {
+      "family": "ZCOOL QingKe HuangYou",
+      "initial": "soft",
+      "recogniser": "rounded",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Arizonia",
+      "initial": "flared",
+      "recogniser": "angled",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Beiruti",
+      "initial": "rounded",
+      "recogniser": "soft",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Rationale",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "GFS Neohellenic",
+      "initial": "flared",
+      "recogniser": "blunted",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Days One",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Zain",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Fresca",
+      "initial": "angled",
+      "recogniser": "blunted",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Kdam Thmor Pro",
+      "initial": "blunted",
+      "recogniser": "flared",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Averia Libre",
+      "initial": "flared",
+      "recogniser": "rounded",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Playball",
+      "initial": "blunted",
+      "recogniser": "angled",
+      "confidence": 1.0,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Babylonica",
+      "initial": "flared",
+      "recogniser": "angled",
+      "confidence": 0.999,
+      "kind": "mismatch"
+    },
+    {
+      "family": "McLaren",
+      "initial": "blunted",
+      "recogniser": "angled",
+      "confidence": 0.999,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Barlow",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 0.999,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Gayathri",
+      "initial": "soft",
+      "recogniser": "rounded",
+      "confidence": 0.999,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Commissioner",
+      "initial": "blunted",
+      "recogniser": "rounded",
+      "confidence": 0.998,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Black And White Picture",
+      "initial": "rounded",
+      "recogniser": "flared",
+      "confidence": 0.997,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Kirang Haerang",
+      "initial": "soft",
+      "recogniser": "angled",
+      "confidence": 0.992,
+      "kind": "mismatch"
+    },
+    {
+      "family": "National Park",
+      "initial": "rounded",
+      "recogniser": "soft",
+      "confidence": 0.982,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Jaini",
+      "initial": "angled",
+      "recogniser": "flared",
+      "confidence": 0.98,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Jaini Purva",
+      "initial": "angled",
+      "recogniser": "flared",
+      "confidence": 0.98,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Gaegu",
+      "initial": "rounded",
+      "recogniser": "blunted",
+      "confidence": 0.969,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Charm",
+      "initial": "angled",
+      "recogniser": "soft",
+      "confidence": 0.965,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Edu TAS Beginner",
+      "initial": "soft",
+      "recogniser": "angled",
+      "confidence": 0.953,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Sriracha",
+      "initial": "soft",
+      "recogniser": "angled",
+      "confidence": 0.936,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Bellota",
+      "initial": "blunted",
+      "recogniser": "angled",
+      "confidence": 0.934,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Chicle",
+      "initial": "flared",
+      "recogniser": "angled",
+      "confidence": 0.918,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Beau Rivage",
+      "initial": "flared",
+      "recogniser": "angled",
+      "confidence": 0.905,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Meow Script",
+      "initial": "rounded",
+      "recogniser": "angled",
+      "confidence": 0.903,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Libertinus Sans",
+      "initial": "flared",
+      "recogniser": "blunted",
+      "confidence": 0.875,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Gafata",
+      "initial": "blunted",
+      "recogniser": "flared",
+      "confidence": 0.832,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Oooh Baby",
+      "initial": "rounded",
+      "recogniser": "blunted",
+      "confidence": 0.767,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Chango",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 0.737,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Capriola",
+      "initial": "soft",
+      "recogniser": "flared",
+      "confidence": 0.718,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Kavivanar",
+      "initial": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.677,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Zen Maru Gothic",
+      "initial": "rounded",
+      "recogniser": "soft",
+      "confidence": 0.599,
+      "kind": "mismatch"
+    },
+    {
+      "family": "BenchNine",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 0.474,
+      "kind": "mismatch"
+    },
+    {
+      "family": "MedievalSharp",
+      "initial": "angled",
+      "recogniser": "rounded",
+      "confidence": 0.447,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Gochi Hand",
+      "initial": "soft",
+      "recogniser": "flared",
+      "confidence": 0.408,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Bonbon",
+      "initial": "tapered",
+      "recogniser": "rounded",
+      "confidence": 0.31,
+      "kind": "mismatch"
+    },
+    {
+      "family": "LXGW WenKai Mono TC",
+      "initial": "flared",
+      "recogniser": "angled",
+      "confidence": 0.284,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Sansita One",
+      "initial": "angled",
+      "recogniser": "blunted",
+      "confidence": 0.255,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Lemonada",
+      "initial": "angled",
+      "recogniser": "blunted",
+      "confidence": 0.232,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Caveat Brush",
+      "initial": "soft",
+      "recogniser": "angled",
+      "confidence": 0.154,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Kite One",
+      "initial": "soft",
+      "recogniser": "blunted",
+      "confidence": 0.12,
+      "kind": "mismatch"
+    },
+    {
+      "family": "Monoton",
+      "initial": "blunted",
+      "recogniser": "angled",
+      "confidence": 0.07,
+      "kind": "mismatch"
+    },
+    {
+      "family": "ADLaM Display",
+      "initial": "soft",
+      "recogniser": "unrecognisable",
+      "confidence": 0.063,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Lovers Quarrel",
+      "initial": "angled",
+      "recogniser": "unrecognisable",
+      "confidence": 0.063,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Sonsie One",
+      "initial": "soft",
+      "recogniser": "unrecognisable",
+      "confidence": 0.053,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Monomaniac One",
+      "initial": "soft",
+      "recogniser": "unrecognisable",
+      "confidence": 0.05,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Inspiration",
+      "initial": "rounded",
+      "recogniser": "unrecognisable",
+      "confidence": 0.044,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Ruluko",
+      "initial": "blunted",
+      "recogniser": "unrecognisable",
+      "confidence": 0.043,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Economica",
+      "initial": "soft",
+      "recogniser": "unrecognisable",
+      "confidence": 0.038,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Sansita Swashed",
+      "initial": "angled",
+      "recogniser": "unrecognisable",
+      "confidence": 0.038,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Caacupe One",
+      "initial": "flared",
+      "recogniser": "unrecognisable",
+      "confidence": 0.025,
+      "kind": "unrecognised"
+    },
+    {
+      "family": "Hachi Maru Pop",
+      "initial": "rounded",
+      "recogniser": "unrecognisable",
+      "confidence": 0.012,
+      "kind": "unrecognised"
+    }
+  ]
+}
