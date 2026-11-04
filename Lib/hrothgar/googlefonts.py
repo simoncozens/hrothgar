@@ -12,7 +12,7 @@ from gftools.util.google_fonts import Metadata
 
 ALL_CATEGORIES = ["Serif", "Sans", "Handwriting", "Script", "Monospace", "Display"]
 # Too weird
-BANNED_FONTS = ["alienblock", "barrio", "barriecito", "betania", "bethellen", "bitcount", "pixel"]
+BANNED_FONTS = ["alienblock", "barrio", "barriecito", "betania", "bethellen", "bitcount", "pixel", "adobeblank"]
 
 class Font:
     """A font, whether standalone or from the Google Fonts repository. This is an abstract base class that defines the interface for fonts, and provides some common functionality. The concrete implementations are GoogleFont and StandaloneFont."""
@@ -178,6 +178,14 @@ class GoogleFonts:
         # Ban color fonts
         if "Color" in str(font.path) or font.is_color():
             return True
+        # Skip fonts without the Latin lowercase 'a'.  These are non-Latin
+        # families with no Latin companion (Lohit Tamil/Bengali/Devanagari,
+        # Khmer, Ponnala, Myanmar Sans Pro, …): their Latin slots are notdef/
+        # fallback and render as blank glyphs, which pollutes any Latin-glyph
+        # model's population.  (Adobe Blank *has* the 'a' codepoint but renders
+        # blank, so it stays in BANNED_FONTS above.)
+        if not font.has_codepoint(ord("a")):
+            return True
         return False
 
 
@@ -249,8 +257,8 @@ class GoogleFont(Font):
         based on its tag composition. Higher values indicate more display-oriented
         characteristics (ornaments, effects, distinctive styling).
         """
-        if self.metadata.category == "DISPLAY":
-            return 100.0
+        # if self.metadata.category == "DISPLAY":
+        #     return 100.0
         return compute_display_score(self.tags())
 
     def description_with_tags_and_display(self) -> str:
@@ -378,41 +386,67 @@ def compute_display_score(tags: dict[str, float]) -> float:
     Returns:
         A composite display score in the range [0, 100].
     """
-    # Tags strongly indicating display characteristics
+    # Tags strongly indicating display characteristics.  The backbone is
+    # /Theme/* (a text face has no theme tag at all) plus the *lively*
+    # /Expressive/* tags; the neutral emotions live in the negative list below.
     display_positive = {
-        "/Theme/Stencil": 2.0,
-        "/Theme/Inline": 2.0,
-        "/Theme/Pixel": 2.0,
-        "/Theme/Blackletter": 2.0,
-        "/Serif/Fat Face": 1.8,
-        "/Theme/Tuscan": 1.8,
-        "/Theme/Woodtype": 1.8,
-        "/Theme/Distressed": 1.4,
+        # Theme tags.
         "/Theme/Art Deco": 1.6,
-        "/Theme/Medieval": 1.6,
-        "/Theme/Shaded": 1.6,
-        "/Expressive/Innovative": 1.2,
+        "/Theme/Art Nouveau": 1.6,
+        "/Theme/Blackletter": 2.0,
+        "/Theme/Blobby": 2.0,
         "/Theme/Brush": 1.2,
-        "/Expressive/Futuristic": 1.4,
-        "/Sans/Glyphic": 1.4,
+        "/Theme/Distressed": 1.4,
+        "/Theme/Inline": 2.0,
+        "/Theme/Medieval": 1.6,
+        "/Theme/Pixel": 2.0,
+        "/Theme/Shaded": 1.6,
+        "/Theme/Stencil": 2.0,
+        "/Theme/Techno": 1.6,
+        "/Theme/Tuscan": 1.8,
+        "/Theme/Wacky": 2.0,
+        "/Theme/Woodtype": 1.8,
+        # Lively expressive tags.
+        "/Expressive/Active": 1.0,
+        "/Expressive/Artistic": 1.2,
+        "/Expressive/Awkward": 2.0,
+        "/Expressive/Childlike": 2.0,
+        "/Expressive/Cute": 1.5,
         "/Expressive/Excited": 1.0,
-        "/Sans/Superellipse": 1.2,
-        "/Script/Formal": 1.0,
-        "/Script/Handwritten": 0.8,
-        "/Slab/Clarendon": 0.6,
+        "/Expressive/Fancy": 1.2,
+        "/Expressive/Futuristic": 1.4,
+        "/Expressive/Happy": 1.0,
+        "/Expressive/Innovative": 2.0,
+        "/Expressive/Loud": 1.5,
+        "/Expressive/Playful": 1.5,
+        "/Expressive/Rugged": 1.3,
+        "/Expressive/Vintage": 1.4,
+        # Informality
+        "/Script/Informal": 1.2,
+        "/Script/Handwritten": 1.2,
     }
 
-    # Tags indicating text/body-oriented fonts (reduce display score)
+    # Tags indicating text/body-oriented fonts (reduce display score).
     display_negative = {
-        "/Purpose/Easy Reading": -2.0,
-        "/Expressive/Calm": -1.2,
-        "/Expressive/Competent": -0.8,
-        "/Expressive/Sincere": -0.6,
-        "/Sans/Humanist": -0.8,
+        "/Purpose/Easy Reading": -2.2,
+        "/Purpose/Learn To Write": -0.8,
+        "/Expressive/Calm": -0.9,
+        "/Expressive/Competent": -1.2,
+        "/Expressive/Sincere": -0.9,
+        "/Expressive/Business": -1.7,
+        "/Sans/Humanist": -1.0,
+        "/Sans/Grotesque": -0.6,
+        "/Sans/Geometric": -0.6,
+        "/Sans/Superellipse": -0.3,
         "/Serif/Old Style Garalde": -1.0,
-        "/Serif/Transitional": -1.0,
-        "/Serif/Modern": -0.8,
-        "/Slab/Humanist": -0.8,
+        "/Serif/Transitional": -0.9,
+        "/Serif/Humanist Venetian": -1.1,
+        "/Serif/Modern": -0.7,
+        "/Serif/Scotch": -0.7,
+        "/Script/Formal": -0.3,
+        "/Slab/Humanist": -0.2,
+        "/Slab/Clarendon": -0.2,
+        "/Slab/Geometric": -0.8,
     }
 
     # Compute direct weighted scores
