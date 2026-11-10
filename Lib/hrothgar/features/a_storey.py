@@ -23,16 +23,33 @@ import argparse
 import os
 from dataclasses import dataclass, field
 
+from hrothgar.cedars import load_cedars
 from hrothgar.features.base import FeatureRecognizer, FeatureRecognizerConfig
-from hrothgar.outline_tokens.oracle_baseline import _load_fontquant_raw
-from hrothgar.outline_tokens.recognizer_audit import (
-    _a_storey_label,
-    _build_task,
-    _family_to_font,
-    _load_cedars,
-)
+from hrothgar.features.build import build_task
+from hrothgar.googlefonts import families_to_fonts
 
 A_STOREY_CLASSES = ["single", "double", "uppercase"]
+
+
+def _a_storey_label(fq: dict | None, cedars_row: dict | None) -> str | None:
+    """Fold ``lowercase_a_style`` + ``casing/lowercase_shapes`` into 3 classes.
+
+    ``uppercase`` covers all-caps and small-caps designs: the ``a`` slot does
+    not hold a real lowercase ``a``, so asking "single or double storey" of it
+    is nonsense.  (Small-caps is folded into ``uppercase`` for now; a separate
+    small-caps / unrecognisable class can come later.)
+    """
+    if fq is None:
+        return None
+    shapes = fq.get("casing/lowercase_shapes", "").strip()
+    a_style = fq.get("appearance/lowercase_a_style", "").strip()
+    if shapes in ("uppercase", "smallcaps"):
+        return "uppercase"
+    if a_style == "single_story":
+        return "single"
+    if a_style == "double_story":
+        return "double"
+    return None
 
 
 @dataclass
@@ -52,17 +69,16 @@ class AStoreyRecognizer(FeatureRecognizer):
 
     def build_real(self, repo: str):
         """Build the real ``a``-slot dataset (with the uppercase-``A`` injection)."""
-        cedars = _load_cedars()
-        fontquant = _load_fontquant_raw()
-        family_to_font = _family_to_font(repo)
+        cedars = load_cedars()
+        family_to_font = families_to_fonts(repo)
         task = {
             "glyphs": self.config.glyphs,
             "classes": self.class_names,
             "label_fn": self.label_fn,
             "inject": {"glyphs": "A", "label": "uppercase", "n": self.config.inject_uppercase_A},
         }
-        X, y, class_names, _inj, families = _build_task(
-            task, family_to_font, cedars, fontquant, self.config.glyph_size,
+        X, y, class_names, _inj, families = build_task(
+            task, family_to_font, cedars, self.config.glyph_size,
             seed=self.config.seed, expand_axes=self.config.expand_axes,
         )
         return X, y, class_names, families

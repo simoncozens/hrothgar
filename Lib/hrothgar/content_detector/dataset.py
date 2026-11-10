@@ -521,7 +521,8 @@ def exclude_unusable_fonts(fonts: Sequence, font_metadata: FontQuantTable) -> li
     lowercase slot, so training the lowercase anchors on it teaches "``E`` is an
     ``e``" — this is how Alien Block's filled ``s`` ends up widening the ``s``
     anchor.  A blank font (Adobe Blank) puts an empty image in every slot, which is
-    worse.  Both signals come from ``fontquant.csv``.
+    worse.  Both signals come from fontquant (the measured library, or a live
+    measurement for fonts it has not seen).
     """
     return [
         font

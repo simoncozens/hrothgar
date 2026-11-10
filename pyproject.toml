@@ -9,6 +9,7 @@ dependencies = [
     "Pillow",
     "denoising_diffusion_pytorch",
     "einops>=0.8.0",
+    "fontquant>=0.1.3",
     "fonttools",
     "freetype-py",
     "gftools",
@@ -40,6 +41,17 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["Lib"]
+
+# Frozen artefacts that ship with the package: the text-arm similarity index
+# (library positions + combiner) and the glyph-feature recogniser checkpoints it
+# relies on. Without these a `pip install hrothgar` could not run
+# `python -m hrothgar.similarity.text`.
+[tool.setuptools.package-data]
+hrothgar = [
+    "similarity/text_index.pth",
+    "features/checkpoints/*.pth",
+    "features/checkpoints/*.conf.json",
+]
 
 # basedpyright is the language server used by the editor. It reads
 # [tool.basedpyright] (not [tool.pyright]) and rejects a pyproject.toml that

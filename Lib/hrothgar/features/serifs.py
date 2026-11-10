@@ -28,12 +28,9 @@ from hrothgar.features.base import (
     FeatureRecognizerConfig,
     _all_caps_families,
 )
-from hrothgar.outline_tokens.oracle_baseline import _load_fontquant_raw
-from hrothgar.outline_tokens.recognizer_audit import (
-    _build_task,
-    _family_to_font,
-    _load_cedars,
-)
+from hrothgar.cedars import load_cedars
+from hrothgar.features.build import build_task
+from hrothgar.googlefonts import families_to_fonts
 
 SERIFS_CLASSES = ["slab", "bracketed", "wedge", "hairline", "asymmetric"]
 
@@ -66,20 +63,19 @@ class SerifsRecognizer(FeatureRecognizer):
         return val if val else None
 
     @classmethod
-    def excluded_families(cls, family_to_font: dict, cedars: dict, fontquant: dict) -> set:
+    def excluded_families(cls, family_to_font: dict, cedars: dict) -> set:
         """All-caps/small-caps fonts, plus the dropped calligraphic/bifurcated styles."""
-        skip = _all_caps_families(family_to_font, fontquant)
+        skip = _all_caps_families(family_to_font)
         for fam, row in cedars.items():
             if (row.get("serifs", "") or "").strip() in DROPPED_SERIFS:
                 skip.add(fam)
         return skip
 
     def build_real(self, repo: str):
-        cedars = _load_cedars()
-        fontquant = _load_fontquant_raw()
-        family_to_font = _family_to_font(repo)
+        cedars = load_cedars()
+        family_to_font = families_to_fonts(repo)
         if self.config.skip_uppercase:
-            skip = _all_caps_families(family_to_font, fontquant)
+            skip = _all_caps_families(family_to_font)
             cedars = {k: v for k, v in cedars.items() if k not in skip}
         task = {
             "glyphs": self.config.glyphs,
@@ -87,8 +83,8 @@ class SerifsRecognizer(FeatureRecognizer):
             "source": "cedars",
             "col": "serifs",
         }
-        X, y, class_names, _inj, families = _build_task(
-            task, family_to_font, cedars, fontquant, self.config.glyph_size,
+        X, y, class_names, _inj, families = build_task(
+            task, family_to_font, cedars, self.config.glyph_size,
             seed=self.config.seed, crop_bottom_frac=self.config.crop_bottom_frac,
             expand_axes=self.config.expand_axes,
         )

@@ -1,3 +1,4 @@
+!data/similarity_supervision/*.csv
 .venv
 vecfusion
 output/

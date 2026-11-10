@@ -496,3 +496,23 @@ def membership_ranking(
         "auc": float((correct.unsqueeze(1) > others).float().mean()),
         "n": int(n),
     }
+
+
+def pairwise_auc(pos_scores, neg_scores) -> dict:
+    """AUC of ``pos > neg`` plus the mean scores, from two score sequences.
+
+    Ties count as half, which is what the similarity arm's combiners report as
+    "pairwise AUC": the probability that a supervised positive pair outscores a
+    supervised negative pair.  Empty inputs yield ``NaN``.
+    """
+    pos = torch.as_tensor(pos_scores).detach().cpu().float().reshape(-1)
+    neg = torch.as_tensor(neg_scores).detach().cpu().float().reshape(-1)
+    if pos.numel() == 0 or neg.numel() == 0:
+        return {"auc": float("nan"), "pos_mean": float("nan"), "neg_mean": float("nan")}
+    gt = (pos[:, None] > neg[None, :]).float().mean().item()
+    eq = (pos[:, None] == neg[None, :]).float().mean().item()
+    return {
+        "auc": gt + 0.5 * eq,
+        "pos_mean": float(pos.mean()),
+        "neg_mean": float(neg.mean()),
+    }

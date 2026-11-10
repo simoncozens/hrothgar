@@ -28,16 +28,20 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from hrothgar.outline_tokens.harness import _device
-from hrothgar.outline_tokens.oracle_baseline import _load_cedars
-from hrothgar.outline_tokens.supervision import build_supervision, text_half_supervision
+from hrothgar.cedars import load_cedars
+from hrothgar.similarity.supervision import (
+    JUDGEMENTS_PATH,
+    SIMILARITIES_PATH,
+    build_supervision,
+    text_half_supervision,
+)
+from hrothgar.utils import device
 from hrothgar.similarity.axis_combiner import (
     _BOOLEAN_AXES,
     _CATEGORICAL_AXES,
     _NUMERIC_AXES,
     _TAG_AXES,
     _categorical_codes,
-    _load_table,
     _numeric_raw,
     _pair_weight_matrices,
     _score_matrix,
@@ -85,10 +89,9 @@ def build_raw_features(sup, proportion_pcs: int | None = None) -> tuple[np.ndarr
     ``proportion_pcs`` is set, the two 26-dim proportion vectors are replaced by
     their top-``proportion_pcs`` principal components.
     """
-    table = _load_table()
-    cedars = _load_cedars()
-    numeric = _numeric_raw(sup, table)
-    cat_codes = _categorical_codes(sup, table, cedars)
+    cedars = load_cedars()
+    numeric = _numeric_raw(sup)
+    cat_codes = _categorical_codes(sup, cedars)
     tag_mats = _tag_mats(sup)
 
     blocks: list[np.ndarray] = []
@@ -144,8 +147,7 @@ def build_raw_features(sup, proportion_pcs: int | None = None) -> tuple[np.ndarr
 
 def build_numeric_features(sup) -> tuple[np.ndarray, dict[str, int]]:
     """Build the numeric-only feature block ``(N, D)`` with per-axis column counts."""
-    table = _load_table()
-    numeric = _numeric_raw(sup, table)
+    numeric = _numeric_raw(sup)
     blocks: list[np.ndarray] = []
     sizes: dict[str, int] = {}
     for name in sorted(_NUMERIC_AXES) + ["proportions"]:
@@ -157,8 +159,7 @@ def build_numeric_features(sup) -> tuple[np.ndarray, dict[str, int]]:
 
 def build_proportion_features(sup) -> tuple[np.ndarray, np.ndarray]:
     """Build the two proportion-vector blocks (lowercase, uppercase)."""
-    table = _load_table()
-    numeric = _numeric_raw(sup, table)
+    numeric = _numeric_raw(sup)
     lower, _ = numeric["proportion-lower"]
     upper, _ = numeric["proportion-upper"]
     return lower.numpy(), upper.numpy()
@@ -177,10 +178,9 @@ def compress_proportions(lower: np.ndarray, upper: np.ndarray, k: int) -> np.nda
 
 def axis_blocks(sup) -> list[tuple[str, np.ndarray]]:
     """Return the per-axis blocks ``(name, (N, d) array)`` in combiner order."""
-    table = _load_table()
-    cedars = _load_cedars()
-    numeric = _numeric_raw(sup, table)
-    cat_codes = _categorical_codes(sup, table, cedars)
+    cedars = load_cedars()
+    numeric = _numeric_raw(sup)
+    cat_codes = _categorical_codes(sup, cedars)
     tag_mats = _tag_mats(sup)
 
     blocks: list[tuple[str, np.ndarray]] = []
@@ -262,8 +262,8 @@ def main() -> int:
     p.add_argument("--mode", choices=("features", "scalar", "numeric", "weights", "proportion", "teacher", "umap"), default="features")
     p.add_argument("--weights-out", default="similarity_axis_weights.txt", help="path for --mode weights")
     p.add_argument("--repo", default=os.environ.get("GOOGLE_FONTS_REPO", "/home/simon/others-repos/fonts"))
-    p.add_argument("--list", default="similarities.json")
-    p.add_argument("--judgements", default="judgements.csv")
+    p.add_argument("--list", default=SIMILARITIES_PATH)
+    p.add_argument("--judgements", default=JUDGEMENTS_PATH)
     p.add_argument("--combiner", choices=("linear", "softmax"), default="softmax")
     p.add_argument("--steps", type=int, default=2000)
     p.add_argument("--lr", type=float, default=1e-2)
@@ -277,7 +277,7 @@ def main() -> int:
     p.add_argument("--teacher-out", default="models/text_teacher.npz", help="path for the frozen teacher (--mode teacher)")
     args = p.parse_args()
 
-    dev = _device(args.device)
+    dev = device(args.device)
     sup = build_supervision(args.repo, args.list, args.judgements, universe="full")
     sup = text_half_supervision(sup)
     print(f"\ntext-half universe: {len(sup.fonts)} fonts  "

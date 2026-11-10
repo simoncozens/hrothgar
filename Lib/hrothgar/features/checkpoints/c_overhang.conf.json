@@ -1,0 +1,33 @@
+{
+  "base_channels": 16,
+  "batch_size": 64,
+  "class_balance": true,
+  "classes": [
+    "hook",
+    "diagonal",
+    "circular",
+    "horizontal",
+    "rounded",
+    "vertical",
+    "serif",
+    "other"
+  ],
+  "crop_bottom_frac": 0.0,
+  "crop_middle": null,
+  "crop_right_frac": 0.5,
+  "downsample": 4,
+  "epochs": 20,
+  "expand_axes": false,
+  "git_sha": "ec852ba",
+  "glyph_size": 96,
+  "glyphs": "c",
+  "lr": 0.001,
+  "out_dim": 64,
+  "regression": false,
+  "reject_frac": 0.05,
+  "score_max": 100.0,
+  "seed": 0,
+  "skip_uppercase": true,
+  "spatial_grid": 8,
+  "test_frac": 0.2
+}

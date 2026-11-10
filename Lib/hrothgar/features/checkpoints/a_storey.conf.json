@@ -1,0 +1,21 @@
+{
+  "base_channels": 16,
+  "batch_size": 64,
+  "class_balance": true,
+  "classes": [
+    "single",
+    "double",
+    "uppercase"
+  ],
+  "downsample": 4,
+  "epochs": 20,
+  "git_sha": "056cffd",
+  "glyph_size": 96,
+  "glyphs": "a",
+  "inject_uppercase_A": 240,
+  "lr": 0.001,
+  "out_dim": 64,
+  "reject_frac": 0.05,
+  "seed": 0,
+  "test_frac": 0.2
+}

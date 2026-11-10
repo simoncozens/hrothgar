@@ -284,6 +284,13 @@ class TrainingLoop:
         )
 
 
+def device(name: str | None = None) -> torch.device:
+    """Resolve a ``--device`` argument (``None``/``auto`` = pick the best available)."""
+    if name in (None, "", "auto"):
+        name = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(name)
+
+
 def pick_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")

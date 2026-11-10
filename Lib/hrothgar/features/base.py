@@ -24,17 +24,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-import uharfbuzz as hb
 from torch import nn
 
+from hrothgar.cedars import load_cedars
+from hrothgar.features.build import build_weird, is_blank, render_prompts
+from hrothgar.fontquant import quantify_row
 from hrothgar.glyph_encoder import GlyphEncoder
-from hrothgar.outline_tokens.a_storey_ood import _build_weird
-from hrothgar.outline_tokens.oracle_baseline import _load_fontquant_raw
-from hrothgar.outline_tokens.recognizer_audit import _crop_bottom, _crop_middle, _family_to_font, _load_cedars
-from hrothgar.render import frame_for_codepoints, render
+from hrothgar.googlefonts import families_to_fonts
 from hrothgar.utils import SaveLoadModel, git_short_sha
-
-_BLANK = 0.995
 
 
 @dataclass
@@ -68,6 +65,10 @@ class FeatureRecognizerConfig:
     # Crop the vertical band ``[lo, hi]`` (fractions of image height) of each glyph
     # and resize back, to focus a local feature that sits mid-glyph.
     crop_middle: tuple | None = None
+    # Crop the right ``crop_right_frac`` of each glyph image (and resize back) so
+    # a local feature at the right edge — e.g. the c-overhang terminal — gets the
+    # full canvas rather than the whole glyph.
+    crop_right_frac: float = 0.0
     # Render variable-font ``wght``/``wdth`` extremes as extra training samples
     # (with the family's label).  Requires a family-level held-out split.
     expand_axes: bool = False
@@ -92,11 +93,7 @@ class FeatureRecognizerConfig:
 
 
 # ── Rendering / utilities ─────────────────────────────────────────────────────
-def _is_blank(img: torch.Tensor) -> bool:
-    return bool((img.amin() > _BLANK).any())
-
-
-def _all_caps_families(family_to_font: dict, fontquant: dict) -> set[str]:
+def _all_caps_families(family_to_font: dict) -> set[str]:
     """All-caps/small-caps families (fontquant ``casing/lowercase_shapes``).
 
     Their lowercase glyph slots hold uppercase shapes, so a recogniser over a
@@ -108,31 +105,10 @@ def _all_caps_families(family_to_font: dict, fontquant: dict) -> set[str]:
     """
     skip: set[str] = set()
     for fam, font in family_to_font.items():
-        row = fontquant.get(Path(font.path).name.lower())
-        if row is None:
-            continue
-        casing = (row.get("casing/lowercase_shapes", "") or "").strip()
+        casing = quantify_row(font.path).get("casing/lowercase_shapes", "").strip()
         if casing in ("uppercase", "smallcaps"):
             skip.add(fam)
     return skip
-
-
-def render_prompt(font, glyphs: str, size: int, crop_bottom_frac: float = 0.0, crop_middle=None) -> torch.Tensor | None:
-    """Render a prompt glyph string into a shared tight frame; ``(G, 1, H, W)``.
-
-    Returns ``None`` if any prompt glyph is missing from the font's cmap.
-    """
-    cps = [ord(c) for c in glyphs]
-    hbfont = hb.Font(font.hb_face)
-    if any(hbfont.get_nominal_glyph(cp) is None for cp in cps):
-        return None
-    frame = frame_for_codepoints(font, cps)
-    imgs = [render(font, codepoint=cp, size=size, frame=frame)[0] for cp in cps]
-    if crop_bottom_frac > 0.0:
-        imgs = [_crop_bottom(img, crop_bottom_frac) for img in imgs]
-    if crop_middle is not None:
-        imgs = [_crop_middle(img, *crop_middle) for img in imgs]
-    return torch.stack(imgs).unsqueeze(1)
 
 
 def _pos_weights(y: torch.Tensor, num_classes: int) -> torch.Tensor:
@@ -254,8 +230,8 @@ class FeatureRecognizer(SaveLoadModel):
     # ── the recognising use case ─────────────────────────────────────────────
     def recognise_font(self, font, device=None) -> dict:
         device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        img = render_prompt(font, self.config.glyphs, self.config.glyph_size, self.config.crop_bottom_frac, self.config.crop_middle)
-        if img is None or _is_blank(img):
+        img = render_prompts(font, self.config.glyphs, self.config.glyph_size, self.config.crop_bottom_frac, self.config.crop_middle, self.config.crop_right_frac)
+        if img is None or is_blank(img):
             if self.config.regression:
                 return {"display_score": 0.0}
             return {"verdict": "blank", "scores": {c: 0.0 for c in self.class_names}, "confidence": 0.0}
@@ -397,7 +373,7 @@ class FeatureRecognizer(SaveLoadModel):
         raise NotImplementedError
 
     @classmethod
-    def excluded_families(cls, family_to_font: dict, cedars: dict, fontquant: dict) -> set:
+    def excluded_families(cls, family_to_font: dict, cedars: dict) -> set:
         """Families outside this recogniser's domain (skipped in eval).
 
         Default: no exclusions.  Subclasses override this to drop fonts whose
@@ -425,7 +401,7 @@ class FeatureRecognizer(SaveLoadModel):
         if config.regression:
             Xw = torch.empty(0)
         else:
-            Xw, _ = _build_weird(repo, config.glyph_size, crop_bottom_frac=config.crop_bottom_frac, crop_middle=config.crop_middle)
+            Xw, _ = build_weird(repo, config.glyph_size, crop_bottom_frac=config.crop_bottom_frac, crop_middle=config.crop_middle, crop_right_frac=config.crop_right_frac)
         stats = model.fit(X, y, Xw, device=device, families=families)
         model.save(model_path)
         print(f"trained {cls.__name__} -> {model_path}")
@@ -440,10 +416,9 @@ class FeatureRecognizer(SaveLoadModel):
         model = cls.from_checkpoint(model_path, device=device)
         if model.config.regression:
             return model._evaluate_regression(repo, device=device)
-        fontquant = _load_fontquant_raw()
-        cedars = _load_cedars()
-        family_to_font = _family_to_font(repo)
-        excluded = cls.excluded_families(family_to_font, cedars, fontquant)
+        cedars = load_cedars()
+        family_to_font = families_to_fonts(repo)
+        excluded = cls.excluded_families(family_to_font, cedars)
 
         agree = mismatch = unrecognised = missing = blank = excluded_n = 0
         mismatches: list[tuple[str, str, str, float]] = []
@@ -452,7 +427,7 @@ class FeatureRecognizer(SaveLoadModel):
                 excluded_n += 1
                 continue
             font = family_to_font[fam]
-            fq = fontquant.get(Path(font.path).name.lower())
+            fq = quantify_row(font.path)
             cq = cedars.get(fam)
             label = cls.label_fn(fq, cq)
             res = model.recognise_font(font, device=device)
@@ -479,7 +454,7 @@ class FeatureRecognizer(SaveLoadModel):
     def _evaluate_regression(self, repo: str, device=None) -> dict:
         from hrothgar.googlefonts import compute_display_score
 
-        family_to_font = _family_to_font(repo)
+        family_to_font = families_to_fonts(repo)
         names, preds, targets = [], [], []
         for fam in sorted(family_to_font):
             font = family_to_font[fam]

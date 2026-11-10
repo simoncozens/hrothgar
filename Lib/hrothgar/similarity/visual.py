@@ -58,9 +58,9 @@ from torch import nn
 from tqdm import tqdm
 
 from hrothgar.glyph_encoder import GlyphEncoder
-from hrothgar.outline_tokens.harness import _device
-from hrothgar.outline_tokens.recognizer_audit import _family_to_font
+from hrothgar.googlefonts import families_to_fonts
 from hrothgar.render import render_phrase
+from hrothgar.utils import device
 
 PHRASE = "hamburgefontsivclHAS"
 COORD_DIM = 30
@@ -329,7 +329,7 @@ def main() -> int:
     p.add_argument("--device", default=None)
     args = p.parse_args()
 
-    dev = _device(args.device)
+    dev = device(args.device)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
@@ -338,7 +338,7 @@ def main() -> int:
     t = np.load(args.teacher, allow_pickle=True)
     coords = torch.from_numpy(t["coords"].astype(np.float32))  # (N, 30)
     fams = [str(x) for x in t["families"]]
-    fam2font = _family_to_font(args.repo)
+    fam2font = families_to_fonts(args.repo)
     fonts = [fam2font[fam.lower()] for fam in fams]
     print(f"teacher: {coords.shape[0]} fonts, {coords.shape[1]} coords")
 

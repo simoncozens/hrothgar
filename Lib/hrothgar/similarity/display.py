@@ -28,10 +28,14 @@ from pathlib import Path
 
 import torch
 
-from hrothgar.googlefonts import StandaloneFont
-from hrothgar.outline_tokens.harness import _device
-from hrothgar.outline_tokens.recognizer_audit import _family_to_font
-from hrothgar.outline_tokens.supervision import build_supervision, display_half_supervision
+from hrothgar.googlefonts import StandaloneFont, families_to_fonts
+from hrothgar.similarity.supervision import (
+    JUDGEMENTS_PATH,
+    SIMILARITIES_PATH,
+    build_supervision,
+    display_half_supervision,
+)
+from hrothgar.utils import device
 from hrothgar.similarity.axis_combiner import (
     _pair_weight_matrices,
     _score_matrix,
@@ -46,7 +50,7 @@ def _resolve_anchor(name: str | None, ttf: str | None, repo: str):
     """Return a ``Font`` for the anchor (a GF regular instance or a standalone TTF)."""
     if ttf:
         return StandaloneFont(ttf)
-    fam2font = _family_to_font(repo)
+    fam2font = families_to_fonts(repo)
     return fam2font.get(name.strip().lower())
 
 
@@ -56,8 +60,8 @@ def main() -> int:
     p.add_argument("--ttf", help="local TTF (no tags — will rank degenerate; see docstring)")
     p.add_argument("--k", type=int, default=20, help="number of results to return")
     p.add_argument("--repo", default=os.environ.get("GOOGLE_FONTS_REPO", "/home/simon/others-repos/fonts"))
-    p.add_argument("--list", default="similarities.json")
-    p.add_argument("--judgements", default="judgements.csv")
+    p.add_argument("--list", default=SIMILARITIES_PATH)
+    p.add_argument("--judgements", default=JUDGEMENTS_PATH)
     p.add_argument(
         "--combiner",
         choices=("linear", "softmax"),
@@ -88,7 +92,7 @@ def main() -> int:
     if not args.font and not args.ttf:
         p.error("one of --font or --ttf is required")
 
-    dev = _device(args.device)
+    dev = device(args.device)
 
     # ── Display-arm library universe (full library, then display-like half) ────
     sup = build_supervision(args.repo, args.list, args.judgements, universe="full")

@@ -106,6 +106,21 @@ def load_family_tags(repo_path) -> dict[str, dict[str, float]]:
     return tags
 
 
+def regular_font(fonts: list) -> object:
+    """Pick one family's *regular* instance.
+
+    A family's ``-Regular`` file when there is one, else the first upright, else
+    whatever is there (an italic-only family).
+    """
+    for font in fonts:
+        if "regular" in font.path.name.lower():
+            return font
+    upright = [font for font in fonts if "italic" not in font.path.name.lower()]
+    if upright:
+        return sorted(upright, key=lambda font: str(font.path))[0]
+    return fonts[0]
+
+
 class GoogleFonts:
     """A class for interacting with the Google Fonts repository.
     It loads all the fonts and their metadata, and provides methods for accessing them.
@@ -187,6 +202,14 @@ class GoogleFonts:
         if not font.has_codepoint(ord("a")):
             return True
         return False
+
+
+def families_to_fonts(repo) -> dict[str, object]:
+    """Map each lowercase family name in a checkout to its regular instance."""
+    by_family: dict[str, list] = {}
+    for font in GoogleFonts(repo).fonts:
+        by_family.setdefault(font.family.lower(), []).append(font)
+    return {family: regular_font(fonts) for family, fonts in by_family.items()}
 
 
 class GoogleFont(Font):

@@ -1,0 +1,4393 @@
+[
+  {
+    "include": [
+      "Google Sans Flex",
+      "Inter",
+      "Google Sans",
+      "Arimo",
+      "DM Sans"
+    ],
+    "exclude": [
+      "Poppins",
+      "Montserrat"
+    ]
+  },
+  {
+    "include": [
+      "Outfit",
+      "Jost",
+      "Questrial",
+      "Josefin Sans",
+      "League Spartan",
+      "Gabarito"
+    ],
+    "exclude": [
+      "Quicksand",
+      "Plus Jakarta Sans",
+      "Poiret One",
+      "Cal Sans",
+      "Tilt Neon",
+      "Parkinsans"
+    ]
+  },
+  {
+    "include": [
+      "Dosis",
+      "Nunito",
+      "Quicksand",
+      "Comfortaa",
+      "Fredoka"
+    ],
+    "exclude": [
+      "Nunito Sans",
+      "Comic Relief",
+      "Dynapuff",
+      "Jost"
+    ]
+  },
+  {
+    "include": [
+      "Play",
+      "Blinker",
+      "Coda"
+    ],
+    "exclude": [
+      "Exo",
+      "Oxanium",
+      "Aldrich",
+      "Kode Mono",
+      "Genos",
+      "Offside",
+      "Metrophobic"
+    ]
+  },
+  {
+    "include": [
+      "Spectral",
+      "Newsreader",
+      "STIX Two Text",
+      "Castoro",
+      "Gelasio"
+    ],
+    "exclude": [
+      "Patua One",
+      "Gilda Display",
+      "Yrsa",
+      "Halant"
+    ]
+  },
+  {
+    "include": [
+      "EB Garamond",
+      "Cormorant Garamond",
+      "Cardo"
+    ],
+    "exclude": [
+      "Fraunces",
+      "Crimson Pro",
+      "David Libre",
+      "Lateef",
+      "Markazi Text",
+      "Inika"
+    ]
+  },
+  {
+    "include": [
+      "Gravitas One",
+      "Asset",
+      "Abril Fatface"
+    ],
+    "exclude": [
+      "Oi",
+      "Alfa Slab One",
+      "Diplomata",
+      "Bevan",
+      "Goblin One",
+      "Gloock"
+    ]
+  },
+  {
+    "include": [
+      "Brawler",
+      "Bitter",
+      "Koh Santepheap"
+    ],
+    "exclude": [
+      "Hina Mincho",
+      "Bigshot One",
+      "Zen Antique"
+    ]
+  },
+  {
+    "include": [
+      "Arvo",
+      "Slabo 27px",
+      "Aleo",
+      "Andada Pro",
+      "Moul"
+    ],
+    "exclude": [
+      "Josefin Slab",
+      "Bree Serif",
+      "Montagu Slab"
+    ]
+  },
+  {
+    "include": [
+      "Lato",
+      "Noto Sans",
+      "Source Sans 3",
+      "Hind Madurai"
+    ],
+    "exclude": [
+      "Titan One",
+      "Lilita One",
+      "Passion One"
+    ],
+    "note": "This is clear; text versus display"
+  },
+  {
+    "include": [
+      "Anek Latin",
+      "Fustat",
+      "Martel Sans"
+    ],
+    "exclude": [
+      "Signika",
+      "Amaranth"
+    ],
+    "note": "Signika and Amaranth have more rounding/warmth (Amaranth is kind of handwritey), others are stiff"
+  },
+  {
+    "include": [
+      "Faculty Glyphic",
+      "Asul",
+      "Galdeano",
+      "Armana"
+    ],
+    "exclude": [
+      "Red Rose",
+      "Mouse Memoirs",
+      "Dynapuff",
+      "Original Surfer",
+      "Quantico"
+    ],
+    "note": "The positives are all kind of Albertus-y; the negatives are all more display. Quantico is angular."
+  },
+  {
+    "include": [
+      "Teachers",
+      "Jost"
+    ],
+    "exclude": [
+      "Poiret One",
+      "Righteous",
+      "Krona One",
+      "Anta",
+      "Fugaz One",
+      "Momo Trust Display"
+    ],
+    "note": "Johnston/Gill family versus a bunch of displays"
+  },
+  {
+    "include": [
+      "Playfair",
+      "Playfair Display",
+      "Libre Bodoni"
+    ],
+    "exclude": [
+      "Elsie Swash Caps",
+      "Diplomata",
+      "Elsie",
+      "Yeseva One"
+    ],
+    "note": "Standard Didones versus a bunch of displays"
+  },
+  {
+    "include": [
+      "Roboto",
+      "Roboto Flex",
+      "Vazirmatn",
+      "Yantramanav",
+      "Heebo"
+    ],
+    "exclude": [
+      "Comme",
+      "Public Sans",
+      "PT Sans"
+    ],
+    "note": "Roboto's Latin shared across its script companions vs other neo-grotesques"
+  },
+  {
+    "include": [
+      "Zen Maru Gothic",
+      "Nunito",
+      "Chiron Go Round TC",
+      "Varela Round"
+    ],
+    "exclude": [
+      "Thasadith",
+      "Hubbali",
+      "Jura"
+    ],
+    "note": "Round things are better than thin things, a bit of weight invariance"
+  },
+  {
+    "include": [
+      "Prata",
+      "Rufina",
+      "Libre Bodoni"
+    ],
+    "exclude": [
+      "Alike Angular",
+      "Adamina"
+    ],
+    "note": "More didone"
+  },
+  {
+    "include": [
+      "Calistoga",
+      "Caprasimo",
+      "Fraunces"
+    ],
+    "exclude": [
+      "Instrument Serif",
+      "Benne",
+      "Unna",
+      "Sorts Mill Goudy",
+      "Alice",
+      "Pochaevsk",
+      "Shippori Mincho B1",
+      "EB Garamond",
+      "Old Standard TT",
+      "Gelasio",
+      "Hina Mincho",
+      "Sedan"
+    ],
+    "note": "Friends of Cooper Black"
+  },
+  {
+    "include": [
+      "Caprasimo",
+      "Fraunces"
+    ],
+    "exclude": [
+      "Calistoga",
+      "Instrument Serif",
+      "Benne",
+      "Unna",
+      "Sorts Mill Goudy",
+      "Alice",
+      "Pochaevsk",
+      "Shippori Mincho B1",
+      "EB Garamond",
+      "Old Standard TT",
+      "Gelasio",
+      "Hina Mincho",
+      "Sedan"
+    ],
+    "note": "DocRepair: Same design, different metrics"
+  },
+  {
+    "include": [
+      "Bacasime Antique",
+      "Playfair Display"
+    ],
+    "exclude": [
+      "STIX Two Math",
+      "STIX Two Text",
+      "DM Serif Text"
+    ],
+    "note": "DocRepair: Same design, different metrics"
+  },
+  {
+    "include": [
+      "Lumanosimo",
+      "Paprika"
+    ],
+    "exclude": [
+      "Amita",
+      "Playwrite US Modern",
+      "Gabriela",
+      "LXGW WenKai TC",
+      "Playwrite AU NSW",
+      "Handlee",
+      "Kurale",
+      "Caudex",
+      "Alkatra"
+    ],
+    "note": "DocRepair: Same design, different metrics, width stretched"
+  },
+  {
+    "include": [
+      "Big Shoulders",
+      "Big Shoulders Display",
+      "Big Shoulders Text",
+      "Pathway Gothic One",
+      "Antonio",
+      "Agdasima"
+    ],
+    "exclude": [
+      "Titillium Web",
+      "Oswald",
+      "Harmattan",
+      "News Cycle",
+      "Heebo",
+      "Arya",
+      "Mada",
+      "Kedebideri",
+      "Arsenal"
+    ]
+  },
+  {
+    "include": [
+      "Akatab",
+      "Chocolate Classical Sans",
+      "Varta",
+      "Tirra",
+      "Mada",
+      "Kedebideri"
+    ],
+    "exclude": [],
+    "round_id": "p0008",
+    "anchor": "Akatab",
+    "note": "proposal game p0008 (anchor Akatab; 2 voters, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Alegreya Sans",
+      "Varta",
+      "Ancizar Sans",
+      "Kedebideri"
+    ],
+    "exclude": [
+      "Rosario",
+      "Lato"
+    ],
+    "round_id": "p0013",
+    "anchor": "Alegreya Sans",
+    "note": "proposal game p0013 (anchor Alegreya Sans; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Almarai",
+      "Spline Sans",
+      "Hedvig Letters Sans",
+      "TASA Orbiter"
+    ],
+    "exclude": [
+      "Tajawal",
+      "Fustat"
+    ],
+    "round_id": "p0019",
+    "anchor": "Almarai",
+    "note": "proposal game p0019 (anchor Almarai; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Amarna",
+      "Actor",
+      "Cantarell"
+    ],
+    "exclude": [
+      "M PLUS 1p",
+      "Finlandica Text",
+      "Red Hat Text"
+    ],
+    "round_id": "p0023",
+    "anchor": "Amarna",
+    "note": "proposal game p0023 (anchor Amarna; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Anaheim",
+      "Anek Latin",
+      "Varta",
+      "Nobile"
+    ],
+    "exclude": [
+      "Arya",
+      "Ancizar Sans"
+    ],
+    "round_id": "p0028",
+    "anchor": "Anaheim",
+    "note": "proposal game p0028 (anchor Anaheim; 1 voter, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Anek Kannada",
+      "Lato",
+      "Shanti",
+      "Chocolate Classical Sans",
+      "News Cycle"
+    ],
+    "exclude": [
+      "Krub"
+    ],
+    "round_id": "p0034",
+    "anchor": "Anek Kannada",
+    "note": "proposal game p0034 (anchor Anek Kannada; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Anek Tamil",
+      "Chocolate Classical Sans",
+      "Lato"
+    ],
+    "exclude": [],
+    "round_id": "p0037",
+    "anchor": "Anek Tamil",
+    "note": "proposal game p0037 (anchor Anek Tamil; 2 voters, 2 judgements; majority, browser); ties omitted: Shanti, Krub, News Cycle"
+  },
+  {
+    "include": [
+      "Annapurna SIL",
+      "Abyssinica SIL",
+      "Vollkorn",
+      "STIX Two Text",
+      "Charis SIL"
+    ],
+    "exclude": [
+      "BJCree"
+    ],
+    "round_id": "p0039",
+    "anchor": "Annapurna SIL",
+    "note": "proposal game p0039 (anchor Annapurna SIL; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "AR One Sans",
+      "Mako",
+      "Encode Sans",
+      "Menbere"
+    ],
+    "exclude": [
+      "Doppio One",
+      "Red Hat Mono"
+    ],
+    "round_id": "p0044",
+    "anchor": "AR One Sans",
+    "note": "proposal game p0044 (anchor AR One Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Arsenal",
+      "Varta",
+      "News Cycle"
+    ],
+    "exclude": [
+      "Lato"
+    ],
+    "round_id": "p0047",
+    "anchor": "Arsenal",
+    "note": "proposal game p0047 (anchor Arsenal; 2 voters, 2 judgements; majority, browser); ties omitted: Ancizar Sans, Rosario"
+  },
+  {
+    "include": [
+      "Asap Condensed",
+      "Gowun Dodum",
+      "Jaldi",
+      "Signika",
+      "Shippori Antique B1"
+    ],
+    "exclude": [
+      "ADLaM Display"
+    ],
+    "round_id": "p0050",
+    "anchor": "Asap Condensed",
+    "note": "proposal game p0050 (anchor Asap Condensed; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Asap Sharp",
+      "IBM Plex Sans JP",
+      "Yaldevi",
+      "Gafata"
+    ],
+    "exclude": [
+      "Slabo 27px",
+      "Ysabeau"
+    ],
+    "round_id": "p0051",
+    "anchor": "Asap Sharp",
+    "note": "proposal game p0051 (anchor Asap Sharp; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Assistant",
+      "Akatab",
+      "Tirra",
+      "Source Sans 3"
+    ],
+    "exclude": [
+      "Narnoor",
+      "Kedebideri"
+    ],
+    "round_id": "p0053",
+    "anchor": "Assistant",
+    "note": "proposal game p0053 (anchor Assistant; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Baloo Thambi 2",
+      "Huninn",
+      "Mallanna",
+      "NTR",
+      "Mandali"
+    ],
+    "exclude": [
+      "Hubballi"
+    ],
+    "round_id": "p0068",
+    "anchor": "Baloo Thambi 2",
+    "note": "proposal game p0068 (anchor Baloo Thambi 2; 2 voters, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Belanosima",
+      "Reem Kufi",
+      "Zain"
+    ],
+    "exclude": [
+      "Capriola",
+      "Sriracha",
+      "Righteous"
+    ],
+    "round_id": "p0078",
+    "anchor": "Belanosima",
+    "note": "proposal game p0078 (anchor Belanosima; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Besley",
+      "Bentham",
+      "Old Standard TT",
+      "STIX Two Math",
+      "Ibarra Real Nova"
+    ],
+    "exclude": [
+      "Lustria"
+    ],
+    "round_id": "p0083",
+    "anchor": "Besley",
+    "note": "proposal game p0083 (anchor Besley; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Big Shoulders Inline Text",
+      "Roboto Condensed",
+      "Antonio"
+    ],
+    "exclude": [
+      "Pathway Gothic One",
+      "Cuprum",
+      "Agdasima"
+    ],
+    "round_id": "p0086",
+    "anchor": "Big Shoulders Inline Text",
+    "note": "proposal game p0086 (anchor Big Shoulders Inline Text; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "BIZ UDPGothic",
+      "Miranda Sans",
+      "Atkinson Hyperlegible"
+    ],
+    "exclude": [
+      "Fira Sans",
+      "Kay Pho Du",
+      "Monda"
+    ],
+    "round_id": "p0091",
+    "anchor": "BIZ UDPGothic",
+    "note": "proposal game p0091 (anchor BIZ UDPGothic; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Boogaloo",
+      "Edu QLD Beginner"
+    ],
+    "exclude": [
+      "Gotu",
+      "RocknRoll One",
+      "Francois One",
+      "Baloo Da 2"
+    ],
+    "round_id": "p0093",
+    "anchor": "Boogaloo",
+    "note": "proposal game p0093 (anchor Boogaloo; 2 voters, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Briem Hand",
+      "Kite One",
+      "Cormorant Upright",
+      "Amita"
+    ],
+    "exclude": [
+      "Signika Negative",
+      "Ruluko"
+    ],
+    "round_id": "p0099",
+    "anchor": "Briem Hand",
+    "note": "proposal game p0099 (anchor Briem Hand; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Cantarell",
+      "Actor",
+      "PT Sans Caption",
+      "Cambay",
+      "Oxygen"
+    ],
+    "exclude": [
+      "Amiko"
+    ],
+    "round_id": "p0110",
+    "anchor": "Cantarell",
+    "note": "proposal game p0110 (anchor Cantarell; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Chiron Sung HK",
+      "Cactus Classical Serif",
+      "Bpmf Zihi Kai Std",
+      "Source Serif 4"
+    ],
+    "exclude": [
+      "Amethysta",
+      "Manuale"
+    ],
+    "round_id": "p0119",
+    "anchor": "Chiron Sung HK",
+    "note": "proposal game p0119 (anchor Chiron Sung HK; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Copse",
+      "Asar",
+      "Fenix"
+    ],
+    "exclude": [
+      "Gulzar",
+      "Parastoo",
+      "Lora"
+    ],
+    "round_id": "p0131",
+    "anchor": "Copse",
+    "note": "proposal game p0131 (anchor Copse; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cormorant Infant",
+      "EB Garamond",
+      "Caudex"
+    ],
+    "exclude": [
+      "Adamina",
+      "Hedvig Letters Serif",
+      "Alice"
+    ],
+    "round_id": "p0133",
+    "anchor": "Cormorant Infant",
+    "note": "proposal game p0133 (anchor Cormorant Infant; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Crimson Pro",
+      "Amiri Quran",
+      "Lateef"
+    ],
+    "exclude": [
+      "Markazi Text",
+      "Alike",
+      "Abyssinica SIL"
+    ],
+    "round_id": "p0136",
+    "anchor": "Crimson Pro",
+    "note": "proposal game p0136 (anchor Crimson Pro; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Dai Banna SIL",
+      "David Libre",
+      "Gentium Book Plus",
+      "Namdhinggo"
+    ],
+    "exclude": [
+      "Alike",
+      "PT Serif"
+    ],
+    "round_id": "p0139",
+    "anchor": "Dai Banna SIL",
+    "note": "proposal game p0139 (anchor Dai Banna SIL; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Damion",
+      "Playwrite IE",
+      "Courgette"
+    ],
+    "exclude": [
+      "Katibeh",
+      "Voltaire",
+      "Square Peg"
+    ],
+    "round_id": "p0140",
+    "anchor": "Damion",
+    "note": "proposal game p0140 (anchor Damion; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Dangrek",
+      "Dongle",
+      "NTR",
+      "National Park"
+    ],
+    "exclude": [
+      "Quicksand",
+      "Mallanna"
+    ],
+    "round_id": "p0141",
+    "anchor": "Dangrek",
+    "note": "proposal game p0141 (anchor Dangrek; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Darker Grotesque",
+      "Mona Sans"
+    ],
+    "exclude": [
+      "Pliant",
+      "Familjen Grotesk",
+      "Momo Trust Sans"
+    ],
+    "round_id": "p0142",
+    "anchor": "Darker Grotesque",
+    "note": "proposal game p0142 (anchor Darker Grotesque; 2 voters, 3 judgements; majority, browser); ties omitted: League Spartan"
+  },
+  {
+    "include": [
+      "Delicious Handrawn",
+      "Solitreo",
+      "Protest Riot",
+      "Kalam"
+    ],
+    "exclude": [
+      "GungsuhChe",
+      "Delius Swash Caps"
+    ],
+    "round_id": "p0145",
+    "anchor": "Delicious Handrawn",
+    "note": "proposal game p0145 (anchor Delicious Handrawn; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Delius Swash Caps",
+      "Iansui",
+      "Kalam",
+      "Solitreo"
+    ],
+    "exclude": [
+      "Farsan",
+      "Protest Riot"
+    ],
+    "round_id": "p0147",
+    "anchor": "Delius Swash Caps",
+    "note": "proposal game p0147 (anchor Delius Swash Caps; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "DM Mono",
+      "Hanken Grotesk",
+      "JetBrains Mono",
+      "Red Hat Mono"
+    ],
+    "exclude": [
+      "Chivo",
+      "Epilogue"
+    ],
+    "round_id": "p0152",
+    "anchor": "DM Mono",
+    "note": "proposal game p0152 (anchor DM Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Dongle",
+      "NTR",
+      "Quicksand",
+      "Mallanna",
+      "Manjari"
+    ],
+    "exclude": [
+      "Dangrek"
+    ],
+    "round_id": "p0157",
+    "anchor": "Dongle",
+    "note": "proposal game p0157 (anchor Dongle; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Doppio One",
+      "Blinker",
+      "Sansation"
+    ],
+    "exclude": [
+      "Kufam",
+      "PT Sans",
+      "Sarala"
+    ],
+    "round_id": "p0158",
+    "anchor": "Doppio One",
+    "note": "proposal game p0158 (anchor Doppio One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Dotum",
+      "Zen Kaku Gothic New",
+      "42dot Sans",
+      "Funnel Sans",
+      "Asta Sans"
+    ],
+    "exclude": [
+      "Bai Jamjuree"
+    ],
+    "round_id": "p0159",
+    "anchor": "Dotum",
+    "note": "proposal game p0159 (anchor Dotum; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Duru Sans",
+      "Fira Sans",
+      "Orienta",
+      "IBM Plex Sans JP"
+    ],
+    "exclude": [
+      "Ysabeau"
+    ],
+    "round_id": "p0161",
+    "anchor": "Duru Sans",
+    "note": "proposal game p0161 (anchor Duru Sans; 2 voters, 2 judgements; majority, browser); ties omitted: Gafata"
+  },
+  {
+    "include": [
+      "Ek Mukta",
+      "Mukta",
+      "Merriweather Sans",
+      "Ancizar Sans"
+    ],
+    "exclude": [],
+    "round_id": "p0166",
+    "anchor": "Ek Mukta",
+    "note": "proposal game p0166 (anchor Ek Mukta; 2 voters, 3 judgements; majority, browser); ties omitted: Shanti, Rosario"
+  },
+  {
+    "include": [
+      "Encode Sans Semi Condensed",
+      "Oxygen",
+      "PT Sans Narrow"
+    ],
+    "exclude": [
+      "Sarala",
+      "Doppio One"
+    ],
+    "round_id": "p0170",
+    "anchor": "Encode Sans Semi Condensed",
+    "note": "proposal game p0170 (anchor Encode Sans Semi Condensed; 2 voters, 2 judgements; majority, browser); ties omitted: Sansation"
+  },
+  {
+    "include": [
+      "Esteban",
+      "Lustria",
+      "Gelasio",
+      "Song Myung",
+      "Shippori Mincho B1"
+    ],
+    "exclude": [
+      "STIX Two Math"
+    ],
+    "round_id": "p0175",
+    "anchor": "Esteban",
+    "note": "proposal game p0175 (anchor Esteban; 1 voter, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Farro",
+      "B612",
+      "Doppio One",
+      "PT Sans Caption"
+    ],
+    "exclude": [
+      "Athiti",
+      "Biryani"
+    ],
+    "round_id": "p0180",
+    "anchor": "Farro",
+    "note": "proposal game p0180 (anchor Farro; 2 voters, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Figtree",
+      "Red Hat Text",
+      "Plus Jakarta Sans",
+      "Instrument Sans",
+      "Montserrat"
+    ],
+    "exclude": [
+      "SUSE"
+    ],
+    "round_id": "p0184",
+    "anchor": "Figtree",
+    "note": "proposal game p0184 (anchor Figtree; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Finlandica",
+      "Geist Mono",
+      "Victor Mono"
+    ],
+    "exclude": [
+      "BIZ UDGothic",
+      "Atkinson Hyperlegible",
+      "Share"
+    ],
+    "round_id": "p0185",
+    "anchor": "Finlandica",
+    "note": "proposal game p0185 (anchor Finlandica; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Fira Code",
+      "Sometype Mono",
+      "Roboto Mono",
+      "Fragment Mono",
+      "Victor Mono"
+    ],
+    "exclude": [
+      "Trispace"
+    ],
+    "round_id": "p0188",
+    "anchor": "Fira Code",
+    "note": "proposal game p0188 (anchor Fira Code; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Freeman",
+      "Archivo",
+      "Pragati Narrow",
+      "Chivo",
+      "Special Gothic Condensed One"
+    ],
+    "exclude": [
+      "Bricolage Grotesque"
+    ],
+    "round_id": "p0195",
+    "anchor": "Freeman",
+    "note": "proposal game p0195 (anchor Freeman; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Funnel Sans",
+      "Liter",
+      "Heebo",
+      "Asta Sans",
+      "Estedad"
+    ],
+    "exclude": [],
+    "round_id": "p0197",
+    "anchor": "Funnel Sans",
+    "note": "proposal game p0197 (anchor Funnel Sans; 2 voters, 2 judgements; majority, browser); ties omitted: Golos Text"
+  },
+  {
+    "include": [
+      "Geist",
+      "Miranda Sans",
+      "Gantari",
+      "KoHo"
+    ],
+    "exclude": [
+      "IBM Plex Sans",
+      "Work Sans"
+    ],
+    "round_id": "p0201",
+    "anchor": "Geist",
+    "note": "proposal game p0201 (anchor Geist; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Geologica",
+      "Quattrocento Sans",
+      "Proza Libre",
+      "Mukta Vaani"
+    ],
+    "exclude": [
+      "Bellota Text"
+    ],
+    "round_id": "p0204",
+    "anchor": "Geologica",
+    "note": "proposal game p0204 (anchor Geologica; 2 voters, 3 judgements; majority, browser); ties omitted: News Cycle"
+  },
+  {
+    "include": [
+      "GFS Didot",
+      "Cantata One"
+    ],
+    "exclude": [
+      "David Libre",
+      "Namdhinggo",
+      "Dai Banna SIL",
+      "Gentium Plus"
+    ],
+    "round_id": "p0206",
+    "anchor": "GFS Didot",
+    "note": "proposal game p0206 (anchor GFS Didot; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Gidole",
+      "Sarabun",
+      "Lunasima",
+      "Comme"
+    ],
+    "exclude": [
+      "Scada",
+      "Alef"
+    ],
+    "round_id": "p0207",
+    "anchor": "Gidole",
+    "note": "proposal game p0207 (anchor Gidole; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Gochi Hand",
+      "Akaya Telivigala",
+      "Delius Swash Caps",
+      "Solitreo"
+    ],
+    "exclude": [
+      "Dangrek",
+      "Concert One"
+    ],
+    "round_id": "p0211",
+    "anchor": "Gochi Hand",
+    "note": "proposal game p0211 (anchor Gochi Hand; 2 voters, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Gupter",
+      "Shippori Mincho",
+      "Baskervville",
+      "Yrsa",
+      "Gelasio"
+    ],
+    "exclude": [
+      "Rasa"
+    ],
+    "round_id": "p0222",
+    "anchor": "Gupter",
+    "note": "proposal game p0222 (anchor Gupter; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Handlee",
+      "LXGW WenKai TC",
+      "Alkatra"
+    ],
+    "exclude": [
+      "Lobster Two",
+      "Agrave Pro",
+      "Farsan"
+    ],
+    "round_id": "p0225",
+    "anchor": "Handlee",
+    "note": "proposal game p0225 (anchor Handlee; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hanken Grotesk",
+      "Carrois Gothic",
+      "IBM Plex Sans",
+      "Puritan"
+    ],
+    "exclude": [
+      "Carlito",
+      "Zalando Sans"
+    ],
+    "round_id": "p0226",
+    "anchor": "Hanken Grotesk",
+    "note": "proposal game p0226 (anchor Hanken Grotesk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hibur Mono",
+      "Sometype Mono",
+      "M PLUS 1p",
+      "Lunasima"
+    ],
+    "exclude": [
+      "Gidole",
+      "Tuffy"
+    ],
+    "round_id": "p0232",
+    "anchor": "Hibur Mono",
+    "note": "proposal game p0232 (anchor Hibur Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hina Mincho",
+      "STIX Two Math",
+      "Tai Heritage Pro",
+      "Song Myung"
+    ],
+    "exclude": [
+      "Shippori Mincho B1",
+      "Lustria"
+    ],
+    "round_id": "p0233",
+    "anchor": "Hina Mincho",
+    "note": "proposal game p0233 (anchor Hina Mincho; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hind",
+      "Palanquin",
+      "Varela",
+      "Cambay",
+      "TASA Explorer"
+    ],
+    "exclude": [
+      "Estedad"
+    ],
+    "round_id": "p0234",
+    "anchor": "Hind",
+    "note": "proposal game p0234 (anchor Hind; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Hind Mysuru",
+      "Palanquin",
+      "Cantarell",
+      "M PLUS 1p",
+      "Actor",
+      "Varela"
+    ],
+    "exclude": [],
+    "round_id": "p0239",
+    "anchor": "Hind Mysuru",
+    "note": "proposal game p0239 (anchor Hind Mysuru; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hind Siliguri",
+      "Varela",
+      "Palanquin",
+      "Estedad"
+    ],
+    "exclude": [
+      "TASA Explorer",
+      "Actor"
+    ],
+    "round_id": "p0240",
+    "anchor": "Hind Siliguri",
+    "note": "proposal game p0240 (anchor Hind Siliguri; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Huninn",
+      "NTR",
+      "Mandali",
+      "Bpmf Huninn",
+      "Varela Round",
+      "Mallanna"
+    ],
+    "exclude": [],
+    "round_id": "p0244",
+    "anchor": "Huninn",
+    "note": "proposal game p0244 (anchor Huninn; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "IBM Plex Sans",
+      "Schibsted Grotesk",
+      "Kantumruy Pro",
+      "Anuphan"
+    ],
+    "exclude": [
+      "Work Sans",
+      "Yaldevi"
+    ],
+    "round_id": "p0248",
+    "anchor": "IBM Plex Sans",
+    "note": "proposal game p0248 (anchor IBM Plex Sans; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "IBM Plex Sans JP",
+      "Schibsted Grotesk",
+      "Yaldevi",
+      "Work Sans"
+    ],
+    "exclude": [
+      "Lilex"
+    ],
+    "round_id": "p0251",
+    "anchor": "IBM Plex Sans JP",
+    "note": "proposal game p0251 (anchor IBM Plex Sans JP; 2 voters, 2 judgements; majority, browser); ties omitted: Anuphan"
+  },
+  {
+    "include": [
+      "Idiqlat",
+      "Lateef",
+      "Ramsina"
+    ],
+    "exclude": [
+      "Markazi Text",
+      "Crimson Pro",
+      "Charis SIL"
+    ],
+    "round_id": "p0254",
+    "anchor": "Idiqlat",
+    "note": "proposal game p0254 (anchor Idiqlat; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Inria Sans",
+      "Gidole",
+      "Fira Sans"
+    ],
+    "exclude": [
+      "Menbere",
+      "Voces",
+      "KoHo"
+    ],
+    "round_id": "p0259",
+    "anchor": "Inria Sans",
+    "note": "proposal game p0259 (anchor Inria Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Iosevka Charon Mono",
+      "Chivo",
+      "Lilex"
+    ],
+    "exclude": [
+      "Bricolage Grotesque",
+      "Pragati Narrow",
+      "Archivo"
+    ],
+    "round_id": "p0263",
+    "anchor": "Iosevka Charon Mono",
+    "note": "proposal game p0263 (anchor Iosevka Charon Mono; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Kaisei Decol",
+      "Jacques Francois",
+      "Tiro Gurmukhi",
+      "Castoro"
+    ],
+    "exclude": [
+      "Libertinus Serif Display",
+      "UoqMunThenKhung"
+    ],
+    "round_id": "p0274",
+    "anchor": "Kaisei Decol",
+    "note": "proposal game p0274 (anchor Kaisei Decol; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Kaisei Opti",
+      "UoqMunThenKhung",
+      "Libertinus Serif Display",
+      "Ibarra Real Nova"
+    ],
+    "exclude": [
+      "Castoro",
+      "Tiro Gurmukhi"
+    ],
+    "round_id": "p0276",
+    "anchor": "Kaisei Opti",
+    "note": "proposal game p0276 (anchor Kaisei Opti; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Kaisei Tokumin",
+      "Libertinus Serif Display",
+      "UoqMunThenKhung"
+    ],
+    "exclude": [
+      "Castoro",
+      "Tiro Gurmukhi",
+      "Jacques Francois"
+    ],
+    "round_id": "p0277",
+    "anchor": "Kaisei Tokumin",
+    "note": "proposal game p0277 (anchor Kaisei Tokumin; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kantumruy Pro",
+      "Work Sans",
+      "IBM Plex Sans",
+      "Schibsted Grotesk",
+      "Anuphan"
+    ],
+    "exclude": [
+      "Shippori Antique"
+    ],
+    "round_id": "p0280",
+    "anchor": "Kantumruy Pro",
+    "note": "proposal game p0280 (anchor Kantumruy Pro; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Karma",
+      "Shippori Mincho B1",
+      "Gentium Plus"
+    ],
+    "exclude": [
+      "Dai Banna SIL",
+      "Brygada 1918",
+      "Alyamama"
+    ],
+    "round_id": "p0281",
+    "anchor": "Karma",
+    "note": "proposal game p0281 (anchor Karma; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kiwi Maru",
+      "Gowun Batang",
+      "Alice",
+      "Gungsuh",
+      "Solway"
+    ],
+    "exclude": [
+      "Kameron"
+    ],
+    "round_id": "p0286",
+    "anchor": "Kiwi Maru",
+    "note": "proposal game p0286 (anchor Kiwi Maru; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Krub",
+      "Chocolate Classical Sans",
+      "News Cycle"
+    ],
+    "exclude": [
+      "Anek Latin",
+      "Geologica",
+      "Ancizar Sans"
+    ],
+    "round_id": "p0290",
+    "anchor": "Krub",
+    "note": "proposal game p0290 (anchor Krub; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kurale",
+      "Caudex",
+      "Cormorant Upright",
+      "Gabriela"
+    ],
+    "exclude": [
+      "Courgette",
+      "LXGW WenKai TC"
+    ],
+    "round_id": "p0293",
+    "anchor": "Kurale",
+    "note": "proposal game p0293 (anchor Kurale; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lexend Deca",
+      "Outfit",
+      "Questrial",
+      "Didact Gothic",
+      "Readex Pro"
+    ],
+    "exclude": [
+      "Niramit"
+    ],
+    "round_id": "p0297",
+    "anchor": "Lexend Deca",
+    "note": "proposal game p0297 (anchor Lexend Deca; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lexend Exa",
+      "Readex Pro",
+      "Outfit",
+      "Questrial"
+    ],
+    "exclude": [
+      "Teachers",
+      "Didact Gothic"
+    ],
+    "round_id": "p0298",
+    "anchor": "Lexend Exa",
+    "note": "proposal game p0298 (anchor Lexend Exa; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Lexend Mega",
+      "Outfit",
+      "Readex Pro"
+    ],
+    "exclude": [],
+    "round_id": "p0300",
+    "anchor": "Lexend Mega",
+    "note": "proposal game p0300 (anchor Lexend Mega; 2 voters, 4 judgements; majority, browser); ties omitted: Questrial, Didact Gothic, Momo Trust Sans"
+  },
+  {
+    "include": [
+      "Lexend Peta",
+      "Readex Pro"
+    ],
+    "exclude": [],
+    "round_id": "p0301",
+    "anchor": "Lexend Peta",
+    "note": "proposal game p0301 (anchor Lexend Peta; 2 voters, 2 judgements; majority, browser); ties omitted: Questrial, Outfit, SUSE Mono, Didact Gothic"
+  },
+  {
+    "include": [
+      "Linden Hill",
+      "Buenard",
+      "Abyssinica SIL",
+      "Habibi"
+    ],
+    "exclude": [
+      "Sawarabi Mincho",
+      "Cardo"
+    ],
+    "round_id": "p0312",
+    "anchor": "Linden Hill",
+    "note": "proposal game p0312 (anchor Linden Hill; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lisu Bosa",
+      "Source Serif 4",
+      "Bpmf Zihi Kai Std",
+      "Chiron Sung HK"
+    ],
+    "exclude": [
+      "Vesper Libre",
+      "Yrsa"
+    ],
+    "round_id": "p0314",
+    "anchor": "Lisu Bosa",
+    "note": "proposal game p0314 (anchor Lisu Bosa; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "M PLUS 1",
+      "Red Hat Text",
+      "Wix Madefor Display",
+      "Montserrat",
+      "Raleway"
+    ],
+    "exclude": [
+      "Epunda Sans"
+    ],
+    "round_id": "p0322",
+    "anchor": "M PLUS 1",
+    "note": "proposal game p0322 (anchor M PLUS 1; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Matangi",
+      "Open Sans",
+      "Murecho",
+      "Commissioner"
+    ],
+    "exclude": [
+      "Nobile",
+      "Raleway"
+    ],
+    "round_id": "p0334",
+    "anchor": "Matangi",
+    "note": "proposal game p0334 (anchor Matangi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Mate",
+      "Ancizar Serif",
+      "Manuale",
+      "Buenard",
+      "Amethysta"
+    ],
+    "exclude": [
+      "Joan"
+    ],
+    "round_id": "p0335",
+    "anchor": "Mate",
+    "note": "proposal game p0335 (anchor Mate; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Metal",
+      "Courgette",
+      "Gabriela",
+      "Kurale"
+    ],
+    "exclude": [
+      "Crimson Text",
+      "Amiri Quran"
+    ],
+    "round_id": "p0340",
+    "anchor": "Metal",
+    "note": "proposal game p0340 (anchor Metal; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Milonga",
+      "Kurale",
+      "Cormorant Upright"
+    ],
+    "exclude": [
+      "Gelasio",
+      "Shippori Mincho B1"
+    ],
+    "round_id": "p0342",
+    "anchor": "Milonga",
+    "note": "proposal game p0342 (anchor Milonga; 2 voters, 4 judgements; majority, browser); ties omitted: Ovo"
+  },
+  {
+    "include": [
+      "Mitr",
+      "Inder"
+    ],
+    "exclude": [
+      "Ysabeau Infant",
+      "Istok Web",
+      "LINE Seed JP",
+      "Contrail One"
+    ],
+    "round_id": "p0345",
+    "anchor": "Mitr",
+    "note": "proposal game p0345 (anchor Mitr; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Momo Trust Display",
+      "Righteous",
+      "Cal Sans"
+    ],
+    "exclude": [
+      "Niramit",
+      "Inclusive Sans",
+      "Ysabeau Infant"
+    ],
+    "round_id": "p0348",
+    "anchor": "Momo Trust Display",
+    "note": "proposal game p0348 (anchor Momo Trust Display; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Monomakh",
+      "Bona Nova",
+      "Buenard"
+    ],
+    "exclude": [
+      "Cormorant Upright",
+      "Rosarivo",
+      "Libre Bodoni"
+    ],
+    "round_id": "p0352",
+    "anchor": "Monomakh",
+    "note": "proposal game p0352 (anchor Monomakh; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Mozilla Headline",
+      "Sometype Mono",
+      "Oxygen Mono"
+    ],
+    "exclude": [
+      "Asta Sans",
+      "Martian Mono",
+      "Atkinson Hyperlegible Mono"
+    ],
+    "round_id": "p0358",
+    "anchor": "Mozilla Headline",
+    "note": "proposal game p0358 (anchor Mozilla Headline; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Mukta",
+      "Merriweather Sans",
+      "Ek Mukta",
+      "Ancizar Sans",
+      "Shanti"
+    ],
+    "exclude": [
+      "Rosario"
+    ],
+    "round_id": "p0360",
+    "anchor": "Mukta",
+    "note": "proposal game p0360 (anchor Mukta; 2 voters, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Mukta Mahee",
+      "Proza Libre",
+      "Ancizar Sans",
+      "Merriweather Sans"
+    ],
+    "exclude": [
+      "Shanti",
+      "Rosario"
+    ],
+    "round_id": "p0361",
+    "anchor": "Mukta Mahee",
+    "note": "proposal game p0361 (anchor Mukta Mahee; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Narnoor",
+      "Assistant",
+      "Akatab",
+      "Varta",
+      "Tirra",
+      "Source Sans 3"
+    ],
+    "exclude": [],
+    "round_id": "p0367",
+    "anchor": "Narnoor",
+    "note": "proposal game p0367 (anchor Narnoor; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Nosifer Caps",
+      "Concert One",
+      "Dangrek",
+      "Delius Unicase"
+    ],
+    "exclude": [
+      "Gungsuh",
+      "GungsuhChe"
+    ],
+    "round_id": "p0377",
+    "anchor": "Nosifer Caps",
+    "note": "proposal game p0377 (anchor Nosifer Caps; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Nunito Sans",
+      "Sora",
+      "Golos Text",
+      "Palanquin",
+      "SUSE"
+    ],
+    "exclude": [
+      "Chiron GoRound TC"
+    ],
+    "round_id": "p0379",
+    "anchor": "Nunito Sans",
+    "note": "proposal game p0379 (anchor Nunito Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Padauk",
+      "Akt",
+      "Mingzat",
+      "Liter"
+    ],
+    "exclude": [
+      "Tuffy",
+      "Mozilla Text"
+    ],
+    "round_id": "p0388",
+    "anchor": "Padauk",
+    "note": "proposal game p0388 (anchor Padauk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Palanquin",
+      "Epunda Sans",
+      "Menbere",
+      "Estedad",
+      "Cambay"
+    ],
+    "exclude": [],
+    "round_id": "p0389",
+    "anchor": "Palanquin",
+    "note": "proposal game p0389 (anchor Palanquin; 2 voters, 2 judgements; majority, browser); ties omitted: Shanti"
+  },
+  {
+    "include": [
+      "Parkinsans",
+      "Pliant",
+      "Poppins",
+      "Mulish"
+    ],
+    "exclude": [
+      "Montserrat Alternates",
+      "League Spartan"
+    ],
+    "round_id": "p0393",
+    "anchor": "Parkinsans",
+    "note": "proposal game p0393 (anchor Parkinsans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Poly",
+      "Annapurna SIL",
+      "Buenard",
+      "Vollkorn"
+    ],
+    "exclude": [],
+    "round_id": "p0415",
+    "anchor": "Poly",
+    "note": "proposal game p0415 (anchor Poly; 2 voters, 2 judgements; majority, browser); ties omitted: Volkhov, Literata"
+  },
+  {
+    "include": [
+      "Poppins",
+      "Parkinsans",
+      "Moderustic",
+      "Momo Trust Sans"
+    ],
+    "exclude": [
+      "Pliant",
+      "League Spartan"
+    ],
+    "round_id": "p0417",
+    "anchor": "Poppins",
+    "note": "proposal game p0417 (anchor Poppins; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Pragati Narrow",
+      "Oswald",
+      "Special Gothic Condensed One"
+    ],
+    "exclude": [],
+    "round_id": "p0419",
+    "anchor": "Pragati Narrow",
+    "note": "proposal game p0419 (anchor Pragati Narrow; 2 voters, 3 judgements; majority, browser); ties omitted: Chivo, Archivo Narrow, Freeman"
+  },
+  {
+    "include": [
+      "PT Sans Narrow",
+      "Sarabun",
+      "Encode Sans Condensed",
+      "Scada"
+    ],
+    "exclude": [
+      "Doppio One",
+      "Alatsi"
+    ],
+    "round_id": "p0426",
+    "anchor": "PT Sans Narrow",
+    "note": "proposal game p0426 (anchor PT Sans Narrow; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Public Sans",
+      "Rethink Sans",
+      "Karla",
+      "Pathway Extreme"
+    ],
+    "exclude": [
+      "Titillium Web",
+      "Fahkwang"
+    ],
+    "round_id": "p0428",
+    "anchor": "Public Sans",
+    "note": "proposal game p0428 (anchor Public Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Racing Sans One",
+      "Poller One",
+      "Lalezar",
+      "Freeman"
+    ],
+    "exclude": [
+      "Gidole",
+      "Scada"
+    ],
+    "round_id": "p0432",
+    "anchor": "Racing Sans One",
+    "note": "proposal game p0432 (anchor Racing Sans One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Radley",
+      "Average",
+      "STIX Two Text",
+      "Hedvig Letters Serif"
+    ],
+    "exclude": [
+      "Nanum Myeongjo",
+      "Cardo"
+    ],
+    "round_id": "p0434",
+    "anchor": "Radley",
+    "note": "proposal game p0434 (anchor Radley; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Rakkas",
+      "Namdhinggo",
+      "Ruwudu",
+      "Dai Banna SIL",
+      "Gentium Book Plus"
+    ],
+    "exclude": [],
+    "round_id": "p0435",
+    "anchor": "Rakkas",
+    "note": "proposal game p0435 (anchor Rakkas; 2 voters, 2 judgements; majority, browser); ties omitted: Montaga"
+  },
+  {
+    "include": [
+      "Ramabhadra",
+      "Archivo",
+      "Akt",
+      "Padauk"
+    ],
+    "exclude": [
+      "Mozilla Headline",
+      "Freeman"
+    ],
+    "round_id": "p0437",
+    "anchor": "Ramabhadra",
+    "note": "proposal game p0437 (anchor Ramabhadra; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ramaraja",
+      "Crimson Text",
+      "Zen Antique"
+    ],
+    "exclude": [
+      "Alice",
+      "Libertinus Mono",
+      "Amiri Quran"
+    ],
+    "round_id": "p0438",
+    "anchor": "Ramaraja",
+    "note": "proposal game p0438 (anchor Ramaraja; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Rammetto One",
+      "Lalezar",
+      "Titan One",
+      "BBH Hegarty"
+    ],
+    "exclude": [
+      "Prompt",
+      "Maven Pro"
+    ],
+    "round_id": "p0440",
+    "anchor": "Rammetto One",
+    "note": "proposal game p0440 (anchor Rammetto One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Readex Pro",
+      "Lexend",
+      "Alexandria"
+    ],
+    "exclude": [
+      "Questrial",
+      "Anuphan",
+      "Wix Madefor Display"
+    ],
+    "round_id": "p0443",
+    "anchor": "Readex Pro",
+    "note": "proposal game p0443 (anchor Readex Pro; 1 voter, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Recursive",
+      "Source Code Pro",
+      "Inconsolata",
+      "Sometype Mono"
+    ],
+    "exclude": [
+      "Google Sans Code",
+      "Libre Franklin"
+    ],
+    "round_id": "p0444",
+    "anchor": "Recursive",
+    "note": "proposal game p0444 (anchor Recursive; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Red Hat Text",
+      "M PLUS 1p",
+      "Finlandica Text",
+      "Google Sans Flex",
+      "Plus Jakarta Sans"
+    ],
+    "exclude": [
+      "Albert Sans"
+    ],
+    "round_id": "p0447",
+    "anchor": "Red Hat Text",
+    "note": "proposal game p0447 (anchor Red Hat Text; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Redaction 35",
+      "Donegal One",
+      "Gulzar",
+      "Roboto Serif",
+      "Sumana"
+    ],
+    "exclude": [
+      "ZCOOL XiaoWei"
+    ],
+    "round_id": "p0453",
+    "anchor": "Redaction 35",
+    "note": "proposal game p0453 (anchor Redaction 35; 2 voters, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Rubik One",
+      "Titan One",
+      "Sigmar"
+    ],
+    "exclude": [
+      "BBH Hegarty",
+      "Barlow Semi Condensed",
+      "Istok Web"
+    ],
+    "round_id": "p0470",
+    "anchor": "Rubik One",
+    "note": "proposal game p0470 (anchor Rubik One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ruwudu",
+      "Inika",
+      "David Libre"
+    ],
+    "exclude": [
+      "Libre Caslon Text",
+      "Alike",
+      "Spectral"
+    ],
+    "round_id": "p0473",
+    "anchor": "Ruwudu",
+    "note": "proposal game p0473 (anchor Ruwudu; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Saira",
+      "Armata",
+      "Blinker",
+      "Encode Sans Semi Expanded"
+    ],
+    "exclude": [
+      "Bai Jamjuree",
+      "Metrophobic"
+    ],
+    "round_id": "p0474",
+    "anchor": "Saira",
+    "note": "proposal game p0474 (anchor Saira; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Sarabun",
+      "Cambay",
+      "Estedad",
+      "M PLUS 1p"
+    ],
+    "exclude": [
+      "Gothic A1",
+      "Gidole"
+    ],
+    "round_id": "p0479",
+    "anchor": "Sarabun",
+    "note": "proposal game p0479 (anchor Sarabun; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Scoutie Sans",
+      "Kanchenjunga",
+      "Krub",
+      "DM Sans",
+      "Special Gothic"
+    ],
+    "exclude": [
+      "Source Code Pro"
+    ],
+    "round_id": "p0485",
+    "anchor": "Scoutie Sans",
+    "note": "proposal game p0485 (anchor Scoutie Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Seaweed Script",
+      "Courgette",
+      "Cedarville Cursive"
+    ],
+    "exclude": [
+      "Libertinus Mono",
+      "UoqMunThenKhung",
+      "Amiri Quran"
+    ],
+    "round_id": "p0486",
+    "anchor": "Seaweed Script",
+    "note": "proposal game p0486 (anchor Seaweed Script; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Secular One",
+      "Andika",
+      "ABeeZee",
+      "Inder"
+    ],
+    "exclude": [
+      "Ysabeau Infant",
+      "Sen"
+    ],
+    "round_id": "p0487",
+    "anchor": "Secular One",
+    "note": "proposal game p0487 (anchor Secular One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Signika",
+      "KoHo"
+    ],
+    "exclude": [
+      "Inria Sans",
+      "Fira Sans",
+      "Cantora One",
+      "Gowun Dodum"
+    ],
+    "round_id": "p0497",
+    "anchor": "Signika",
+    "note": "proposal game p0497 (anchor Signika; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Sometype Mono",
+      "Gidole",
+      "PT Sans Caption",
+      "Oxygen Mono"
+    ],
+    "exclude": [
+      "M PLUS 1 Code",
+      "Mozilla Headline"
+    ],
+    "round_id": "p0508",
+    "anchor": "Sometype Mono",
+    "note": "proposal game p0508 (anchor Sometype Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Spinnaker",
+      "Voltaire",
+      "Shippori Antique",
+      "Geologica"
+    ],
+    "exclude": [
+      "Ysabeau",
+      "Preahvihear"
+    ],
+    "round_id": "p0516",
+    "anchor": "Spinnaker",
+    "note": "proposal game p0516 (anchor Spinnaker; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Stack Sans Headline",
+      "Red Hat Display",
+      "Liter"
+    ],
+    "exclude": [
+      "TikTok Sans",
+      "Nata Sans"
+    ],
+    "round_id": "p0521",
+    "anchor": "Stack Sans Headline",
+    "note": "proposal game p0521 (anchor Stack Sans Headline; 2 voters, 3 judgements; majority, browser); ties omitted: Host Grotesk"
+  },
+  {
+    "include": [
+      "SUSE Mono",
+      "Atkinson Hyperlegible Mono",
+      "Red Hat Mono",
+      "Overpass Mono"
+    ],
+    "exclude": [
+      "Tuffy",
+      "JetBrains Mono"
+    ],
+    "round_id": "p0529",
+    "anchor": "SUSE Mono",
+    "note": "proposal game p0529 (anchor SUSE Mono; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Tajawal",
+      "Estedad",
+      "Almarai",
+      "Sarabun"
+    ],
+    "exclude": [
+      "Fustat",
+      "Alef"
+    ],
+    "round_id": "p0531",
+    "anchor": "Tajawal",
+    "note": "proposal game p0531 (anchor Tajawal; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Tauri",
+      "Merriweather Sans",
+      "Mukta",
+      "Shanti"
+    ],
+    "exclude": [
+      "Rosario"
+    ],
+    "round_id": "p0534",
+    "anchor": "Tauri",
+    "note": "proposal game p0534 (anchor Tauri; 2 voters, 3 judgements; majority, browser); ties omitted: Ancizar Sans"
+  },
+  {
+    "include": [
+      "Tinos",
+      "Gentium Plus",
+      "PT Serif",
+      "Spectral"
+    ],
+    "exclude": [
+      "Jomolhari"
+    ],
+    "round_id": "p0541",
+    "anchor": "Tinos",
+    "note": "proposal game p0541 (anchor Tinos; 2 voters, 2 judgements; majority, browser); ties omitted: Dai Banna SIL"
+  },
+  {
+    "include": [
+      "Tiro Gurmukhi",
+      "Kaisei Decol",
+      "STIX Two Text",
+      "Castoro",
+      "Jacques Francois"
+    ],
+    "exclude": [
+      "Libertinus Serif Display"
+    ],
+    "round_id": "p0547",
+    "anchor": "Tiro Gurmukhi",
+    "note": "proposal game p0547 (anchor Tiro Gurmukhi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Titillium Web",
+      "Arsenal",
+      "Sintony",
+      "Martel Sans"
+    ],
+    "exclude": [
+      "Special Gothic",
+      "Public Sans"
+    ],
+    "round_id": "p0552",
+    "anchor": "Titillium Web",
+    "note": "proposal game p0552 (anchor Titillium Web; 2 voters, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Triodion",
+      "Castoro",
+      "Libertinus Serif",
+      "Pochaevsk"
+    ],
+    "exclude": [
+      "Tiro Bangla",
+      "UoqMunThenKhung"
+    ],
+    "round_id": "p0553",
+    "anchor": "Triodion",
+    "note": "proposal game p0553 (anchor Triodion; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Trocchi",
+      "Battambang",
+      "IBM Plex Serif"
+    ],
+    "exclude": [
+      "Atkinson Hyperlegible Next",
+      "BIZ UDGothic",
+      "Podkova"
+    ],
+    "round_id": "p0555",
+    "anchor": "Trocchi",
+    "note": "proposal game p0555 (anchor Trocchi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Voltaire",
+      "Scada",
+      "PT Sans Narrow"
+    ],
+    "exclude": [
+      "Spinnaker",
+      "Alatsi",
+      "Preahvihear"
+    ],
+    "round_id": "p0566",
+    "anchor": "Voltaire",
+    "note": "proposal game p0566 (anchor Voltaire; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ysabeau Infant",
+      "Sen",
+      "Moderustic"
+    ],
+    "exclude": [
+      "ABeeZee",
+      "Secular One",
+      "Andika"
+    ],
+    "round_id": "p0577",
+    "anchor": "Ysabeau Infant",
+    "note": "proposal game p0577 (anchor Ysabeau Infant; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "ZCOOL XiaoWei",
+      "Philosopher"
+    ],
+    "exclude": [
+      "Roboto Serif",
+      "Sumana",
+      "Arya",
+      "Arsenal"
+    ],
+    "round_id": "p0581",
+    "anchor": "ZCOOL XiaoWei",
+    "note": "proposal game p0581 (anchor ZCOOL XiaoWei; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Zen Kaku Gothic Antique",
+      "Spline Sans",
+      "TikTok Sans",
+      "Pavanam"
+    ],
+    "exclude": [
+      "TASA Orbiter",
+      "Onest"
+    ],
+    "round_id": "p0583",
+    "anchor": "Zen Kaku Gothic Antique",
+    "note": "proposal game p0583 (anchor Zen Kaku Gothic Antique; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "ABeeZee",
+      "Andika",
+      "Sen",
+      "Reddit Sans",
+      "Moderustic"
+    ],
+    "exclude": [
+      "Ysabeau Infant"
+    ],
+    "round_id": "p0001",
+    "anchor": "ABeeZee",
+    "note": "proposal game p0001 (anchor ABeeZee; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Advent Pro",
+      "Inder",
+      "Moderustic",
+      "Montserrat Alternates",
+      "Pliant"
+    ],
+    "exclude": [
+      "Andika"
+    ],
+    "round_id": "p0005",
+    "anchor": "Advent Pro",
+    "note": "proposal game p0005 (anchor Advent Pro; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Afacad",
+      "Sulphur Point",
+      "Alata",
+      "Urbanist",
+      "Outfit",
+      "Questrial"
+    ],
+    "exclude": [],
+    "round_id": "p0006",
+    "anchor": "Afacad",
+    "note": "proposal game p0006 (anchor Afacad; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Alexandria",
+      "Cantarell",
+      "Red Hat Text",
+      "Actor",
+      "Finlandica Text"
+    ],
+    "exclude": [
+      "Sarala"
+    ],
+    "round_id": "p0014",
+    "anchor": "Alexandria",
+    "note": "proposal game p0014 (anchor Alexandria; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Alike",
+      "Hedvig Letters Serif",
+      "Amethysta"
+    ],
+    "exclude": [
+      "Ruwudu",
+      "Libre Caslon Text",
+      "David Libre"
+    ],
+    "round_id": "p0016",
+    "anchor": "Alike",
+    "note": "proposal game p0016 (anchor Alike; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Alyamama",
+      "Spectral",
+      "PT Serif",
+      "Ancizar Serif",
+      "Vesper Libre",
+      "Gentium Plus"
+    ],
+    "exclude": [],
+    "round_id": "p0021",
+    "anchor": "Alyamama",
+    "note": "proposal game p0021 (anchor Alyamama; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Amiri",
+      "Crimson Pro",
+      "Lateef"
+    ],
+    "exclude": [
+      "Zen Antique",
+      "Platypi",
+      "Alice"
+    ],
+    "round_id": "p0025",
+    "anchor": "Amiri",
+    "note": "proposal game p0025 (anchor Amiri; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Amiri Quran",
+      "Lateef",
+      "Castoro",
+      "Crimson Pro"
+    ],
+    "exclude": [
+      "Platypi",
+      "Alice"
+    ],
+    "round_id": "p0026",
+    "anchor": "Amiri Quran",
+    "note": "proposal game p0026 (anchor Amiri Quran; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Amita",
+      "Bpmf Iansui",
+      "LXGW WenKai TC",
+      "Handlee"
+    ],
+    "exclude": [
+      "Briem Hand",
+      "Kite One"
+    ],
+    "round_id": "p0027",
+    "anchor": "Amita",
+    "note": "proposal game p0027 (anchor Amita; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Anek Devanagari",
+      "News Cycle",
+      "Chocolate Classical Sans",
+      "Lato"
+    ],
+    "exclude": [
+      "Shanti",
+      "Krub"
+    ],
+    "round_id": "p0031",
+    "anchor": "Anek Devanagari",
+    "note": "proposal game p0031 (anchor Anek Devanagari; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Anek Gujarati",
+      "Lato",
+      "News Cycle",
+      "Chocolate Classical Sans",
+      "Shanti"
+    ],
+    "exclude": [
+      "Krub"
+    ],
+    "round_id": "p0032",
+    "anchor": "Anek Gujarati",
+    "note": "proposal game p0032 (anchor Anek Gujarati; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Antic Didone",
+      "Halant",
+      "Lora",
+      "Trirong"
+    ],
+    "exclude": [
+      "Gulzar",
+      "Donegal One"
+    ],
+    "round_id": "p0041",
+    "anchor": "Antic Didone",
+    "note": "proposal game p0041 (anchor Antic Didone; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Archivo",
+      "Freeman",
+      "Ramabhadra",
+      "Chivo",
+      "Pragati Narrow"
+    ],
+    "exclude": [
+      "Special Gothic Condensed One"
+    ],
+    "round_id": "p0045",
+    "anchor": "Archivo",
+    "note": "proposal game p0045 (anchor Archivo; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Arya",
+      "Chocolate Classical Sans",
+      "Varta",
+      "Alegreya Sans",
+      "Lato"
+    ],
+    "exclude": [
+      "Arsenal"
+    ],
+    "round_id": "p0048",
+    "anchor": "Arya",
+    "note": "proposal game p0048 (anchor Arya; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Asap",
+      "Jaldi"
+    ],
+    "exclude": [
+      "Average",
+      "Hahmlet",
+      "Manuale",
+      "Alike"
+    ],
+    "round_id": "p0049",
+    "anchor": "Asap",
+    "note": "proposal game p0049 (anchor Asap; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Atkinson Hyperlegible",
+      "Schibsted Grotesk",
+      "IBM Plex Sans JP",
+      "Mozilla Text",
+      "Strichpunkt Sans"
+    ],
+    "exclude": [
+      "BIZ UDGothic"
+    ],
+    "round_id": "p0056",
+    "anchor": "Atkinson Hyperlegible",
+    "note": "proposal game p0056 (anchor Atkinson Hyperlegible; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Barlow",
+      "Rubik",
+      "Istok Web",
+      "Numans"
+    ],
+    "exclude": [
+      "Shippori Antique B1",
+      "Nanum Gothic Coding"
+    ],
+    "round_id": "p0070",
+    "anchor": "Barlow",
+    "note": "proposal game p0070 (anchor Barlow; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Baskervville",
+      "STIX Two Text",
+      "Bacasime Antique",
+      "Libre Baskerville"
+    ],
+    "exclude": [
+      "Gupter",
+      "Judson"
+    ],
+    "round_id": "p0073",
+    "anchor": "Baskervville",
+    "note": "proposal game p0073 (anchor Baskervville; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Bpmf Huninn",
+      "Varela Round",
+      "Huninn",
+      "Mandali"
+    ],
+    "exclude": [
+      "NTR",
+      "Mallanna"
+    ],
+    "round_id": "p0094",
+    "anchor": "Bpmf Huninn",
+    "note": "proposal game p0094 (anchor Bpmf Huninn; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Bpmf Zihi Kai Std",
+      "Cactus Classical Serif",
+      "Chiron Sung HK",
+      "Source Serif 4"
+    ],
+    "exclude": [
+      "Alyamama",
+      "Amethysta"
+    ],
+    "round_id": "p0096",
+    "anchor": "Bpmf Zihi Kai Std",
+    "note": "proposal game p0096 (anchor Bpmf Zihi Kai Std; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cagliostro",
+      "Martel Sans",
+      "Miriam Libre",
+      "Lato"
+    ],
+    "exclude": [
+      "Sigmar",
+      "Shippori Antique B1"
+    ],
+    "round_id": "p0106",
+    "anchor": "Cagliostro",
+    "note": "proposal game p0106 (anchor Cagliostro; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cal Sans",
+      "Momo Trust Sans",
+      "Google Sans Flex",
+      "Poppins"
+    ],
+    "exclude": [
+      "Ysabeau Infant",
+      "Niramit"
+    ],
+    "round_id": "p0107",
+    "anchor": "Cal Sans",
+    "note": "proposal game p0107 (anchor Cal Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cambay",
+      "Cantarell",
+      "Telex",
+      "Sarala"
+    ],
+    "exclude": [
+      "Gudea",
+      "Estedad"
+    ],
+    "round_id": "p0109",
+    "anchor": "Cambay",
+    "note": "proposal game p0109 (anchor Cambay; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cantata One",
+      "Bentham",
+      "Unna",
+      "Sree Krushnadevaraya",
+      "Old Standard TT",
+      "Brygada 1918"
+    ],
+    "exclude": [],
+    "round_id": "p0111",
+    "anchor": "Cantata One",
+    "note": "proposal game p0111 (anchor Cantata One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Carlito",
+      "Lato"
+    ],
+    "exclude": [
+      "Mada",
+      "Hedvig Letters Sans",
+      "Harmattan",
+      "Arsenal"
+    ],
+    "round_id": "p0112",
+    "anchor": "Carlito",
+    "note": "proposal game p0112 (anchor Carlito; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cascadia Mono",
+      "Fira Code",
+      "REM",
+      "Trispace",
+      "Share"
+    ],
+    "exclude": [
+      "Ysabeau Office"
+    ],
+    "round_id": "p0116",
+    "anchor": "Cascadia Mono",
+    "note": "proposal game p0116 (anchor Cascadia Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cedarville Cursive",
+      "Niconne",
+      "Seaweed Script"
+    ],
+    "exclude": [
+      "Amita",
+      "Protest Riot",
+      "Lobster Two"
+    ],
+    "round_id": "p0117",
+    "anchor": "Cedarville Cursive",
+    "note": "proposal game p0117 (anchor Cedarville Cursive; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Chonburi",
+      "DM Serif Display",
+      "Rozha One"
+    ],
+    "exclude": [
+      "Vidaloka",
+      "Bentham",
+      "Cantata One"
+    ],
+    "round_id": "p0122",
+    "anchor": "Chonburi",
+    "note": "proposal game p0122 (anchor Chonburi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cinzel",
+      "Cormorant Unicase",
+      "Aboreto"
+    ],
+    "exclude": [
+      "Adamina",
+      "Nanum Myeongjo",
+      "Hedvig Letters Serif"
+    ],
+    "round_id": "p0123",
+    "anchor": "Cinzel",
+    "note": "proposal game p0123 (anchor Cinzel; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Clarity City",
+      "Gantari",
+      "Google Sans Flex",
+      "Golos Text"
+    ],
+    "exclude": [
+      "Funnel Display",
+      "SUSE"
+    ],
+    "round_id": "p0125",
+    "anchor": "Clarity City",
+    "note": "proposal game p0125 (anchor Clarity City; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Comme",
+      "Sarala",
+      "Menbere",
+      "Cantarell"
+    ],
+    "exclude": [
+      "Gidole",
+      "PT Sans Caption"
+    ],
+    "round_id": "p0126",
+    "anchor": "Comme",
+    "note": "proposal game p0126 (anchor Comme; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Commissioner",
+      "Bellota Text",
+      "Proza Libre",
+      "Mukta Vaani"
+    ],
+    "exclude": [
+      "Krub",
+      "Geologica"
+    ],
+    "round_id": "p0127",
+    "anchor": "Commissioner",
+    "note": "proposal game p0127 (anchor Commissioner; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cormorant",
+      "EB Garamond",
+      "Nanum Myeongjo"
+    ],
+    "exclude": [
+      "Hedvig Letters Serif",
+      "Tiro Kannada",
+      "Castoro"
+    ],
+    "round_id": "p0132",
+    "anchor": "Cormorant",
+    "note": "proposal game p0132 (anchor Cormorant; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Cossette Titre",
+      "Ropa Sans",
+      "Narnoor",
+      "Padauk"
+    ],
+    "exclude": [
+      "Liter",
+      "Mozilla Text"
+    ],
+    "round_id": "p0135",
+    "anchor": "Cossette Titre",
+    "note": "proposal game p0135 (anchor Cossette Titre; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Dekko",
+      "LXGW WenKai TC",
+      "Manjari",
+      "Akaya Telivigala"
+    ],
+    "exclude": [
+      "Courgette",
+      "Belanosima"
+    ],
+    "round_id": "p0144",
+    "anchor": "Dekko",
+    "note": "proposal game p0144 (anchor Dekko; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Delius Unicase",
+      "Iansui",
+      "Bpmf Iansui"
+    ],
+    "exclude": [
+      "Huninn",
+      "Zen Maru Gothic",
+      "M PLUS Rounded 1c"
+    ],
+    "round_id": "p0148",
+    "anchor": "Delius Unicase",
+    "note": "proposal game p0148 (anchor Delius Unicase; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Domine",
+      "Cambo",
+      "Koh Santepheap",
+      "Caladea",
+      "Crimson Pro"
+    ],
+    "exclude": [
+      "Ledger"
+    ],
+    "round_id": "p0155",
+    "anchor": "Domine",
+    "note": "proposal game p0155 (anchor Domine; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Donegal One",
+      "Gulzar",
+      "Lora",
+      "Roboto Serif"
+    ],
+    "exclude": [
+      "Halant",
+      "Sumana"
+    ],
+    "round_id": "p0156",
+    "anchor": "Donegal One",
+    "note": "proposal game p0156 (anchor Donegal One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Eczar",
+      "Merriweather",
+      "Vesper Libre",
+      "Faustina"
+    ],
+    "exclude": [
+      "Yaldevi",
+      "Martel"
+    ],
+    "round_id": "p0162",
+    "anchor": "Eczar",
+    "note": "proposal game p0162 (anchor Eczar; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Edu AU VIC WA NT Hand",
+      "Paprika",
+      "Playwrite AU NSW"
+    ],
+    "exclude": [
+      "Belanosima",
+      "Josefin Sans",
+      "Boogaloo"
+    ],
+    "round_id": "p0163",
+    "anchor": "Edu AU VIC WA NT Hand",
+    "note": "proposal game p0163 (anchor Edu AU VIC WA NT Hand; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Edu SA Beginner",
+      "Farsan",
+      "Solitreo"
+    ],
+    "exclude": [
+      "Agrave Pro",
+      "Boogaloo",
+      "Belanosima"
+    ],
+    "round_id": "p0165",
+    "anchor": "Edu SA Beginner",
+    "note": "proposal game p0165 (anchor Edu SA Beginner; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Encode Sans Condensed",
+      "PT Sans Narrow"
+    ],
+    "exclude": [
+      "Doppio One",
+      "Sarala",
+      "Sansation",
+      "Telex"
+    ],
+    "round_id": "p0168",
+    "anchor": "Encode Sans Condensed",
+    "note": "proposal game p0168 (anchor Encode Sans Condensed; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Enriqueta",
+      "Kameron",
+      "Andada Pro",
+      "Hanuman"
+    ],
+    "exclude": [
+      "Slabo 13px",
+      "Zilla Slab"
+    ],
+    "round_id": "p0172",
+    "anchor": "Enriqueta",
+    "note": "proposal game p0172 (anchor Enriqueta; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Familjen Grotesk",
+      "Inter Tight",
+      "Roboto Flex",
+      "Yantramanav",
+      "Vazirmatn"
+    ],
+    "exclude": [
+      "Momo Trust Sans"
+    ],
+    "round_id": "p0178",
+    "anchor": "Familjen Grotesk",
+    "note": "proposal game p0178 (anchor Familjen Grotesk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Farsan",
+      "Kalam",
+      "Solitreo"
+    ],
+    "exclude": [
+      "LXGW WenKai TC",
+      "Iansui",
+      "Alkatra"
+    ],
+    "round_id": "p0181",
+    "anchor": "Farsan",
+    "note": "proposal game p0181 (anchor Farsan; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Fauna One",
+      "Scope One"
+    ],
+    "exclude": [
+      "Chiron Sung HK",
+      "Cactus Classical Serif"
+    ],
+    "round_id": "p0182",
+    "anchor": "Fauna One",
+    "note": "proposal game p0182 (anchor Fauna One; 2 voters, 2 judgements; majority, browser); ties omitted: Slabo 27px, Noticia Text"
+  },
+  {
+    "include": [
+      "Fenix",
+      "Alegreya",
+      "Sahitya"
+    ],
+    "exclude": [
+      "Copse",
+      "Asar",
+      "Gulzar"
+    ],
+    "round_id": "p0183",
+    "anchor": "Fenix",
+    "note": "proposal game p0183 (anchor Fenix; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Finlandica Headline",
+      "Epunda Sans",
+      "Comme",
+      "Gidole"
+    ],
+    "exclude": [
+      "Radio Canada",
+      "PT Sans Caption"
+    ],
+    "round_id": "p0186",
+    "anchor": "Finlandica Headline",
+    "note": "proposal game p0186 (anchor Finlandica Headline; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Finlandica Text",
+      "Actor",
+      "Radio Canada",
+      "PT Sans Caption"
+    ],
+    "exclude": [
+      "Red Hat Text",
+      "Cantarell"
+    ],
+    "round_id": "p0187",
+    "anchor": "Finlandica Text",
+    "note": "proposal game p0187 (anchor Finlandica Text; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Fira Mono",
+      "Victor Mono",
+      "Oxygen Mono",
+      "Roboto Mono",
+      "Fragment Mono"
+    ],
+    "exclude": [
+      "BIZ UDGothic"
+    ],
+    "round_id": "p0189",
+    "anchor": "Fira Mono",
+    "note": "proposal game p0189 (anchor Fira Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Fjord One",
+      "Brawler",
+      "Manuale",
+      "Amethysta"
+    ],
+    "exclude": [
+      "Spectral",
+      "Cactus Classical Serif"
+    ],
+    "round_id": "p0193",
+    "anchor": "Fjord One",
+    "note": "proposal game p0193 (anchor Fjord One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Francois One",
+      "Archivo",
+      "Chivo",
+      "Freeman"
+    ],
+    "exclude": [
+      "Yantramanav",
+      "Bricolage Grotesque"
+    ],
+    "round_id": "p0194",
+    "anchor": "Francois One",
+    "note": "proposal game p0194 (anchor Francois One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Gentium Plus",
+      "Namdhinggo",
+      "David Libre",
+      "Dai Banna SIL"
+    ],
+    "exclude": [
+      "Alyamama",
+      "PT Serif"
+    ],
+    "round_id": "p0203",
+    "anchor": "Gentium Plus",
+    "note": "proposal game p0203 (anchor Gentium Plus; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Gidugu",
+      "Gurajada",
+      "Freeman",
+      "Pathway Gothic One",
+      "Arya"
+    ],
+    "exclude": [
+      "Special Gothic Condensed One"
+    ],
+    "round_id": "p0208",
+    "anchor": "Gidugu",
+    "note": "proposal game p0208 (anchor Gidugu; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Girassol",
+      "BBH Bogle",
+      "Montserrat Subrayada",
+      "Cinzel"
+    ],
+    "exclude": [
+      "BJCree",
+      "Sawarabi Mincho"
+    ],
+    "round_id": "p0209",
+    "anchor": "Girassol",
+    "note": "proposal game p0209 (anchor Girassol; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Gotu",
+      "Estedad",
+      "Nanum Gothic",
+      "Numans"
+    ],
+    "exclude": [
+      "Baloo 2",
+      "Signika Negative"
+    ],
+    "round_id": "p0213",
+    "anchor": "Gotu",
+    "note": "proposal game p0213 (anchor Gotu; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Goudy Bookletter 1911",
+      "Libertinus Math",
+      "Stoke",
+      "Triodion",
+      "Pochaevsk"
+    ],
+    "exclude": [
+      "EB Garamond"
+    ],
+    "round_id": "p0214",
+    "anchor": "Goudy Bookletter 1911",
+    "note": "proposal game p0214 (anchor Goudy Bookletter 1911; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Harmattan",
+      "Kanchenjunga"
+    ],
+    "exclude": [
+      "Puritan",
+      "Carlito",
+      "Special Gothic",
+      "News Cycle"
+    ],
+    "round_id": "p0227",
+    "anchor": "Harmattan",
+    "note": "proposal game p0227 (anchor Harmattan; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Hermeneus One",
+      "Domine",
+      "Vesper Libre",
+      "Cambo"
+    ],
+    "exclude": [
+      "Kadwa",
+      "Andada Pro"
+    ],
+    "round_id": "p0231",
+    "anchor": "Hermeneus One",
+    "note": "proposal game p0231 (anchor Hermeneus One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Host Grotesk",
+      "Nata Sans",
+      "Instrument Sans",
+      "Red Hat Display",
+      "Stack Sans Text"
+    ],
+    "exclude": [
+      "Albert Sans"
+    ],
+    "round_id": "p0241",
+    "anchor": "Host Grotesk",
+    "note": "proposal game p0241 (anchor Host Grotesk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Hubballi",
+      "Mandali",
+      "Kodchasan",
+      "NTR",
+      "Nunito"
+    ],
+    "exclude": [
+      "National Park"
+    ],
+    "round_id": "p0242",
+    "anchor": "Hubballi",
+    "note": "proposal game p0242 (anchor Hubballi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ibarra Real Nova",
+      "Shippori Mincho",
+      "Tai Heritage Pro"
+    ],
+    "exclude": [
+      "Nuosu SIL",
+      "STIX Two Text",
+      "Jomolhari"
+    ],
+    "round_id": "p0246",
+    "anchor": "Ibarra Real Nova",
+    "note": "proposal game p0246 (anchor Ibarra Real Nova; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "IBM Plex Mono",
+      "Roboto Mono",
+      "Victor Mono",
+      "Lilex"
+    ],
+    "exclude": [
+      "BIZ UDGothic",
+      "Work Sans"
+    ],
+    "round_id": "p0247",
+    "anchor": "IBM Plex Mono",
+    "note": "proposal game p0247 (anchor IBM Plex Mono; 3 voters, 4 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "IBM Plex Sans Hebrew",
+      "Schibsted Grotesk",
+      "Anuphan",
+      "Kantumruy Pro"
+    ],
+    "exclude": [
+      "Work Sans",
+      "Yaldevi"
+    ],
+    "round_id": "p0250",
+    "anchor": "IBM Plex Sans Hebrew",
+    "note": "proposal game p0250 (anchor IBM Plex Sans Hebrew; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "IBM Plex Sans KR",
+      "Work Sans",
+      "Schibsted Grotesk",
+      "Kantumruy Pro",
+      "Anuphan"
+    ],
+    "exclude": [
+      "Yaldevi"
+    ],
+    "round_id": "p0252",
+    "anchor": "IBM Plex Sans KR",
+    "note": "proposal game p0252 (anchor IBM Plex Sans KR; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Imprima",
+      "Mooli",
+      "Livvic"
+    ],
+    "exclude": [
+      "Ysabeau Infant",
+      "Amaranth",
+      "Ruluko"
+    ],
+    "round_id": "p0255",
+    "anchor": "Imprima",
+    "note": "proposal game p0255 (anchor Imprima; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Iosevka Charon",
+      "Mozilla Headline",
+      "Archivo",
+      "Chivo",
+      "Bricolage Grotesque"
+    ],
+    "exclude": [
+      "Pragati Narrow"
+    ],
+    "round_id": "p0262",
+    "anchor": "Iosevka Charon",
+    "note": "proposal game p0262 (anchor Iosevka Charon; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Jacques Francois",
+      "Castoro",
+      "Tiro Gurmukhi",
+      "Kaisei Tokumin",
+      "Zen Old Mincho"
+    ],
+    "exclude": [
+      "Libertinus Mono"
+    ],
+    "round_id": "p0265",
+    "anchor": "Jacques Francois",
+    "note": "proposal game p0265 (anchor Jacques Francois; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Jomhuria",
+      "Lalezar",
+      "Pridi"
+    ],
+    "exclude": [
+      "Anaheim",
+      "Racing Sans One",
+      "Gidugu"
+    ],
+    "round_id": "p0269",
+    "anchor": "Jomhuria",
+    "note": "proposal game p0269 (anchor Jomhuria; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Jomolhari",
+      "STIX Two Math",
+      "Nuosu SIL",
+      "Ibarra Real Nova",
+      "Tai Heritage Pro",
+      "Scheherazade New"
+    ],
+    "exclude": [],
+    "round_id": "p0270",
+    "anchor": "Jomolhari",
+    "note": "proposal game p0270 (anchor Jomolhari; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kadwa",
+      "Faustina",
+      "Martel",
+      "Merriweather"
+    ],
+    "exclude": [
+      "Ledger",
+      "Vesper Libre"
+    ],
+    "round_id": "p0273",
+    "anchor": "Kadwa",
+    "note": "proposal game p0273 (anchor Kadwa; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kaisei HarunoUmi",
+      "UoqMunThenKhung"
+    ],
+    "exclude": [
+      "Castoro",
+      "Jacques Francois",
+      "Tiro Gurmukhi",
+      "Libertinus Serif Display"
+    ],
+    "round_id": "p0275",
+    "anchor": "Kaisei HarunoUmi",
+    "note": "proposal game p0275 (anchor Kaisei HarunoUmi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kalam",
+      "Sriracha",
+      "Alkatra",
+      "Courgette"
+    ],
+    "exclude": [
+      "Farsan",
+      "Delius"
+    ],
+    "round_id": "p0278",
+    "anchor": "Kalam",
+    "note": "proposal game p0278 (anchor Kalam; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kite One",
+      "Capriola",
+      "Bpmf Iansui"
+    ],
+    "exclude": [
+      "Alan Sans",
+      "Amita",
+      "Gotu"
+    ],
+    "round_id": "p0285",
+    "anchor": "Kite One",
+    "note": "proposal game p0285 (anchor Kite One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "KoHo",
+      "Inria Sans",
+      "Monda",
+      "Fira Sans"
+    ],
+    "exclude": [
+      "Signika Negative",
+      "Geist"
+    ],
+    "round_id": "p0287",
+    "anchor": "KoHo",
+    "note": "proposal game p0287 (anchor KoHo; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Kripa",
+      "Instrument Sans",
+      "Host Grotesk",
+      "TikTok Sans"
+    ],
+    "exclude": [
+      "Maven Pro",
+      "Geologica"
+    ],
+    "round_id": "p0289",
+    "anchor": "Kripa",
+    "note": "proposal game p0289 (anchor Kripa; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lalezar",
+      "Freeman",
+      "Palanquin Dark",
+      "Racing Sans One"
+    ],
+    "exclude": [
+      "Hind Guntur",
+      "Scada"
+    ],
+    "round_id": "p0294",
+    "anchor": "Lalezar",
+    "note": "proposal game p0294 (anchor Lalezar; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ledger",
+      "Trirong",
+      "Kadwa",
+      "Martel"
+    ],
+    "exclude": [
+      "Cambo",
+      "Cactus Classical Serif"
+    ],
+    "round_id": "p0296",
+    "anchor": "Ledger",
+    "note": "proposal game p0296 (anchor Ledger; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lexend Giga",
+      "Didact Gothic",
+      "Inclusive Sans",
+      "Outfit",
+      "Mulish",
+      "Questrial"
+    ],
+    "exclude": [],
+    "round_id": "p0299",
+    "anchor": "Lexend Giga",
+    "note": "proposal game p0299 (anchor Lexend Giga; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Libertinus Mono",
+      "Jacques Francois",
+      "Zen Old Mincho"
+    ],
+    "exclude": [
+      "Castoro",
+      "Tiro Gurmukhi",
+      "Esteban"
+    ],
+    "round_id": "p0305",
+    "anchor": "Libertinus Mono",
+    "note": "proposal game p0305 (anchor Libertinus Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Libre Baskerville",
+      "Baskervville",
+      "Lustria",
+      "Nanum Myeongjo",
+      "STIX Two Math"
+    ],
+    "exclude": [
+      "Ibarra Real Nova"
+    ],
+    "round_id": "p0307",
+    "anchor": "Libre Baskerville",
+    "note": "proposal game p0307 (anchor Libre Baskerville; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lilex",
+      "Geist Mono",
+      "Roboto Mono",
+      "Fira Code",
+      "IBM Plex Mono",
+      "Victor Mono"
+    ],
+    "exclude": [],
+    "round_id": "p0310",
+    "anchor": "Lilex",
+    "note": "proposal game p0310 (anchor Lilex; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Liter",
+      "Funnel Sans",
+      "Estedad",
+      "Heebo"
+    ],
+    "exclude": [
+      "Vend Sans",
+      "Cossette Texte"
+    ],
+    "round_id": "p0315",
+    "anchor": "Liter",
+    "note": "proposal game p0315 (anchor Liter; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Literata",
+      "Esteban",
+      "Vollkorn",
+      "BJCree",
+      "Charis SIL"
+    ],
+    "exclude": [
+      "Annapurna SIL"
+    ],
+    "round_id": "p0316",
+    "anchor": "Literata",
+    "note": "proposal game p0316 (anchor Literata; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lora",
+      "Sumana",
+      "Parastoo"
+    ],
+    "exclude": [
+      "Donegal One",
+      "Gulzar",
+      "Halant"
+    ],
+    "round_id": "p0318",
+    "anchor": "Lora",
+    "note": "proposal game p0318 (anchor Lora; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Lunasima",
+      "Alef",
+      "Cambay",
+      "Palanquin",
+      "Cantarell",
+      "Epunda Sans"
+    ],
+    "exclude": [],
+    "round_id": "p0319",
+    "anchor": "Lunasima",
+    "note": "proposal game p0319 (anchor Lunasima; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Luxurious Roman",
+      "Montaga",
+      "Alike Angular",
+      "Manuale",
+      "Hedvig Letters Serif",
+      "Average"
+    ],
+    "exclude": [],
+    "round_id": "p0320",
+    "anchor": "Luxurious Roman",
+    "note": "proposal game p0320 (anchor Luxurious Roman; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "M PLUS 1 Code",
+      "Oxygen Mono",
+      "Sometype Mono",
+      "JetBrains Mono",
+      "Gudea"
+    ],
+    "exclude": [
+      "Athiti"
+    ],
+    "round_id": "p0323",
+    "anchor": "M PLUS 1 Code",
+    "note": "proposal game p0323 (anchor M PLUS 1 Code; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Marmelad",
+      "M PLUS Rounded 1c",
+      "Huninn",
+      "Bpmf Huninn"
+    ],
+    "exclude": [
+      "Mandali",
+      "Mallanna"
+    ],
+    "round_id": "p0331",
+    "anchor": "Marmelad",
+    "note": "proposal game p0331 (anchor Marmelad; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Martian Mono",
+      "Overpass Mono",
+      "Fragment Mono",
+      "Atkinson Hyperlegible Mono"
+    ],
+    "exclude": [
+      "Oxygen Mono",
+      "Mozilla Headline"
+    ],
+    "round_id": "p0332",
+    "anchor": "Martian Mono",
+    "note": "proposal game p0332 (anchor Martian Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Mingzat",
+      "TASA Orbiter",
+      "Zen Kaku Gothic Antique",
+      "Gantari",
+      "Spline Sans"
+    ],
+    "exclude": [
+      "Padauk"
+    ],
+    "round_id": "p0343",
+    "anchor": "Mingzat",
+    "note": "proposal game p0343 (anchor Mingzat; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Montserrat Alternates",
+      "Poppins",
+      "Josefin Sans",
+      "Parkinsans"
+    ],
+    "exclude": [
+      "Righteous",
+      "Mulish"
+    ],
+    "round_id": "p0355",
+    "anchor": "Montserrat Alternates",
+    "note": "proposal game p0355 (anchor Montserrat Alternates; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Mozilla Text",
+      "Atkinson Hyperlegible Mono",
+      "Asta Sans",
+      "Oxygen Mono"
+    ],
+    "exclude": [
+      "Martian Mono",
+      "Overpass Mono"
+    ],
+    "round_id": "p0359",
+    "anchor": "Mozilla Text",
+    "note": "proposal game p0359 (anchor Mozilla Text; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Mukta Vaani",
+      "Shanti",
+      "Geologica"
+    ],
+    "exclude": [],
+    "round_id": "p0362",
+    "anchor": "Mukta Vaani",
+    "note": "proposal game p0362 (anchor Mukta Vaani; 2 voters, 2 judgements; majority, browser); ties omitted: Merriweather Sans, Proza Libre, Rosario"
+  },
+  {
+    "include": [
+      "Niramit",
+      "Momo Trust Sans",
+      "Familjen Grotesk",
+      "Pliant"
+    ],
+    "exclude": [
+      "Cal Sans",
+      "LINE Seed JP"
+    ],
+    "round_id": "p0374",
+    "anchor": "Niramit",
+    "note": "proposal game p0374 (anchor Niramit; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "OFL Sorts Mill Goudy TT",
+      "Sorts Mill Goudy",
+      "EB Garamond"
+    ],
+    "exclude": [
+      "Libertinus Mono",
+      "Kaisei Tokumin",
+      "Zen Antique"
+    ],
+    "round_id": "p0381",
+    "anchor": "OFL Sorts Mill Goudy TT",
+    "note": "proposal game p0381 (anchor OFL Sorts Mill Goudy TT; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Oswald",
+      "Pragati Narrow",
+      "Archivo Narrow",
+      "Pathway Gothic One"
+    ],
+    "exclude": [
+      "Arsenal",
+      "Titillium Web"
+    ],
+    "round_id": "p0383",
+    "anchor": "Oswald",
+    "note": "proposal game p0383 (anchor Oswald; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Pavanam",
+      "Pontano Sans",
+      "Nokora",
+      "Gothic A1",
+      "Roboto"
+    ],
+    "exclude": [
+      "Hedvig Letters Sans"
+    ],
+    "round_id": "p0394",
+    "anchor": "Pavanam",
+    "note": "proposal game p0394 (anchor Pavanam; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Petrona",
+      "Adamina",
+      "Amethysta",
+      "Alike",
+      "Maitree"
+    ],
+    "exclude": [
+      "Wittgenstein"
+    ],
+    "round_id": "p0396",
+    "anchor": "Petrona",
+    "note": "proposal game p0396 (anchor Petrona; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Platypi",
+      "Alike",
+      "David Libre",
+      "Crimson Text"
+    ],
+    "exclude": [
+      "Libre Caslon Text",
+      "Sorts Mill Goudy"
+    ],
+    "round_id": "p0398",
+    "anchor": "Platypi",
+    "note": "proposal game p0398 (anchor Platypi; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Playwrite CZ",
+      "Over the Rainbow"
+    ],
+    "exclude": [
+      "Bellota",
+      "Bhavuka",
+      "Fenix",
+      "Bree Serif"
+    ],
+    "round_id": "p0402",
+    "anchor": "Playwrite CZ",
+    "note": "proposal game p0402 (anchor Playwrite CZ; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Playwrite DE LA",
+      "Bhavuka",
+      "Bellota",
+      "Over the Rainbow"
+    ],
+    "exclude": [
+      "Fenix",
+      "Bree Serif"
+    ],
+    "round_id": "p0403",
+    "anchor": "Playwrite DE LA",
+    "note": "proposal game p0403 (anchor Playwrite DE LA; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Playwrite MX",
+      "Srisakdi",
+      "Damion"
+    ],
+    "exclude": [
+      "Tienne",
+      "Square Peg",
+      "Spinnaker"
+    ],
+    "round_id": "p0408",
+    "anchor": "Playwrite MX",
+    "note": "proposal game p0408 (anchor Playwrite MX; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Pochaevsk",
+      "Libertinus Serif",
+      "EB Garamond",
+      "Amiri Quran",
+      "Triodion"
+    ],
+    "exclude": [
+      "Alice"
+    ],
+    "round_id": "p0412",
+    "anchor": "Pochaevsk",
+    "note": "proposal game p0412 (anchor Pochaevsk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Pontano Sans",
+      "Roboto",
+      "TASA Orbiter",
+      "Nokora",
+      "Radio Canada Big"
+    ],
+    "exclude": [
+      "Pavanam"
+    ],
+    "round_id": "p0416",
+    "anchor": "Pontano Sans",
+    "note": "proposal game p0416 (anchor Pontano Sans; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Prompt",
+      "Kumbh Sans",
+      "Google Sans Flex"
+    ],
+    "exclude": [
+      "Wix Madefor Display",
+      "Gantari",
+      "Carme"
+    ],
+    "round_id": "p0422",
+    "anchor": "Prompt",
+    "note": "proposal game p0422 (anchor Prompt; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Protest Riot",
+      "Delicious Handrawn",
+      "Titan One"
+    ],
+    "exclude": [
+      "NTR",
+      "Mallanna",
+      "Hubballi"
+    ],
+    "round_id": "p0423",
+    "anchor": "Protest Riot",
+    "note": "proposal game p0423 (anchor Protest Riot; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "PT Sans",
+      "Sarala",
+      "Ruda",
+      "Alef",
+      "Telex"
+    ],
+    "exclude": [
+      "Doppio One"
+    ],
+    "round_id": "p0425",
+    "anchor": "PT Sans",
+    "note": "proposal game p0425 (anchor PT Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Radio Canada",
+      "Estedad",
+      "PT Sans Caption",
+      "Finlandica Text"
+    ],
+    "exclude": [
+      "Inter",
+      "Gothic A1"
+    ],
+    "round_id": "p0433",
+    "anchor": "Radio Canada",
+    "note": "proposal game p0433 (anchor Radio Canada; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Rambla",
+      "Magra",
+      "Orienta",
+      "Ysabeau",
+      "Basic"
+    ],
+    "exclude": [
+      "Gafata"
+    ],
+    "round_id": "p0439",
+    "anchor": "Rambla",
+    "note": "proposal game p0439 (anchor Rambla; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ramsina",
+      "Idiqlat",
+      "Crimson Pro",
+      "Lateef"
+    ],
+    "exclude": [
+      "Markazi Text",
+      "Annapurna SIL"
+    ],
+    "round_id": "p0441",
+    "anchor": "Ramsina",
+    "note": "proposal game p0441 (anchor Ramsina; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Red Hat Display",
+      "Google Sans Flex",
+      "Albert Sans",
+      "Host Grotesk"
+    ],
+    "exclude": [],
+    "round_id": "p0445",
+    "anchor": "Red Hat Display",
+    "note": "proposal game p0445 (anchor Red Hat Display; 2 voters, 2 judgements; majority, browser); ties omitted: M PLUS 1p, Plus Jakarta Sans"
+  },
+  {
+    "include": [
+      "Red Rose",
+      "Gayathri"
+    ],
+    "exclude": [
+      "Istok Web",
+      "Rubik",
+      "Barlow Condensed",
+      "K2D"
+    ],
+    "round_id": "p0448",
+    "anchor": "Red Rose",
+    "note": "proposal game p0448 (anchor Red Rose; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Redaction",
+      "Ibarra Real Nova",
+      "Taviraj",
+      "Old Standard TT",
+      "BJCree",
+      "STIX Two Math"
+    ],
+    "exclude": [],
+    "round_id": "p0449",
+    "anchor": "Redaction",
+    "note": "proposal game p0449 (anchor Redaction; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Reddit Sans",
+      "REM",
+      "ABeeZee",
+      "Cabin"
+    ],
+    "exclude": [
+      "Ysabeau",
+      "Gafata"
+    ],
+    "round_id": "p0457",
+    "anchor": "Reddit Sans",
+    "note": "proposal game p0457 (anchor Reddit Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Roboto Mono",
+      "Fragment Mono",
+      "Geist Mono",
+      "Victor Mono"
+    ],
+    "exclude": [
+      "Lilex",
+      "BIZ UDGothic"
+    ],
+    "round_id": "p0464",
+    "anchor": "Roboto Mono",
+    "note": "proposal game p0464 (anchor Roboto Mono; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Ropa Sans",
+      "Cambay",
+      "Khand",
+      "Kufam",
+      "Narnoor",
+      "Doppio One"
+    ],
+    "exclude": [],
+    "round_id": "p0467",
+    "anchor": "Ropa Sans",
+    "note": "proposal game p0467 (anchor Ropa Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Sanchez",
+      "Solway",
+      "Scope One"
+    ],
+    "exclude": [
+      "Podkova",
+      "Zilla Slab",
+      "Grandiflora One"
+    ],
+    "round_id": "p0476",
+    "anchor": "Sanchez",
+    "note": "proposal game p0476 (anchor Sanchez; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Sansita One",
+      "Pushster",
+      "Alkatra"
+    ],
+    "exclude": [
+      "Courgette",
+      "Handlee",
+      "Lobster Two"
+    ],
+    "round_id": "p0478",
+    "anchor": "Sansita One",
+    "note": "proposal game p0478 (anchor Sansita One; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Sarala",
+      "Actor",
+      "Telex",
+      "Cambay",
+      "PT Sans"
+    ],
+    "exclude": [
+      "Alef"
+    ],
+    "round_id": "p0480",
+    "anchor": "Sarala",
+    "note": "proposal game p0480 (anchor Sarala; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Send Flowers",
+      "Over the Rainbow",
+      "Playwrite CZ",
+      "Courgette"
+    ],
+    "exclude": [
+      "Bree Serif",
+      "Pushster"
+    ],
+    "round_id": "p0489",
+    "anchor": "Send Flowers",
+    "note": "proposal game p0489 (anchor Send Flowers; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Shippori Mincho B1",
+      "STIX Two Math",
+      "Song Myung"
+    ],
+    "exclude": [],
+    "round_id": "p0494",
+    "anchor": "Shippori Mincho B1",
+    "note": "proposal game p0494 (anchor Shippori Mincho B1; 2 voters, 2 judgements; majority, browser); ties omitted: Lustria, Gelasio, Esteban"
+  },
+  {
+    "include": [
+      "Slabo 13px",
+      "Podkova",
+      "Zilla Slab",
+      "BIZ UDPGothic"
+    ],
+    "exclude": [
+      "Enriqueta",
+      "PT Serif Caption"
+    ],
+    "round_id": "p0501",
+    "anchor": "Slabo 13px",
+    "note": "proposal game p0501 (anchor Slabo 13px; 1 voter, 3 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Sofia Sans Extra Condensed",
+      "Oswald",
+      "Big Shoulders Text",
+      "Rubik"
+    ],
+    "exclude": [
+      "Miriam Libre",
+      "Francois One"
+    ],
+    "round_id": "p0504",
+    "anchor": "Sofia Sans Extra Condensed",
+    "note": "proposal game p0504 (anchor Sofia Sans Extra Condensed; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Space Grotesk",
+      "Yantramanav",
+      "Mozilla Text",
+      "Golos Text",
+      "Akt"
+    ],
+    "exclude": [
+      "Sora"
+    ],
+    "round_id": "p0513",
+    "anchor": "Space Grotesk",
+    "note": "proposal game p0513 (anchor Space Grotesk; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Strichpunkt Sans",
+      "IBM Plex Sans JP",
+      "Kantumruy Pro",
+      "Schibsted Grotesk"
+    ],
+    "exclude": [
+      "Mozilla Text",
+      "Atkinson Hyperlegible"
+    ],
+    "round_id": "p0525",
+    "anchor": "Strichpunkt Sans",
+    "note": "proposal game p0525 (anchor Strichpunkt Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Suravaram",
+      "Asar",
+      "Parastoo",
+      "Gulzar",
+      "Halant"
+    ],
+    "exclude": [
+      "Copse"
+    ],
+    "round_id": "p0528",
+    "anchor": "Suravaram",
+    "note": "proposal game p0528 (anchor Suravaram; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Tai Heritage Pro",
+      "Jomolhari",
+      "STIX Two Text",
+      "Nuosu SIL"
+    ],
+    "exclude": [
+      "Scheherazade New",
+      "Ibarra Real Nova"
+    ],
+    "round_id": "p0530",
+    "anchor": "Tai Heritage Pro",
+    "note": "proposal game p0530 (anchor Tai Heritage Pro; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "TASA Explorer",
+      "Actor",
+      "Hind Guntur",
+      "Varela"
+    ],
+    "exclude": [
+      "Finlandica Text",
+      "Kufam"
+    ],
+    "round_id": "p0532",
+    "anchor": "TASA Explorer",
+    "note": "proposal game p0532 (anchor TASA Explorer; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Thasadith",
+      "Glory"
+    ],
+    "exclude": [
+      "Chiron GoRound TC",
+      "Nunito",
+      "Nanum Gothic",
+      "M PLUS Rounded 1c"
+    ],
+    "round_id": "p0537",
+    "anchor": "Thasadith",
+    "note": "proposal game p0537 (anchor Thasadith; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "TikTok Sans",
+      "Special Gothic",
+      "Nata Sans",
+      "Vend Sans",
+      "Liter",
+      "Zen Kaku Gothic New"
+    ],
+    "exclude": [],
+    "round_id": "p0539",
+    "anchor": "TikTok Sans",
+    "note": "proposal game p0539 (anchor TikTok Sans; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Tiro Tamil",
+      "STIX Two Text",
+      "Castoro",
+      "Jacques Francois",
+      "Kaisei Decol"
+    ],
+    "exclude": [
+      "Libertinus Serif Display"
+    ],
+    "round_id": "p0548",
+    "anchor": "Tiro Tamil",
+    "note": "proposal game p0548 (anchor Tiro Tamil; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Tsukimi Rounded",
+      "Snippet"
+    ],
+    "exclude": [
+      "Varela Round",
+      "Huninn",
+      "Bpmf Huninn",
+      "Sono"
+    ],
+    "round_id": "p0557",
+    "anchor": "Tsukimi Rounded",
+    "note": "proposal game p0557 (anchor Tsukimi Rounded; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Unna",
+      "Old Standard TT",
+      "Bentham",
+      "STIX Two Math",
+      "Taviraj",
+      "Frank Ruhl Libre"
+    ],
+    "exclude": [],
+    "round_id": "p0558",
+    "anchor": "Unna",
+    "note": "proposal game p0558 (anchor Unna; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Urbanist",
+      "Alata",
+      "Outfit",
+      "Pliant"
+    ],
+    "exclude": [
+      "League Spartan",
+      "Sulphur Point"
+    ],
+    "round_id": "p0560",
+    "anchor": "Urbanist",
+    "note": "proposal game p0560 (anchor Urbanist; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Volkhov",
+      "Sura",
+      "Poly",
+      "Ledger",
+      "Habibi"
+    ],
+    "exclude": [
+      "Vesper Libre"
+    ],
+    "round_id": "p0564",
+    "anchor": "Volkhov",
+    "note": "proposal game p0564 (anchor Volkhov; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Wix Madefor Display",
+      "M PLUS 1p"
+    ],
+    "exclude": [
+      "Red Hat Text",
+      "Gantari",
+      "Google Sans Flex",
+      "Prompt"
+    ],
+    "round_id": "p0569",
+    "anchor": "Wix Madefor Display",
+    "note": "proposal game p0569 (anchor Wix Madefor Display; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Yaldevi",
+      "Asap Sharp",
+      "Gafata",
+      "Orienta",
+      "IBM Plex Sans JP"
+    ],
+    "exclude": [
+      "Slabo 27px"
+    ],
+    "round_id": "p0572",
+    "anchor": "Yaldevi",
+    "note": "proposal game p0572 (anchor Yaldevi; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Yanone Kaffeesatz",
+      "Krub",
+      "Anek Latin",
+      "Ancizar Sans"
+    ],
+    "exclude": [
+      "Rosario",
+      "News Cycle"
+    ],
+    "round_id": "p0574",
+    "anchor": "Yanone Kaffeesatz",
+    "note": "proposal game p0574 (anchor Yanone Kaffeesatz; 1 voter, 1 judgement; majority, browser)"
+  },
+  {
+    "include": [
+      "Yrsa",
+      "Rasa"
+    ],
+    "exclude": [],
+    "round_id": "p0575",
+    "anchor": "Yrsa",
+    "note": "proposal game p0575 (anchor Yrsa; 2 voters, 2 judgements; majority, browser); ties omitted: Peddana, Lisu Bosa, Koh Santepheap, Gupter"
+  },
+  {
+    "include": [
+      "Zen Antique",
+      "Castoro",
+      "Jomolhari"
+    ],
+    "exclude": [
+      "Ramaraja",
+      "Libertinus Mono",
+      "Jacques Francois"
+    ],
+    "round_id": "p0582",
+    "anchor": "Zen Antique",
+    "note": "proposal game p0582 (anchor Zen Antique; 1 voter, 2 judgements; majority, browser)"
+  },
+  {
+    "include": [
+      "Zen Kaku Gothic New",
+      "TASA Orbiter",
+      "Onest",
+      "Pavanam",
+      "TikTok Sans"
+    ],
+    "exclude": [
+      "Spline Sans"
+    ],
+    "round_id": "p0584",
+    "anchor": "Zen Kaku Gothic New",
+    "note": "proposal game p0584 (anchor Zen Kaku Gothic New; 1 voter, 1 judgement; majority, browser)"
+  }
+]

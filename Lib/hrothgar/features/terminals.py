@@ -22,19 +22,15 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from hrothgar.features.base import (
     FeatureRecognizer,
     FeatureRecognizerConfig,
     _all_caps_families,
 )
-from hrothgar.outline_tokens.oracle_baseline import _load_fontquant_raw
-from hrothgar.outline_tokens.recognizer_audit import (
-    _build_task,
-    _family_to_font,
-    _load_cedars,
-)
+from hrothgar.cedars import load_cedars
+from hrothgar.features.build import build_task
+from hrothgar.googlefonts import families_to_fonts
 
 TERMINALS_CLASSES = ["blunted", "soft", "flared", "angled", "tapered", "rounded"]
 
@@ -77,16 +73,15 @@ class TerminalsRecognizer(FeatureRecognizer):
         return val if val else None
 
     @classmethod
-    def excluded_families(cls, family_to_font: dict, cedars: dict, fontquant: dict) -> set:
+    def excluded_families(cls, family_to_font: dict, cedars: dict) -> set:
         """All-caps/small-caps fonts, plus connected scripts (no real terminals)."""
-        return _all_caps_families(family_to_font, fontquant) | _script_families(family_to_font)
+        return _all_caps_families(family_to_font) | _script_families(family_to_font)
 
     def build_real(self, repo: str):
-        cedars = _load_cedars()
-        fontquant = _load_fontquant_raw()
-        family_to_font = _family_to_font(repo)
+        cedars = load_cedars()
+        family_to_font = families_to_fonts(repo)
         if self.config.skip_uppercase or self.config.skip_script:
-            skip = _all_caps_families(family_to_font, fontquant)
+            skip = _all_caps_families(family_to_font)
             if self.config.skip_script:
                 skip |= _script_families(family_to_font)
             cedars = {k: v for k, v in cedars.items() if k not in skip}
@@ -96,8 +91,8 @@ class TerminalsRecognizer(FeatureRecognizer):
             "source": "cedars",
             "col": "stem-terminals",
         }
-        X, y, class_names, _inj, families = _build_task(
-            task, family_to_font, cedars, fontquant, self.config.glyph_size,
+        X, y, class_names, _inj, families = build_task(
+            task, family_to_font, cedars, self.config.glyph_size,
             seed=self.config.seed, crop_bottom_frac=self.config.crop_bottom_frac,
             expand_axes=self.config.expand_axes,
         )

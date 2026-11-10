@@ -43,4 +43,7 @@ def test_lookup_is_case_insensitive_on_basename(tmp_path) -> None:
 
 def test_load_default_or_none_missing(monkeypatch) -> None:
     monkeypatch.setenv("FONTQUANT_CSV", "/nonexistent/fontquant.csv")
-    assert fontquant.load_default_or_none() is None
+    table = fontquant.load_default_or_none()
+    # No CSV: the table still exists and measures fonts on demand.
+    assert table is not None
+    assert table.get("/nonexistent/Whatever.ttf") is None

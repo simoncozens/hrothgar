@@ -38,20 +38,18 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from hrothgar.outline_tokens.harness import _device
-from hrothgar.outline_tokens.oracle_baseline import (
-    _load_cedars,
-    _load_fontquant_raw,
-    _pairwise_auc,
-    _to_float,
-)
-from hrothgar.outline_tokens.supervision import (
+from hrothgar.cedars import load_cedars
+from hrothgar.fontquant import _to_float, quantify_row
+from hrothgar.similarity.dataset import STYLE_CATEGORY_TAGS, THEME_TAGS
+from hrothgar.similarity.metrics import masked_pairwise_cosine, pairwise_auc
+from hrothgar.similarity.supervision import (
+    JUDGEMENTS_PATH,
+    SIMILARITIES_PATH,
     build_supervision,
     display_scores,
     text_half_supervision,
 )
-from hrothgar.similarity.dataset import STYLE_CATEGORY_TAGS, THEME_TAGS
-from hrothgar.similarity.metrics import masked_pairwise_cosine
+from hrothgar.utils import device
 
 # ── Expressive tags (the subjective-response axis, from families.csv) ─────────
 EXPRESSIVE_TAGS = [
@@ -179,6 +177,38 @@ _DISPLAY_TAG_AXES: dict[str, list[str]] = {
 
 
 # ── Feature assembly ──────────────────────────────────────────────────────────
+def _column_stats(raw: list[list[float]]) -> tuple[list[float], list[float]]:
+    """Per-column mean and standard deviation over observed (non-NaN) values."""
+    n = len(raw)
+    d = len(raw[0]) if n else 0
+    means, stds = [], []
+    for j in range(d):
+        vals = [raw[i][j] for i in range(n) if not math.isnan(raw[i][j])]
+        mu = sum(vals) / len(vals) if vals else 0.0
+        var = sum((v - mu) ** 2 for v in vals) / len(vals) if vals else 1.0
+        means.append(mu)
+        stds.append(math.sqrt(var))
+    return means, stds
+
+
+def _standardize_tensor(
+    values: torch.Tensor, means: torch.Tensor, stds: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Standardize columns from frozen ``means``/``stds``; return ``(values, presence)``.
+
+    Missing entries (NaN) are imputed to 0 (the column mean after
+    standardization) with ``presence`` 0; observed entries are clipped to
+    ±5 standard deviations.  ``means``/``stds`` are passed in rather
+    than fitted so a *single* new font can be placed in a standardization space
+    fitted on the library (see :mod:`hrothgar.similarity.text_index`).
+    """
+    present = ~torch.isnan(values)
+    sd = torch.where(stds > 1e-8, stds, torch.ones_like(stds))
+    z = ((values - means) / sd).clamp(-5.0, 5.0)
+    V = torch.where(present, z, torch.zeros_like(z))
+    return V, present.float()
+
+
 def _standardize_with_mask(raw: list[list[float]]) -> tuple[torch.Tensor, torch.Tensor]:
     """Standardize per-column (NaN-tolerant); return ``(values, presence)``.
 
@@ -189,24 +219,12 @@ def _standardize_with_mask(raw: list[list[float]]) -> tuple[torch.Tensor, torch.
     d = len(raw[0]) if n else 0
     if n == 0 or d == 0:
         return torch.zeros(n, d), torch.zeros(n, d)
-    means, stds = [], []
-    for j in range(d):
-        vals = [raw[i][j] for i in range(n) if not math.isnan(raw[i][j])]
-        mu = sum(vals) / len(vals) if vals else 0.0
-        var = sum((v - mu) ** 2 for v in vals) / len(vals) if vals else 1.0
-        means.append(mu)
-        stds.append(math.sqrt(var))
-    V = torch.zeros(n, d)
-    P = torch.zeros(n, d)
-    for i in range(n):
-        for j in range(d):
-            x = raw[i][j]
-            if math.isnan(x):
-                continue
-            sd = stds[j] if stds[j] > 1e-8 else 1.0
-            V[i, j] = max(-5.0, min(5.0, (x - means[j]) / sd))
-            P[i, j] = 1.0
-    return V, P
+    means, stds = _column_stats(raw)
+    return _standardize_tensor(
+        torch.tensor(raw, dtype=torch.float32),
+        torch.tensor(means, dtype=torch.float32),
+        torch.tensor(stds, dtype=torch.float32),
+    )
 
 
 def _parse_vector(value: str) -> list[float]:
@@ -219,87 +237,119 @@ def _parse_vector(value: str) -> list[float]:
     return out[:26]
 
 
-def _numeric_raw(sup, table) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-    """Per-font standardized values + presence masks for each numeric axis."""
-    fonts = sup.fonts
-    out: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+def _expanded_columns(cols: list) -> list[str]:
+    """Flatten an axis spec into per-dimension column names (26 for a vector)."""
+    out: list[str] = []
+    for col in cols:
+        if isinstance(col, tuple) and col[0] == "VECTOR":
+            out.extend(f"{col[1]}[{i}]" for i in range(26))
+        else:
+            out.append(col)
+    return out
 
-    def scalar(font, col):
-        row = table.get(Path(font.path).name.lower())
+
+def numeric_rows(fonts, row_for=None) -> dict[str, list[list[float]]]:
+    """Raw per-font values (``NaN`` = missing) for each numeric axis.
+
+    ``row_for(font) -> {column: value}`` supplies the fontquant measurements;
+    it defaults to :func:`hrothgar.fontquant.quantify_row`, which measures the
+    font with the ``fontquant`` package (and memoizes it).  This is the
+    *unstandardized* half of :func:`_numeric_raw`, split out so the values can be
+    frozen in an index and standardized later (see
+    :func:`hrothgar.similarity.text_index.build_index`).
+    """
+    row_for = row_for or quantify_row
+    measured = [row_for(font) for font in fonts]
+
+    def scalar(row, col):
         if not row:
             return float("nan")
         v = row.get(col, "")
         return _to_float(v) if v != "" else float("nan")
 
     # Derived proportions (ratios are more style-bearing than raw em units).
-    def ratio(font, num_col, den_col):
-        row = table.get(Path(font.path).name.lower())
+    def ratio(row, num_col, den_col):
         if not row:
             return float("nan")
         num = _to_float(row.get(num_col, ""))
         den = _to_float(row.get(den_col, ""))
         return (num / den) if (den and den != 0 and not math.isnan(num) and not math.isnan(den)) else float("nan")
 
+    out: dict[str, list[list[float]]] = {}
     for name, cols in _NUMERIC_AXES.items():
         raw: list[list[float]] = []
-        for font in fonts:
-            row: list[float] = []
+        for row in measured:
+            values: list[float] = []
             for col in cols:
                 if isinstance(col, tuple) and col[0] == "VECTOR":
-                    r = table.get(Path(font.path).name.lower())
-                    row.extend(_parse_vector(r[col[1]] if r else ""))
+                    values.extend(_parse_vector(row.get(col[1], "") if row else ""))
                 else:
-                    row.append(scalar(font, col))
-            raw.append(row)
-        V, P = _standardize_with_mask(raw)
-        out[name] = (V, P)
+                    values.append(scalar(row, col))
+            raw.append(values)
+        out[name] = raw
 
     # Proportions axis: ascender/cap_height/descender/x_height + two ratios.
-    raw: list[list[float]] = []
-    for font in fonts:
-        row = [
-            scalar(font, "appearance/ascender"),
-            scalar(font, "appearance/cap_height"),
-            scalar(font, "appearance/descender"),
-            scalar(font, "appearance/x_height"),
-            ratio(font, "appearance/x_height", "appearance/ascender"),
-            ratio(font, "appearance/cap_height", "appearance/ascender"),
-        ]
-        raw.append(row)
-    out["proportions"] = _standardize_with_mask(raw)
+    raw = []
+    for row in measured:
+        raw.append([
+            scalar(row, "appearance/ascender"),
+            scalar(row, "appearance/cap_height"),
+            scalar(row, "appearance/descender"),
+            scalar(row, "appearance/x_height"),
+            ratio(row, "appearance/x_height", "appearance/ascender"),
+            ratio(row, "appearance/cap_height", "appearance/ascender"),
+        ])
+    out["proportions"] = raw
     return out
 
 
-def _categorical_codes(sup, table, cedars) -> dict[str, torch.Tensor]:
+def _numeric_raw(sup, row_for=None) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """Per-font standardized values + presence masks for each numeric axis."""
+    return {
+        name: _standardize_with_mask(rows)
+        for name, rows in numeric_rows(sup.fonts, row_for).items()
+    }
+
+
+def categorical_code_rows(fonts, cedars, row_for=None) -> dict[str, list[int]]:
     """Integer codes per categorical axis: vocab index, or -1 for missing/N-A."""
-    fonts = sup.fonts
-    out: dict[str, torch.Tensor] = {}
+    row_for = row_for or quantify_row
+    measured = [row_for(font) for font in fonts]
+    out: dict[str, list[int]] = {}
     for name, source, col, vocab in _CATEGORICAL_AXES:
         codes: list[int] = []
-        for font in fonts:
+        for i, font in enumerate(fonts):
             if source == "fq":
-                row = table.get(Path(font.path).name.lower())
+                row = measured[i]
                 val = (row.get(col, "") if row else "").strip()
             else:  # cedars
                 row = cedars.get(font.family.strip().lower())
                 val = (row[col] if row else "").strip()
                 val = "" if val in ("", "na") else val
             codes.append(vocab.index(val) if val in vocab else -1)
-        out[name] = torch.tensor(codes, dtype=torch.long)
+        out[name] = codes
     for name, col in _BOOLEAN_AXES:
-        codes: list[int] = []
-        for font in fonts:
-            row = table.get(Path(font.path).name.lower())
+        codes = []
+        for row in measured:
             val = (row.get(col, "") if row else "").strip().lower()
             codes.append(1 if val == "true" else (0 if val == "false" else -1))
-        out[name] = torch.tensor(codes, dtype=torch.long)
+        out[name] = codes
     return out
 
 
-def _tag_mats(sup, tag_axes: dict[str, list[str]] | None = None) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+def _categorical_codes(sup, cedars, row_for=None) -> dict[str, torch.Tensor]:
+    """Tensor form of :func:`categorical_code_rows`."""
+    return {
+        name: torch.tensor(codes, dtype=torch.long)
+        for name, codes in categorical_code_rows(sup.fonts, cedars, row_for).items()
+    }
+
+
+def tag_rows(
+    fonts, tag_axes: dict[str, list[str]] | None = None
+) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
     """Per-font tag vectors + presence masks for each tag axis."""
     tag_axes = _TAG_AXES if tag_axes is None else tag_axes
-    fonts = sup.fonts
     out: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
     for name, tags in tag_axes.items():
         V = torch.zeros(len(fonts), len(tags))
@@ -317,6 +367,11 @@ def _tag_mats(sup, tag_axes: dict[str, list[str]] | None = None) -> dict[str, tu
             M = has.float().unsqueeze(1).expand_as(M)
         out[name] = (V, M)
     return out
+
+
+def _tag_mats(sup, tag_axes: dict[str, list[str]] | None = None) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """Per-font tag vectors + presence masks for each tag axis."""
+    return tag_rows(sup.fonts, tag_axes)
 
 
 # ── Per-axis similarity tensor ────────────────────────────────────────────────
@@ -346,6 +401,73 @@ def _categorical_sim(codes: torch.Tensor, boolean: bool) -> torch.Tensor:
     return same.float() - differ.float()
 
 
+# ── Single-anchor row similarity ──────────────────────────────────────────────
+# These are the ``(1, N)`` counterparts of the pairwise functions above, used to
+# score one query font against a frozen library without materializing ``N x N``.
+# They must agree with the pairwise versions numerically; ``tests/test_text_index.py``
+# checks that on random data.
+def numeric_sim_row(
+    value: torch.Tensor, presence: torch.Tensor, V: torch.Tensor, P: torch.Tensor
+) -> torch.Tensor:
+    """RMSE proximity of one font's values against an ``(N, d)`` library axis."""
+    comp = presence.unsqueeze(0) * P  # (N, d)
+    delta = value.unsqueeze(0) - V  # (N, d)
+    sq = (delta * delta) * comp
+    cnt = comp.sum(dim=-1)  # (N,)
+    dist = torch.sqrt(sq.sum(dim=-1) / cnt.clamp(min=1))
+    sim = (1.0 - dist).clamp(-1.0, 1.0)
+    return sim.masked_fill(cnt == 0, 0.0)
+
+
+def categorical_sim_row(code: int, codes: torch.Tensor, boolean: bool) -> torch.Tensor:
+    """Match/mismatch/neutral similarity of one code against an ``(N,)`` axis."""
+    present = (codes >= 0) & (code >= 0)
+    same = (codes == code) & present
+    differ = present & (codes != code)
+    if boolean:
+        both_true = codes.eq(1) if code == 1 else torch.zeros_like(codes, dtype=torch.bool)
+        return both_true.float() - differ.float()
+    return same.float() - differ.float()
+
+
+def tag_cosine_row(
+    value: torch.Tensor,
+    mask: torch.Tensor,
+    V: torch.Tensor,
+    M: torch.Tensor,
+) -> torch.Tensor:
+    """Masked cosine of one tag vector against an ``(N, T)`` library axis."""
+    overlap = mask.unsqueeze(0) * M  # (N, T)
+    num = ((value * mask).unsqueeze(0) * (V * M)).sum(dim=-1)
+    norm_a = (((value * value) * mask).unsqueeze(0) * M).sum(dim=-1)
+    norm_l = ((V * V) * M * mask.unsqueeze(0)).sum(dim=-1)
+    denom = torch.sqrt(norm_a * norm_l).clamp(min=1e-12)
+    sim = num / denom
+    return sim.masked_fill(overlap.sum(dim=-1) == 0, 0.0)
+
+
+
+def _recogniser_models_dir() -> Path:
+    """Directory the feature-recogniser checkpoints are loaded from.
+
+    Resolution order:
+
+    1. ``$HROTHGAR_MODELS_DIR`` (explicit override),
+    2. the repository's ``models/`` (a checkout / editable install),
+    3. ``hrothgar/features/checkpoints``, the copy shipped in the wheel.
+
+    Step 3 is what lets a plain ``pip install hrothgar`` run the text-arm
+    similarity check without a trained model directory.
+    """
+    override = os.environ.get("HROTHGAR_MODELS_DIR")
+    if override:
+        return Path(override)
+    repo_models = Path(__file__).resolve().parents[3] / "models"
+    if (repo_models / "a_storey.pth").exists():
+        return repo_models
+    return Path(__file__).resolve().parents[1] / "features" / "checkpoints"
+
+
 def _load_recognisers() -> dict[str, object]:
     """Load the recogniser models still used by the combiner.
 
@@ -361,10 +483,17 @@ def _load_recognisers() -> dict[str, object]:
         FinialsRecognizer,
     )
 
-    models_dir = Path(__file__).resolve().parents[3] / "models"
+    models_dir = _recogniser_models_dir()
 
     def load(cls, stem):
-        return cls.from_checkpoint(models_dir / f"{stem}.pth")
+        path = models_dir / f"{stem}.pth"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"feature recogniser checkpoint {path} not found; set "
+                "HROTHGAR_MODELS_DIR to a directory containing a_storey.pth, "
+                "e_crossbar.pth, finials.pth and c_overhang.pth"
+            )
+        return cls.from_checkpoint(path)
 
     return {
         "a_storey": load(AStoreyRecognizer, "a_storey"),
@@ -374,7 +503,7 @@ def _load_recognisers() -> dict[str, object]:
     }
 
 
-def _recogniser_codes(sup, recognisers: dict | None = None) -> dict[str, torch.Tensor]:
+def recogniser_code_rows(fonts, recognisers: dict | None = None) -> dict[str, list[int]]:
     """Categorical codes for the recogniser-covered axes, from model verdicts.
 
     Each recogniser's verdict is mapped back onto the *same* vocabulary
@@ -392,11 +521,7 @@ def _recogniser_codes(sup, recognisers: dict | None = None) -> dict[str, torch.T
 
     vocab = {name: v for name, _s, _c, v in _CATEGORICAL_AXES}
     covered = {"a-storey", "e-crossbar", "finials", "casing", "c-overhang"}
-    fonts = sup.fonts
-    n = len(fonts)
-    out: dict[str, torch.Tensor] = {
-        name: torch.full((n,), -1, dtype=torch.long) for name in covered
-    }
+    out: dict[str, list[int]] = {name: [-1] * len(fonts) for name in covered}
 
     def code(axis: str, value: str) -> int:
         v = vocab[axis]
@@ -421,57 +546,164 @@ def _recogniser_codes(sup, recognisers: dict | None = None) -> dict[str, torch.T
     return out
 
 
-def _quantify_row(font_path) -> dict[str, str]:
-    """Run the fontquant ``quantify`` interface on one font, flatten to a CSV-like row.
+def _recogniser_codes(sup, recognisers: dict | None = None) -> dict[str, torch.Tensor]:
+    """Tensor form of :func:`recogniser_code_rows`."""
+    return {
+        name: torch.tensor(codes, dtype=torch.long)
+        for name, codes in recogniser_code_rows(sup.fonts, recognisers).items()
+    }
 
-    ``quantify`` returns a nested ``{category: {...: {"value": X}}}`` dict with
-    typed leaves; this flattens it to ``{column/path: str}`` matching the format
-    ``_load_fontquant_raw`` produces from ``fontquant.csv``.
+
+def build_feature_bank(
+    sup,
+    feature_source: str = "hand",
+    cedars: dict | None = None,
+    stats_rows: list[int] | None = None,
+    row_for=None,
+) -> dict:
+    """Per-font feature data for every axis, *without* pairwise computation.
+
+    This is the freezable half of :func:`build_similarity_tensor`: a
+    self-describing bank of the raw data each axis is built from, keyed so that
+    :func:`hrothgar.similarity.text_index.TextIndex` can save it, reload it, and
+    score a single query font against it.
+
+    ``stats_rows`` optionally restricts which fonts the numeric standardization
+    means/stds are fitted on (default: all).  The frozen index uses it to store
+    positions for the *whole* library while standardizing in the text-arm
+    universe's space — exactly the space a query font is standardized into.
+
+    Fontquant measurements come from ``row_for(font)`` (default:
+    :func:`hrothgar.fontquant.quantify_row`).
+
+    Returns::
+
+        {
+          "families": [...],                       # (N,)
+          "axis_names": [...],                     # (K,) scoring order
+          "numeric":     {name: {"columns", "values", "means", "stds"}},
+          "categorical": {name: {"vocab", "boolean", "codes"}},
+          "tags":        {name: {"tags", "values", "mask"}},
+        }
+
+    ``values``/``means``/``stds`` are tensors: ``values`` is ``(N, d)`` raw
+    fontquant quantities with ``NaN`` for missing, and the statistics are what a
+    single new font is standardized with (so it lands in the same space as the
+    library).
     """
-    from fontquant import quantify
+    row_for = row_for or quantify_row
+    if cedars is None:
+        # cedars.csv is hand-labelled ground truth. Only the text/demo arms that
+        # ask for ``feature_source="hand"`` need it; the recogniser path replaces
+        # every cedars-backed axis with a model verdict, so a run without
+        # cedars.csv still works.
+        cedars = load_cedars() if feature_source != "recogniser" else {}
 
-    result = quantify(str(font_path))
-    flat: dict = {}
+    fonts = sup.fonts
+    raw_numeric = numeric_rows(fonts, row_for)
+    codes = categorical_code_rows(fonts, cedars, row_for)
+    if feature_source == "recogniser":
+        codes.update(recogniser_code_rows(fonts))
+    tag_mats = tag_rows(fonts)
 
-    def walk(d: dict, prefix: str) -> None:
-        for k, v in d.items():
-            key = f"{prefix}/{k}" if prefix else k
-            if isinstance(v, dict) and "value" in v:
-                flat[key] = v["value"]
-            elif isinstance(v, dict):
-                walk(v, key)
-            else:
-                flat[key] = v
+    def fit_rows(rows: list[list[float]]) -> list[list[float]]:
+        return rows if stats_rows is None else [rows[i] for i in stats_rows]
 
-    walk(result, "")
-    row: dict[str, str] = {}
-    for k, v in flat.items():
-        if isinstance(v, bool):
-            row[k] = "true" if v else "false"
-        elif isinstance(v, (list, tuple)):
-            row[k] = ",".join(str(x) for x in v)
-        elif v is None:
-            row[k] = ""
+    numeric: dict[str, dict] = {}
+    for name, cols in _NUMERIC_AXES.items():
+        means, stds = _column_stats(fit_rows(raw_numeric[name]))
+        numeric[name] = {
+            "columns": _expanded_columns(cols),
+            "values": torch.tensor(raw_numeric[name], dtype=torch.float32),
+            "means": torch.tensor(means, dtype=torch.float32),
+            "stds": torch.tensor(stds, dtype=torch.float32),
+        }
+    # Proportions axis: ascender/cap_height/descender/x_height + two ratios.
+    means, stds = _column_stats(fit_rows(raw_numeric["proportions"]))
+    numeric["proportions"] = {
+        "columns": [
+            "appearance/ascender",
+            "appearance/cap_height",
+            "appearance/descender",
+            "appearance/x_height",
+            "x_height/ascender",
+            "cap_height/ascender",
+        ],
+        "values": torch.tensor(raw_numeric["proportions"], dtype=torch.float32),
+        "means": torch.tensor(means, dtype=torch.float32),
+        "stds": torch.tensor(stds, dtype=torch.float32),
+    }
+
+    categorical: dict[str, dict] = {}
+    for name, _src, _col, vocab in _CATEGORICAL_AXES:
+        categorical[name] = {
+            "vocab": list(vocab),
+            "boolean": False,
+            "codes": torch.tensor(codes[name], dtype=torch.long),
+        }
+    for name, _col in _BOOLEAN_AXES:
+        categorical[name] = {
+            "vocab": ["false", "true"],
+            "boolean": True,
+            "codes": torch.tensor(codes[name], dtype=torch.long),
+        }
+
+    tags: dict[str, dict] = {}
+    for name, (V, M) in tag_mats.items():
+        # Materialize the style mask: ``tag_rows`` builds it with ``expand`` (a
+        # stride-0 view), which is fine in memory but should not be frozen as-is.
+        tags[name] = {
+            "tags": list(_TAG_AXES[name]),
+            "values": V.contiguous(),
+            "mask": M.contiguous(),
+        }
+
+    return {
+        "families": [f.family for f in fonts],
+        "axis_names": axis_names(),
+        "numeric": numeric,
+        "categorical": categorical,
+        "tags": tags,
+    }
+
+
+def axis_names() -> list[str]:
+    """The scoring-axis order: numeric, categorical, boolean, then tag axes."""
+    return (
+        sorted(_NUMERIC_AXES)
+        + ["proportions"]
+        + [name for name, _src, _col, _vocab in _CATEGORICAL_AXES]
+        + [name for name, _col in _BOOLEAN_AXES]
+        + list(_TAG_AXES)
+    )
+
+
+def bank_similarity_tensor(bank: dict) -> tuple[torch.Tensor, list[str]]:
+    """``(S, axis_names)`` with ``S`` of shape ``(N, N, K)`` from a feature bank."""
+    names: list[str] = []
+    mats: list[torch.Tensor] = []
+
+    for name in bank["axis_names"]:
+        if name in bank["numeric"]:
+            ax = bank["numeric"][name]
+            V, P = _standardize_tensor(ax["values"], ax["means"], ax["stds"])
+            names.append(name)
+            mats.append(_numeric_sim(V, P))
+        elif name in bank["categorical"]:
+            ax = bank["categorical"][name]
+            names.append(name)
+            mats.append(_categorical_sim(ax["codes"], boolean=ax["boolean"]))
         else:
-            row[k] = str(v)
-    return row
+            ax = bank["tags"][name]
+            sim, _ = masked_pairwise_cosine(ax["values"], ax["mask"])
+            names.append(name)
+            mats.append(sim)
+
+    S = torch.stack(mats, dim=-1)  # (N, N, K)
+    return S, names
 
 
-def _load_table(extra_table: dict | None = None) -> dict[str, dict[str, str]]:
-    """Load the fontquant CSV table, merged with any ``extra_table`` rows.
-
-    ``extra_table`` maps basename -> flattened column dict (as produced by
-    :func:`_quantify_row`); it is merged over the CSV so an on-the-fly font
-    (e.g. a query TTF quantified via ``quantify``) can join the universe.
-    """
-    table = _load_fontquant_raw()
-    if extra_table:
-        table = dict(table)
-        table.update(extra_table)
-    return table
-
-
-def build_similarity_tensor(sup, feature_source: str = "hand", extra_table: dict | None = None) -> tuple[torch.Tensor, list[str]]:
+def build_similarity_tensor(sup, feature_source: str = "hand", row_for=None) -> tuple[torch.Tensor, list[str]]:
     """Return ``(S, axis_names)`` with ``S`` of shape ``(N, N, K)``.
 
     ``feature_source`` selects where the categorical glyph-feature axes come
@@ -480,43 +712,11 @@ def build_similarity_tensor(sup, feature_source: str = "hand", extra_table: dict
     signal is split into two fontquant axes — ``stem_profile`` (stem shape) and
     ``stem_terminals`` (terminal cut/shape) — in both sources.
 
-    ``extra_table`` is an optional ``{basename: {column: value}}`` merged over the
-    CSV table, used to add an on-the-fly font (e.g. a query TTF quantified via
-    the ``quantify`` interface) into the universe.
+    ``row_for(font)`` supplies fontquant measurements (default: measure the font
+    with the ``fontquant`` package), which lets a query TTF join the universe.
     """
-    table = _load_table(extra_table)
-    cedars = _load_cedars()
-    numeric = _numeric_raw(sup, table)
-    cat_codes = _categorical_codes(sup, table, cedars)
-    if feature_source == "recogniser":
-        cat_codes = dict(cat_codes)
-        cat_codes.update(_recogniser_codes(sup))
-    tag_mats = _tag_mats(sup)
-
-    names: list[str] = []
-    mats: list[torch.Tensor] = []
-
-    for name in sorted(_NUMERIC_AXES) + ["proportions"]:
-        V, P = numeric[name]
-        names.append(name)
-        mats.append(_numeric_sim(V, P))
-
-    for name, _src, _col, _vocab in _CATEGORICAL_AXES:
-        names.append(name)
-        mats.append(_categorical_sim(cat_codes[name], boolean=False))
-
-    for name, _col in _BOOLEAN_AXES:
-        names.append(name)
-        mats.append(_categorical_sim(cat_codes[name], boolean=True))
-
-    for name in _TAG_AXES:
-        V, M = tag_mats[name]
-        sim, _ = masked_pairwise_cosine(V, M)
-        names.append(name)
-        mats.append(sim)
-
-    S = torch.stack(mats, dim=-1)  # (N, N, K)
-    return S, names
+    bank = build_feature_bank(sup, feature_source=feature_source, row_for=row_for)
+    return bank_similarity_tensor(bank)
 
 
 def build_display_tensor(sup) -> tuple[torch.Tensor, list[str]]:
@@ -575,14 +775,14 @@ def _recogniser_verdicts(font, recognisers: dict | None) -> dict[str, str]:
     return {"a-storey": a_storey, "casing": casing, "e-crossbar": e, "finials": f, "c-overhang": c}
 
 
-def font_feature_summary(font, table, cedars, recognisers: dict | None = None) -> dict[str, str]:
+def font_feature_summary(font, cedars, recognisers: dict | None = None) -> dict[str, str]:
     """Return a human-readable raw-feature dict for one font.
 
     Keys are the axis names the combiner consumes; values are compact strings
     showing the *raw* (unstandardized) inputs — fontquant columns, recogniser
     verdicts and tag centiles — so two fonts can be diffed by eye.
     """
-    row = table.get(Path(font.path).name.lower(), {})
+    row = quantify_row(font.path)
     cedar = cedars.get(font.family.strip().lower(), {})
     verdicts = _recogniser_verdicts(font, recognisers)
     out: dict[str, str] = {}
@@ -920,7 +1120,7 @@ def _run(
         importance = w
     pos_scores = torch.stack([sim[a, b] for a, b, _w in sup.pos_pairs])
     neg_scores = torch.stack([sim[a, b] for a, b, _w in sup.neg_pairs])
-    pairwise = _pairwise_auc(pos_scores, neg_scores)
+    pairwise = pairwise_auc(pos_scores, neg_scores)
 
     # ── Leave-cluster-out triplet / separation ───────────────────────────────
     total = satisfied = n_query = n_sep = 0
@@ -966,8 +1166,8 @@ def _run(
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--repo", default=os.environ.get("GOOGLE_FONTS_REPO", "/home/simon/others-repos/fonts"))
-    p.add_argument("--list", default="similarities.json")
-    p.add_argument("--judgements", default="judgements.csv")
+    p.add_argument("--list", default=SIMILARITIES_PATH)
+    p.add_argument("--judgements", default=JUDGEMENTS_PATH)
     p.add_argument("--combiner", choices=("linear", "softmax", "mlp", "residual"), default="linear")
     p.add_argument("--hidden", type=int, default=32, help="MLP hidden width (--combiner mlp)")
     p.add_argument("--dropout", type=float, default=0.1, help="MLP dropout (--combiner mlp)")
@@ -997,7 +1197,7 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    dev = _device(args.device)
+    dev = device(args.device)
     sup = build_supervision(args.repo, args.list, args.judgements, universe=args.universe)
     if args.text_half:
         scores = display_scores(sup)

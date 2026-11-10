@@ -7,6 +7,7 @@ subclass in its own module, sharing the one-vs-rest + threshold API.
 from hrothgar.features.a_shape import AShapeConfig, AShapeRecognizer
 from hrothgar.features.a_storey import AStoreyConfig, AStoreyRecognizer
 from hrothgar.features.base import FeatureRecognizer, FeatureRecognizerConfig
+from hrothgar.features.c_overhang import COverhangConfig, COverhangRecognizer
 from hrothgar.features.display import DisplayConfig, DisplayRecognizer
 from hrothgar.features.e_crossbar import ECrossbarConfig, ECrossbarRecognizer
 from hrothgar.features.finials import FinialsConfig, FinialsRecognizer
@@ -21,6 +22,8 @@ __all__ = [
     "AShapeRecognizer",
     "AStoreyConfig",
     "AStoreyRecognizer",
+    "COverhangConfig",
+    "COverhangRecognizer",
     "ECrossbarConfig",
     "ECrossbarRecognizer",
     "FinialsConfig",

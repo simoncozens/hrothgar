@@ -23,14 +23,9 @@ from dataclasses import dataclass
 
 import torch
 
-from hrothgar.features.base import (
-    FeatureRecognizer,
-    FeatureRecognizerConfig,
-    _is_blank,
-    render_prompt,
-)
-from hrothgar.googlefonts import compute_display_score
-from hrothgar.outline_tokens.recognizer_audit import _family_to_font
+from hrothgar.features.base import FeatureRecognizer, FeatureRecognizerConfig
+from hrothgar.features.build import is_blank, render_prompts
+from hrothgar.googlefonts import compute_display_score, families_to_fonts
 
 
 @dataclass
@@ -46,13 +41,13 @@ class DisplayRecognizer(FeatureRecognizer):
 
     def build_real(self, repo: str):
         """Render the specimen and regress to ``compute_display_score`` (0-100)."""
-        family_to_font = _family_to_font(repo)
+        family_to_font = families_to_fonts(repo)
         X: list[torch.Tensor] = []
         y: list[float] = []
         for fam in sorted(family_to_font):
             font = family_to_font[fam]
-            img = render_prompt(font, self.config.glyphs, self.config.glyph_size)
-            if img is None or _is_blank(img):
+            img = render_prompts(font, self.config.glyphs, self.config.glyph_size)
+            if img is None or is_blank(img):
                 continue
             X.append(img)
             y.append(compute_display_score(font.tags()))
